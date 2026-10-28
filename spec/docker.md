@@ -1,0 +1,65 @@
+# 실행용 Docker 이미지
+
+## 목적
+
+다이어그램 렌더링에 필요한 외부 도구(mermaid-cli, Chromium, Java, PlantUML, Graphviz)를
+호스트에 설치하지 않고, 한 이미지 안에서 실행한다.
+코드는 이미지에 넣지 않고 실행 시 `/work` 에 마운트한다.
+
+## 구성
+
+| 파일 | 역할 |
+|------|------|
+| `Dockerfile` | `alpine:3.22` 기반 이미지 |
+| `docker/mmdc` | mermaid-cli 실행 스크립트. `-p /etc/puppeteer.json` 을 항상 넘긴다 |
+| `docker/puppeteer.json` | 시스템 Chromium 경로와 `--no-sandbox` 설정 |
+| `docker/plantuml` | `java -jar plantuml.jar` 실행 스크립트 |
+| `.dockerignore` | 빌드 컨텍스트를 `pyproject.toml`, `uv.lock`, `docker/` 로 제한 |
+
+## 이미지 내용
+
+| 항목 | 버전 / 출처 | 비고 |
+|------|------|------|
+| Python | Alpine `python3` (3.12) | |
+| mermaid-cli | npm `@mermaid-js/mermaid-cli` 11.4.2 | `PUPPETEER_SKIP_DOWNLOAD=1`, Alpine `chromium` 사용 |
+| PlantUML | GitHub 릴리스 jar 1.2026.9 | `/opt/plantuml/plantuml.jar` |
+| Java | Alpine `openjdk17-jre` | headless JRE 에는 폰트 라이브러리가 없어 PlantUML 이 실패한다 |
+| Graphviz | Alpine `graphviz` | PlantUML 의 시퀀스 외 다이어그램에 필요 |
+| 한글 폰트 | Alpine `font-noto-cjk` | 다이어그램 안의 한글 표시 |
+| D2Coding | 네이버 GitHub 릴리스 VER1.4.0 | Regular/Bold TTF 와 `OFL.txt` 를 `/usr/share/fonts/d2coding` 에 설치. Alpine 패키지 없음 |
+| Python 의존성 | `uv sync --frozen --no-install-project` → `/opt/venv` | uv 는 빌드 시에만 마운트하고 이미지에 남기지 않는다 |
+| HWPX 라이브러리 | PyPI `python-hwpx` (`pyproject.toml` 의존성) | 순수 Python. 의존성 `lxml` 은 musl 휠이 있어 Alpine 에서 컴파일 없이 설치된다 |
+
+버전은 `ARG PLANTUML_VERSION`, `ARG MERMAID_CLI_VERSION`, `ARG D2CODING_VERSION` / `ARG D2CODING_DATE` 로 바꿀 수 있다.
+D2Coding 은 시스템 폰트로만 등록한다. 다이어그램에서 쓰려면 mermaid 는 `fontFamily`, plantuml 은 `skinparam defaultFontName` 으로 지정한다.
+
+## 실행 환경 변수
+
+| 변수 | 값 | 이유 |
+|------|------|------|
+| `PATH` | `/opt/venv/bin` 우선 | `pytest`, `python` 이 venv 를 쓴다 |
+| `PYTHONPATH` | `/work/src` | 마운트한 코드를 설치 없이 import |
+| `PYTHONDONTWRITEBYTECODE` | `1` | 마운트 폴더에 `__pycache__` 를 만들지 않음 |
+| `HOME` | `/tmp` | `--user` 실행 시에도 Chromium 이 쓸 수 있는 HOME |
+
+## 사용법
+
+```sh
+docker build -t md2hwpx .
+
+# 테스트 실행. --user 로 마운트 폴더에 root 소유 파일이 생기지 않게 한다.
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx pytest -q -p no:cacheprovider
+```
+
+Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 빌드한다.
+
+## 검증 기준
+
+| 항목 | 방법 |
+|------|------|
+| 도구 설치 | 컨테이너에서 `mmdc --version`, `plantuml -version` |
+| python-hwpx | 컨테이너에서 PNG 를 넣은 HWPX 를 저장하고 다시 열기, `hwpx-validate` 통과 |
+| 전체 테스트 | root 와 `--user` 두 방식 모두 skip 없이 통과 |
+| D2Coding | `fc-list` 에 Regular/Bold 가 보이고, 폰트를 지정한 두 다이어그램이 고정폭으로 그려짐 |
+| 한글 렌더링 | 한글 라벨을 가진 mermaid / plantuml 다이어그램 PNG 를 눈으로 확인 |
+| 마운트 폴더 오염 없음 | 실행 후 프로젝트 폴더에 core 덤프, `?` 폴더 등 새 파일이 없음 |

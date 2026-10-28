@@ -1,0 +1,3 @@
+#!/bin/sh
+# 컨테이너 안에서는 chromium 샌드박스를 쓸 수 없으므로 --no-sandbox 설정을 넘긴다.
+exec /usr/local/lib/node_modules/@mermaid-js/mermaid-cli/src/cli.js -p /etc/puppeteer.json "$@"

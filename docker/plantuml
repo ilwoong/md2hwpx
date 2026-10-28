@@ -1,0 +1,3 @@
+#!/bin/sh
+# --user 로 실행하면 /etc/passwd 에 사용자가 없어 Java 가 user.home 을 "?" 로 잡으므로 HOME 을 넘긴다.
+exec java -Djava.awt.headless=true -Duser.home="$HOME" -jar /opt/plantuml/plantuml.jar "$@"

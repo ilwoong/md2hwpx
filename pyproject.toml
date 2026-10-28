@@ -1,0 +1,17 @@
+[project]
+name = "md2hwpx"
+version = "0.1.0"
+description = "Convert Markdown to HWPX"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "python-hwpx>=6.10.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
