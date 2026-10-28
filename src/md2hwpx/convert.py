@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 from hwpx import HwpxDocument
@@ -28,6 +29,8 @@ _ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
 BODY_STYLE = "본문"
 CAPTION_STYLE = "표그림제목"
 HEADER_FILL = "#D9D9D9"
+# A column is weighted by its longest cell (Hangul counts double), but never below this.
+MIN_COLUMN_WEIGHT = 4
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
@@ -104,8 +107,16 @@ def _captioned(lines: list[str], i: int, kind: str) -> int | None:
     return None
 
 
+def _display_width(text: str) -> int:
+    text = _CODE_SPAN.sub(lambda m: m.group(2), text)
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
 def _add_table(doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None], caption: str | None) -> None:
     table = doc.add_table(len(rows), len(rows[0]), **_body(doc))
+    table.set_column_widths(
+        [max(MIN_COLUMN_WEIGHT, *(_display_width(row[c]) for row in rows)) for c in range(len(rows[0]))]
+    )
     if caption is not None:
         _set_caption(doc, table, caption, "TOP")
     for r, row in enumerate(rows):

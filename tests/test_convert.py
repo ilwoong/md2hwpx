@@ -208,3 +208,23 @@ def test_convert_inline_code(tmp_path):
     assert runs(table.cell(1, 0).paragraphs[0]) == [("셀", True)]
     # Heading keeps its style and outline level.
     assert int(heading.style_id_ref) == doc.styles.resolve("개요 1").id
+
+
+def test_convert_table_column_widths(tmp_path):
+    md = tmp_path / "widths.md"
+    md.write_text(
+        "| 번호 | 설명 | `code` |\n|---|---|---|\n"
+        "| 1 | 열 너비가 내용 길이에 비례하는지 확인하는 긴 설명 | abcdefgh |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "widths.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    table = HwpxDocument.open(out).tables.all[0]
+    widths = [table.cell(0, c).width for c in range(3)]
+    # Weights: "번호" 4, the description 49 (21 Hangul x 2 + 7 spaces), "abcdefgh" 8 (backticks not counted).
+    assert sum(widths) == 59528 - 8504 * 2
+    assert widths[0] < widths[2] < widths[1]
+    assert abs(widths[1] / widths[0] - 49 / 4) < 0.01
+    assert [table.cell(1, c).width for c in range(3)] == widths
