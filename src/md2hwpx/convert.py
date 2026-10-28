@@ -258,8 +258,13 @@ def _continues_numbering(items: list[list], n: int) -> bool:
 
 
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
+    convert_markdown(md_path.read_text(encoding="utf-8"), md_path.parent, template_path, out_path)
+
+
+def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None:
+    """Convert *markdown*, whose image paths are relative to *base_dir*."""
     doc = HwpxDocument.open(template_path)
-    lines = md_path.read_text(encoding="utf-8").splitlines()
+    lines = markdown.splitlines()
     paragraph: list[str] = []
     caption: str | None = None
     numbers = {"표": 0, "그림": 0}
@@ -300,7 +305,7 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
             _write_inline(doc, doc.add_heading(heading.group(2), level=len(heading.group(1))), heading.group(2))
         elif image := _IMAGE.match(line):
             flush()
-            image_path = md_path.parent / image.group(1)
+            image_path = base_dir / image.group(1)
             width = _body_width(doc) if _DIAGRAM_IMAGE.match(image_path.name) else None
             picture = doc.add_picture(
                 image_path.read_bytes(), image_path.suffix.lstrip(".").lower(), width=width, **_body(doc)

@@ -149,12 +149,32 @@ Markdown 을 한 줄씩 읽으며 아래 순서로 판단한다.
 
 ```python
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None
+def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None
 ```
 
-- `template_path` 를 `HwpxDocument.open` 으로 열고, `md_path` (UTF-8) 를 변환해 추가한 뒤
+- `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
   `save_to_path(out_path)` 로 저장한다. 템플릿 파일은 바뀌지 않는다.
+- `convert_markdown` 은 Markdown 문자열을 받고, 이미지 경로를 `base_dir` 기준으로 찾는다.
+  `convert` 는 `md_path` (UTF-8) 를 읽어 `md_path` 의 폴더를 기준으로 `convert_markdown` 을 부른다.
 - 템플릿에 필요한 스타일이 없으면 python-hwpx 의 `HwpxLookupError` 가 발생한다.
 - 이미지 파일이 없으면 `FileNotFoundError` 가 발생한다.
+
+## 명령줄 (`md2hwpx.cli`)
+
+```
+md2hwpx INPUT.md [-o OUTPUT.hwpx] [-t TEMPLATE.hwpx]
+python -m md2hwpx INPUT.md [-o OUTPUT.hwpx] [-t TEMPLATE.hwpx]
+```
+
+- `md2hwpx` 명령은 `pyproject.toml` 의 `[project.scripts]` 로 설치된다.
+  Docker 이미지는 프로젝트를 설치하지 않으므로 `python -m md2hwpx` 를 쓴다.
+- `-o`, `--output` 생략 시 입력 파일 이름의 확장자를 `.hwpx` 로 바꾼 경로에 저장한다.
+- `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를 쓴다.
+- 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
+  다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
+- 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
+- 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`)는
+  `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
 
 ## 검증 기준
 
@@ -169,4 +189,5 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None
 | 목록 | 글머리표·번호 서식과 수준, 수준별 왼쪽 여백, 3수준 제한, 이어지는 줄, 번호 이어 가기·새 목록·시작 번호, 문단 중간 번호 규칙 |
 | 인라인 코드 | 헤딩·문단·표 셀·캡션의 코드 조각이 D2Coding, 중첩 백틱, 닫히지 않은 백틱, 머리 행 굵게 유지 |
 | 캡션 | 위치(TOP/BOTTOM), `[표 N]`/`[그림 N]` 번호, `표그림제목` 스타일, 개체 없는 캡션 줄은 문단 유지 |
-| 샘플 | `samples/sample.md` 를 Docker 이미지에서 다이어그램 렌더링 후 변환해 한/글로 확인 |
+| 명령줄 | 기본 출력 경로와 stdout, `-o`/`--template`, 없는 입력·템플릿·이미지에서 종료 코드 1, 다이어그램 렌더링 후 임시 이미지 미잔존 (`mmdc` 있을 때) |
+| 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md` 로 변환해 한/글로 확인 |

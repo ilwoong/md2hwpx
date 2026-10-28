@@ -34,22 +34,39 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 
 ## 사용 예
 
+### 명령줄
+
+```sh
+# Docker (다이어그램 렌더링 도구 포함)
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
+    python -m md2hwpx docs/guide.md -o docs/guide.hwpx -t template.hwpx
+
+# 로컬 (uv sync 후)
+uv run md2hwpx docs/guide.md
+```
+
+- `-o`, `--output`: 저장할 HWPX 파일. 생략하면 입력 파일 이름에 `.hwpx` 를 붙인다.
+- `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`.
+
+다이어그램은 임시 폴더에 렌더링해 HWPX 에 넣고 지우므로, 입력 폴더에 이미지 파일이 남지 않습니다.
+성공하면 저장한 파일 경로를 출력하고, 실패하면 오류를 stderr 에 출력하고 종료 코드 1 로 끝납니다.
+
+### Python
+
 ```python
 from pathlib import Path
-from md2hwpx.convert import convert
+from md2hwpx.convert import convert_markdown
 from md2hwpx.diagram import render_diagrams
 
 doc = Path("docs/guide.md")
-markdown = render_diagrams(doc.read_text(), out_dir=doc.parent / "images", link_base=doc.parent)
-rendered = doc.with_name("guide.rendered.md")
-rendered.write_text(markdown, encoding="utf-8")
-
-convert(rendered, Path("template.hwpx"), doc.with_suffix(".hwpx"))
+markdown = render_diagrams(doc.read_text(encoding="utf-8"), out_dir=doc.parent / "images", link_base=doc.parent)
+convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".hwpx"))
 ```
 
-다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장됩니다.
+다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장되고,
 반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
-`convert` 는 이미지 경로를 Markdown 파일 위치 기준으로 찾으므로, 렌더링 결과는 원본과 같은 폴더에 저장합니다.
+이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
+파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
 
 ## 로컬 개발
 
