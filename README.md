@@ -39,7 +39,10 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 ### 명령줄
 
 ```sh
-# Docker (다이어그램 렌더링 도구 포함)
+# Docker (다이어그램 렌더링 도구 포함). 어느 폴더에서나 실행할 수 있다.
+/path/to/md2hwpx/md2hwpx.sh docs/guide.md -o docs/
+
+# 위 스크립트가 실행하는 명령 (저장소 루트에서)
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
     python -m md2hwpx docs/guide.md -o docs/ -t template.hwpx
 
@@ -48,6 +51,8 @@ uv run md2hwpx docs/guide.md          # ./guide.hwpx
 uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 합쳐 ./chapters.hwpx
 ```
 
+- `md2hwpx.sh` 는 현재 폴더를 컨테이너에 마운트하므로 입력·출력·템플릿은 현재 폴더 안에 있어야 한다.
+  `-t` 를 생략하고 현재 폴더에 `template.hwpx` 가 없으면 이 저장소의 `template.hwpx` 를 쓴다.
 - 인자 없이 실행하면 도움말을 보여 준다.
 - 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
   폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
@@ -99,6 +104,7 @@ samples/        변환 테스트용 샘플 Markdown (결과 HWPX 는 커밋하�
 docker/         Docker 이미지용 실행 스크립트와 설정
 Dockerfile      실행용 Alpine 이미지
 template.hwpx   변환에 사용하는 템플릿 HWPX
+md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
 ```
 
 ## 스펙 문서
