@@ -10,8 +10,12 @@ from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 
+from md2hwpx.diagram import LANGS
+
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 _IMAGE = re.compile(r"^\s*!\[[^\]]*\]\(([^)\s]+)\)\s*$")
+# File names render_diagrams gives the PNGs it renders.
+_DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
 # "[표] ..." / "[그림] ..." right before a table or code block / image (blank lines allowed) is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
@@ -31,6 +35,13 @@ CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
 def _body(doc: HwpxDocument) -> dict:
     # add_table / add_picture take only the style id from style=, so pass its paragraph shape too.
     return {"style": BODY_STYLE, "para_pr_id_ref": doc.styles.resolve(BODY_STYLE).para_pr_id_ref}
+
+
+def _body_width(doc: HwpxDocument) -> int:
+    """Width a 본문 paragraph can hold: the page text width minus the style's side margins."""
+    size, page = doc.page.size(), doc.page.margins()
+    margin = doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin
+    return size.width - page.left - page.right - page.gutter - int(margin.left) - int(margin.right)
 
 
 def _set_caption(doc: HwpxDocument, obj, text: str, side: str) -> None:
@@ -183,7 +194,10 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
         elif image := _IMAGE.match(line):
             flush()
             image_path = md_path.parent / image.group(1)
-            picture = doc.add_picture(image_path.read_bytes(), image_path.suffix.lstrip(".").lower(), **_body(doc))
+            width = _body_width(doc) if _DIAGRAM_IMAGE.match(image_path.name) else None
+            picture = doc.add_picture(
+                image_path.read_bytes(), image_path.suffix.lstrip(".").lower(), width=width, **_body(doc)
+            )
             if caption is not None:
                 _set_caption(doc, picture, caption, "BOTTOM")
                 caption = None

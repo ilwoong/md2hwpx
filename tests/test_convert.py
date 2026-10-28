@@ -155,3 +155,18 @@ def test_convert_captions(tmp_path):
     pic_p = pic_caption.find(f".//{hp}p")
     assert (pic_p.get("styleIDRef"), pic_p.get("paraPrIDRef")) == (str(style.id), str(style.para_pr_id_ref))
     assert pic_p.find(f"{hp}run").get("charPrIDRef") == str(style.char_pr_id_ref)
+
+
+def test_convert_diagram_images_fill_body_width(tmp_path):
+    for name in ("mermaid-0123456789ab.png", "plantuml-0123456789ab.png", "photo.png"):
+        (tmp_path / name).write_bytes(_png())
+    md = tmp_path / "diagram.md"
+    md.write_text("![](mermaid-0123456789ab.png)\n\n![](plantuml-0123456789ab.png)\n\n![](photo.png)\n", encoding="utf-8")
+    out = tmp_path / "diagram.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    # template: A4 width 59528, page margins 8504 each, 본문 left margin 1500
+    widths = [ref.width for ref in doc.media.picture_references()]
+    assert widths == [59528 - 8504 * 2 - 1500, 59528 - 8504 * 2 - 1500, 14400]
