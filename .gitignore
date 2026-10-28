@@ -10,3 +10,6 @@ dist/
 
 # pytest
 .pytest_cache/
+
+# 변환 결과물
+samples/*.hwpx

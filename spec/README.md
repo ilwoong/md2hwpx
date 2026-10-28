@@ -8,6 +8,7 @@ Markdown 파일을 HWPX 파일로 변환하는 Python 프로젝트.
 |------|------|------|
 | [diagram-rendering.md](diagram-rendering.md) | mermaid / plantuml 코드블록을 PNG로 변환 | 구현됨 |
 | [docker.md](docker.md) | 필요한 도구를 모두 담은 실행용 Docker 이미지 | 구현됨 |
+| [markdown-conversion.md](markdown-conversion.md) | 템플릿 HWPX 에 Markdown 을 변환해 추가하고 저장 | 구현됨 |
 
 ## 공통 원칙
 
