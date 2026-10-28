@@ -48,6 +48,8 @@ HEADER_FILL = "#D9D9D9"
 MIN_COLUMN_WEIGHT = 4
 LIST_MAX_LEVEL = 3  # deeper items are kept at this level
 LIST_INDENT = 1000  # HWPUNIT added to the left margin per list level, as the template's 개요 styles step
+HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
+CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
@@ -137,6 +139,46 @@ def _write_inline(doc: HwpxDocument, paragraph, text: str) -> None:
             # Hancom's link look (blue, underlined) on top of the run's own marks.
             link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(marks))
             paragraph.add_hyperlink(url, run_text, char_pr_id_ref=link_pr)
+
+
+def _body_height(doc: HwpxDocument) -> int:
+    """Height of the page body: the page height minus the top, bottom, header and footer margins."""
+    size, page = doc.page.size(), doc.page.margins()
+    return size.height - page.top - page.bottom - page.header - page.footer
+
+
+def _image_pixels(data: bytes) -> tuple[int, int] | None:
+    """(width, height) in pixels of a PNG, GIF or JPEG image, or None."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data.startswith(b"\xff\xd8"):
+        i = 2
+        while i + 9 <= len(data) and data[i] == 0xFF:
+            marker = data[i + 1]
+            # Start-of-frame markers hold the size; C4 / C8 / CC are other tables.
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return int.from_bytes(data[i + 7 : i + 9], "big"), int.from_bytes(data[i + 5 : i + 7], "big")
+            i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
+    return None
+
+
+def _picture_size(doc: HwpxDocument, image_path: Path, data: bytes, captioned: bool) -> tuple[int, int] | None:
+    """Picture (width, height) in HWPUNIT that fits the page body, or None if the image size is unknown.
+
+    A diagram is as wide as the body; any other image keeps its size at 96 DPI.
+    Either is scaled down, keeping its aspect ratio, to fit the body width and height.
+    """
+    pixels = _image_pixels(data)
+    if pixels is None or 0 in pixels:
+        return None
+    max_width = _body_width(doc)
+    max_height = _body_height(doc) - (CAPTION_RESERVE if captioned else 0)
+    width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
+    height = width * pixels[1] / pixels[0]
+    scale = min(1.0, max_width / width, max_height / height)
+    return round(width * scale), round(height * scale)
 
 
 def _set_caption(doc: HwpxDocument, obj, text: str, side: str) -> None:
@@ -373,9 +415,10 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
         elif image := _IMAGE.match(line):
             flush()
             image_path = base_dir / image.group(1)
-            width = _body_width(doc) if _DIAGRAM_IMAGE.match(image_path.name) else None
+            data = image_path.read_bytes()
+            width, height = _picture_size(doc, image_path, data, caption is not None) or (None, None)
             picture = doc.add_picture(
-                image_path.read_bytes(), image_path.suffix.lstrip(".").lower(), width=width, **_body(doc)
+                data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **_body(doc)
             )
             if caption is not None:
                 _set_caption(doc, picture, caption, "BOTTOM")

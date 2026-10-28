@@ -9,12 +9,20 @@ from md2hwpx.convert import convert
 TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 
 
-def _png() -> bytes:
+def _png(width: int = 1, height: int = 1) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
-    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00\x00")) + chunk(b"IEND", b"")
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    rows = (b"\x00" + b"\x00" * width) * height
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def _jpeg(width: int, height: int) -> bytes:
+    """JPEG header bytes up to the start-of-frame marker: enough to read the size."""
+    app0 = b"\xff\xe0" + (16).to_bytes(2, "big") + b"JFIF\x00" + b"\x00" * 9
+    sof0 = b"\xff\xc0" + (11).to_bytes(2, "big") + b"\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x01\x01\x11\x00"
+    return b"\xff\xd8" + app0 + sof0 + b"\xff\xd9"
 
 
 def test_convert(tmp_path):
@@ -157,19 +165,41 @@ def test_convert_captions(tmp_path):
     assert pic_p.find(f"{hp}run").get("charPrIDRef") == str(style.char_pr_id_ref)
 
 
-def test_convert_diagram_images_fill_body_width(tmp_path):
-    for name in ("mermaid-0123456789ab.png", "plantuml-0123456789ab.png", "photo.png"):
-        (tmp_path / name).write_bytes(_png())
-    md = tmp_path / "diagram.md"
-    md.write_text("![](mermaid-0123456789ab.png)\n\n![](plantuml-0123456789ab.png)\n\n![](photo.png)\n", encoding="utf-8")
-    out = tmp_path / "diagram.hwpx"
+def test_convert_picture_sizes(tmp_path):
+    images = {
+        "mermaid-0123456789ab.png": _png(10, 5),  # diagram: body width
+        "plantuml-0123456789ab.png": _png(10, 100),  # tall diagram: limited by the body height
+        "small.png": _png(200, 100),  # natural size at 96 DPI
+        "wide.png": _png(4000, 1000),  # wider than the body
+        "tall.png": _png(100, 2000),  # taller than the body, with a caption
+        "photo.jpg": _jpeg(400, 300),
+        "anim.gif": b"GIF89a" + (300).to_bytes(2, "little") + (150).to_bytes(2, "little") + b"\x00" * 8,
+    }
+    for name, data in images.items():
+        (tmp_path / name).write_bytes(data)
+    md = tmp_path / "pictures.md"
+    md.write_text(
+        "".join(("[그림] 캡션\n" if name == "tall.png" else "") + f"![]({name})\n\n" for name in images),
+        encoding="utf-8",
+    )
+    out = tmp_path / "pictures.hwpx"
 
     convert(md, TEMPLATE, out)
 
-    doc = HwpxDocument.open(out)
-    # template: A4 width 59528, page margins 8504 each, 본문 left margin 1500
-    widths = [ref.width for ref in doc.media.picture_references()]
-    assert widths == [59528 - 8504 * 2 - 1500, 59528 - 8504 * 2 - 1500, 14400]
+    # template: A4 59528 x 84188, margins left/right 8504, top 5668, bottom/header/footer 4252,
+    # 본문 left margin 1500
+    body_width = 59528 - 8504 * 2 - 1500
+    body_height = 84188 - 5668 - 4252 * 3
+    sizes = [(ref.width, ref.height) for ref in HwpxDocument.open(out).media.picture_references()]
+    assert sizes == [
+        (body_width, body_width // 2),
+        (round(body_height / 10), body_height),
+        (200 * 75, 100 * 75),
+        (body_width, round(body_width / 4)),
+        (round((body_height - 2500) / 20), body_height - 2500),
+        (400 * 75, 300 * 75),
+        (300 * 75, 150 * 75),
+    ]
 
 
 def test_convert_inline_code(tmp_path):
