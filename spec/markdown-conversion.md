@@ -188,13 +188,24 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
 ## 명령줄 (`md2hwpx.cli`)
 
 ```
-md2hwpx INPUT.md [-o OUTPUT.hwpx] [-t TEMPLATE.hwpx]
-python -m md2hwpx INPUT.md [-o OUTPUT.hwpx] [-t TEMPLATE.hwpx]
+md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
+python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 ```
 
 - `md2hwpx` 명령은 `pyproject.toml` 의 `[project.scripts]` 로 설치된다.
   Docker 이미지는 프로젝트를 설치하지 않으므로 `python -m md2hwpx` 를 쓴다.
-- `-o`, `--output` 생략 시 입력 파일 이름의 확장자를 `.hwpx` 로 바꾼 경로에 저장한다.
+- 인자 없이 실행하면 도움말을 stdout 에 쓰고 종료 코드 0 을 돌려준다.
+- 입력(`INPUT`):
+  - Markdown 파일이면 그 파일을 변환한다. 이미지 경로의 기준은 파일이 있는 폴더다.
+  - 폴더면 그 폴더 바로 안의 `.md` 파일(하위 폴더 제외)을 이름 순으로 읽어, 빈 줄 하나를 사이에 두고 이어 붙인
+    Markdown 하나로 변환한다. 이미지 경로의 기준은 그 폴더다. 캡션 번호는 파일을 넘어 이어진다.
+  - 이름 순은 대소문자를 구분하지 않고, 숫자 부분은 크기로 비교한다 (`2.md` → `10.md`).
+  - `.md` 파일이 없는 폴더는 오류다.
+- 출력 경로:
+  - 입력 이름: 파일이면 확장자를 뺀 이름, 폴더면 폴더 이름(`.` 도 실제 폴더 이름).
+  - `-o`, `--output` 생략 시 현재 작업 폴더의 `입력 이름.hwpx`.
+  - `-o` 가 이미 있는 폴더면 그 폴더의 `입력 이름.hwpx`, 아니면 `-o` 경로 그대로.
+  - 그 경로에 파일이 있으면 덮어쓰지 않고, 확장자 앞에 `-1`, `-2` ... 를 붙여 처음으로 비어 있는 경로에 저장한다.
 - `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를 쓴다.
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
@@ -216,5 +227,5 @@ python -m md2hwpx INPUT.md [-o OUTPUT.hwpx] [-t TEMPLATE.hwpx]
 | 인라인 코드 | 헤딩·문단·표 셀·캡션의 코드 조각이 D2Coding, 중첩 백틱, 닫히지 않은 백틱, 머리 행 굵게 유지 |
 | 인라인 서식 | 굵게·기울임·취소선(두 표기), 겹친 서식, `file_name`·이스케이프·닫히지 않은 기호는 글자 그대로, 링크 서식과 URL, 표 셀 |
 | 캡션 | 위치(TOP/BOTTOM), `[표 N]`/`[그림 N]` 번호, `표그림제목` 스타일, 개체 없는 캡션 줄은 문단 유지 |
-| 명령줄 | 기본 출력 경로와 stdout, `-o`/`--template`, 없는 입력·템플릿·이미지에서 종료 코드 1, 다이어그램 렌더링 후 임시 이미지 미잔존 (`mmdc` 있을 때) |
-| 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md` 로 변환해 한/글로 확인 |
+| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외, `.` 입력 이름, 없는 입력·템플릿·이미지·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
+| 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md -o samples/` 로 변환해 한/글로 확인 |
