@@ -23,6 +23,8 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
 _CAPTION = re.compile(r"^\s*\[(표|그림)\]\s*(.*?)\s*$")
 # Inline code span: a backtick run closed by a run of the same length.
 _CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# List item: indent, marker ("-", "*", "+" or "1." / "1)"), at least one space, content.
+_LIST_ITEM = re.compile(r"^( *)([-*+]|(\d{1,9})[.)])[ \t]+(\S.*)$")
 _DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 # (starts with ':', ends with ':') -> paragraph alignment; no colon keeps the default.
 _ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
@@ -31,6 +33,8 @@ CAPTION_STYLE = "표그림제목"
 HEADER_FILL = "#D9D9D9"
 # A column is weighted by its longest cell (Hangul counts double), but never below this.
 MIN_COLUMN_WEIGHT = 4
+LIST_MAX_LEVEL = 3  # deeper items are kept at this level
+LIST_INDENT = 1000  # HWPUNIT added to the left margin per list level, as the template's 개요 styles step
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
@@ -185,6 +189,74 @@ def _add_code_block(doc: HwpxDocument, code: list[str], lang: str, caption: str 
         )
 
 
+def _ends_list(lines: list[str], i: int) -> bool:
+    line = lines[i]
+    return bool(
+        _HEADING.match(line) or _FENCE.match(line) or _IMAGE.match(line) or _CAPTION.match(line)
+        or _is_table_start(lines, i)
+    )
+
+
+def _add_list(doc: HwpxDocument, lines: list[str], i: int) -> int:
+    """Add the list starting at line *i* and return the index of the first line after it."""
+    items: list[list] = []  # [level, number (None for a bullet), text]
+    stack: list[int] = []  # content columns of the open items
+    while i < len(lines):
+        line = lines[i].expandtabs(4)
+        if item := _LIST_ITEM.match(line):
+            indent = len(item.group(1))
+            while stack and indent < stack[-1]:
+                stack.pop()
+            stack.append(item.start(4))
+            number = int(item.group(3)) if item.group(3) else None
+            items.append([min(len(stack), LIST_MAX_LEVEL), number, item.group(4).strip()])
+        elif not line.strip():
+            # A blank line ends the list unless another item follows it.
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and _LIST_ITEM.match(lines[j].expandtabs(4)):
+                i = j
+                continue
+            break
+        elif _ends_list(lines, i):
+            break
+        else:
+            items[-1][2] += " " + line.strip()  # continuation line of the item
+        i += 1
+
+    body_left = int(doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin.left)
+    for n, (level, number, text) in enumerate(items):
+        paragraph = doc.add_paragraph(text, style=BODY_STYLE)
+        _write_inline(doc, paragraph, text)
+        index = len(doc.paragraphs) - 1
+        if number is None:
+            doc.styles.apply_list_format(paragraph_index=index, kind="bullet", level=level)
+        else:
+            continued = _continues_numbering(items, n)
+            doc.styles.apply_list_format(
+                paragraph_index=index, kind="number", level=level, continue_list=continued,
+                start=None if continued or number == 1 else number,
+            )
+        paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
+            base_para_pr_id=paragraph.para_pr_id_ref, margins={"left": body_left + (level - 1) * LIST_INDENT}
+        )
+    return i
+
+
+def _continues_numbering(items: list[list], n: int) -> bool:
+    """Whether numbered item *n* goes on with the numbering before it.
+
+    It does after a numbered item at the same level of the same list, or as the
+    first child of a numbered item (Hancom numbers sub-levels within one definition).
+    """
+    level = items[n][0]
+    for prev_level, prev_number, _ in reversed(items[:n]):
+        if prev_level <= level:
+            return prev_number is not None
+    return False
+
+
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
     doc = HwpxDocument.open(template_path)
     lines = md_path.read_text(encoding="utf-8").splitlines()
@@ -242,6 +314,13 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
             numbers[kind] += 1
             caption = f"[{kind} {numbers[kind]}] {match.group(2)}"
             i = target
+            continue
+        elif (item := _LIST_ITEM.match(line.expandtabs(4))) and not (
+            # As in CommonMark, only a list starting at 1 can interrupt a paragraph.
+            paragraph and item.group(3) and int(item.group(3)) != 1
+        ):
+            flush()
+            i = _add_list(doc, lines, i)
             continue
         elif line.strip():
             paragraph.append(line.strip())

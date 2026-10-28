@@ -228,3 +228,48 @@ def test_convert_table_column_widths(tmp_path):
     assert widths[0] < widths[2] < widths[1]
     assert abs(widths[1] / widths[0] - 49 / 4) < 0.01
     assert [table.cell(1, c).width for c in range(3)] == widths
+
+
+def test_convert_lists(tmp_path):
+    md = tmp_path / "list.md"
+    md.write_text(
+        "- 첫째 `code`\n  이어지는 줄\n- 둘째\n  - 하위\n    - 하위의 하위\n      - 4단계\n\n"
+        "3. 셋부터\n4. 넷\n   1. 하위 번호\n5. 다섯\n\n"
+        "문단\n2. 문단에 이어짐\n\n"
+        "1. 새 목록\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "list.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    body = doc.styles.resolve("본문")
+
+    def info(p):
+        pp = doc.styles.paragraph_property(p.para_pr_id_ref)
+        return p.text, pp.heading.type, pp.heading.level + 1, int(pp.margin.left)
+
+    paragraphs = doc.paragraphs[1:]
+    assert [info(p) for p in paragraphs] == [
+        ("첫째 code 이어지는 줄", "BULLET", 1, 1500),
+        ("둘째", "BULLET", 1, 1500),
+        ("하위", "BULLET", 2, 2500),
+        ("하위의 하위", "BULLET", 3, 3500),
+        ("4단계", "BULLET", 3, 3500),  # deeper than 3 stays at level 3
+        ("셋부터", "NUMBER", 1, 1500),
+        ("넷", "NUMBER", 1, 1500),
+        ("하위 번호", "NUMBER", 2, 2500),
+        ("다섯", "NUMBER", 1, 1500),
+        ("문단 2. 문단에 이어짐", "NONE", 1, 1500),  # only "1." can interrupt a paragraph
+        ("새 목록", "NUMBER", 1, 1500),
+    ]
+    assert all(int(p.style_id_ref) == body.id for p in paragraphs)
+    numbering = [doc.styles.paragraph_property(p.para_pr_id_ref).heading.id_ref for p in paragraphs]
+    # One numbering for the whole "3." list, sub-level included; the later list starts a new one.
+    assert len(set(numbering[5:9])) == 1
+    assert numbering[10] != numbering[5]
+    hh = "{http://www.hancom.co.kr/hwpml/2011/head}"
+    header = doc.oxml.headers[0].element
+    first_list = header.find(f".//{hh}numbering[@id='{numbering[5]}']")
+    assert first_list.find(f"{hh}paraHead[@level='1']").get("start") == "3"
