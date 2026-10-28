@@ -10,9 +10,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-LANGS = ("mermaid", "plantuml")
+from md2hwpx.parser import PARSER
 
-_OPEN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+LANGS = ("mermaid", "plantuml")
 
 
 class DiagramError(Exception):
@@ -23,31 +23,27 @@ class DiagramError(Exception):
 class DiagramBlock:
     lang: str
     code: str
-    start: int
-    end: int
+    start: int  # line of the opening fence (from 0)
+    end: int  # line of the closing fence
+    prefix: str = ""  # what comes before the fence on its line: indentation, a list marker, "> "
 
 
 def find_diagram_blocks(markdown: str) -> list[DiagramBlock]:
+    """The closed mermaid / plantuml fenced code blocks, found as CommonMark reads them,
+    so also inside list items and block quotes."""
     lines = markdown.splitlines()
     blocks = []
-    i = 0
-    while i < len(lines):
-        m = _OPEN_FENCE.match(lines[i])
-        if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
-            i += 1
+    for token in PARSER.parse(markdown):
+        info = token.info.split() if token.type == "fence" else []
+        if not info or info[0].lower() not in LANGS:
             continue
-        fence = m.group(1)
-        close = re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$")
-        end = next((j for j in range(i + 1, len(lines)) if close.match(lines[j])), None)
-        if end is None:
-            i += 1
+        start, end = token.map[0], token.map[1] - 1
+        # markdown-it runs an unclosed fence to the end of its container; leave those as they are.
+        closing = rf"[ \t>]*{re.escape(token.markup[0])}{{{len(token.markup)},}}\s*"
+        if end == start or not re.fullmatch(closing, lines[end]):
             continue
-        info = m.group(2).split()
-        lang = info[0].lower() if info else ""
-        if lang in LANGS:
-            code = "\n".join(lines[i + 1 : end]) + "\n"
-            blocks.append(DiagramBlock(lang, code, i, end))
-        i = end + 1
+        prefix = lines[start][: lines[start].index(token.markup)]
+        blocks.append(DiagramBlock(info[0].lower(), token.content, start, end, prefix))
     return blocks
 
 
@@ -93,5 +89,6 @@ def render_diagrams(markdown: str, out_dir: Path, link_base: Path | None = None)
             _RENDERERS[block.lang](block.code, out_path)
         link = out_path.name if link_base is None else os.path.relpath(out_path, link_base)
         newline = "\n" if lines[block.end].endswith("\n") else ""
-        lines[block.start : block.end + 1] = [f"![]({Path(link).as_posix()}){newline}"]
+        # The prefix keeps the image inside the list item or quote the code block was in.
+        lines[block.start : block.end + 1] = [f"{block.prefix}![]({Path(link).as_posix()}){newline}"]
     return "".join(lines)

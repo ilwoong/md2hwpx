@@ -684,3 +684,21 @@ def test_convert_emphasis_and_formatted_footnotes(tmp_path):
     assert "둘째 문단" in "".join(note.itertext())
     assert body.find(f".//{hp}lineBreak") is not None  # the second paragraph starts a new line
     assert any(b.get("type") == "HYPERLINK" for b in note.iter(f"{hp}fieldBegin"))
+
+
+def test_convert_pictures_in_list_items(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png(2, 1))
+    md = tmp_path / "list-pictures.md"
+    md.write_text("1. 단계\n\n   ![](a.png)\n2. ![](a.png)\n", encoding="utf-8")
+    out = tmp_path / "list-pictures.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    assert [_paragraph_info(doc, p) for p in doc.paragraphs[1:]] == [
+        ("단계", "NUMBER", 1500),
+        ("", "NONE", 1500 + 1000),  # picture under the item
+        ("", "NUMBER", 1500),  # an item holding only a picture keeps its number ...
+        ("", "NONE", 1500 + 1000),  # ... and the picture follows
+    ]
+    assert len(doc.media.picture_references()) == 2

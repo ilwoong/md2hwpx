@@ -374,7 +374,7 @@ class _Writer:
                 runs = _runs(node.children[0].children)
                 self.write_runs(self.doc.add_heading(_plain(runs), level=int(node.tag[1])), runs)
             elif node.type == "paragraph":
-                self.paragraph(node, following, quote, content)
+                self.pieces(_pieces(node.children[0]), _block_kind(following), quote, content)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
                 self.code_block(node.content.split("\n")[:-1], lang, quote, content)
@@ -387,9 +387,11 @@ class _Writer:
             elif node.type == "blockquote":
                 self.blocks(node.children, quote + 1, indent, level)
 
-    def paragraph(self, node: SyntaxTreeNode, following: SyntaxTreeNode | None, quote: int, indent: int) -> None:
-        """A paragraph's pieces become text paragraphs, pictures, captions, the TOC position and page breaks."""
-        pieces = _pieces(node.children[0])
+    def pieces(self, pieces: list[_Piece], following: str | None, quote: int, indent: int) -> None:
+        """A paragraph's pieces become text paragraphs, pictures, captions, the TOC position and page breaks.
+
+        *following* is the kind of the block after the paragraph (see _block_kind).
+        """
         for k, piece in enumerate(pieces):
             if piece.kind == "toc":
                 if self.toc_at is None:
@@ -403,7 +405,7 @@ class _Writer:
                 self.picture(piece.image, quote, indent)
             else:
                 # What a caption line would caption: the next piece of this paragraph, or the next block.
-                next_kind = pieces[k + 1].kind if k + 1 < len(pieces) else _block_kind(following)
+                next_kind = pieces[k + 1].kind if k + 1 < len(pieces) else following
                 if not self.take_caption(piece.runs, next_kind):
                     self.text_paragraph(piece.runs, quote, indent)
 
@@ -496,10 +498,12 @@ class _Writer:
         own: str | None = None  # this list's numbering id
         for k, item in enumerate(node.children):
             item_blocks = list(item.children)
+            # The item text is the first text of its first paragraph; the rest of that paragraph
+            # (pictures, more text) follows it like the item's other blocks.
+            rest: list[_Piece] = []
             if item_blocks and item_blocks[0].type == "paragraph":
-                first = _strip(_runs(item_blocks.pop(0).children[0].children))
-            else:
-                first = []
+                rest = _pieces(item_blocks.pop(0).children[0])
+            first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
             paragraph = self.doc.add_paragraph(_plain(first), style=BODY_STYLE)
             self.write_runs(paragraph, first)
             index = len(self.doc.paragraphs) - 1
@@ -521,6 +525,8 @@ class _Writer:
                     )
                 own = own or str(styles.paragraph_property(paragraph.para_pr_id_ref).heading.id_ref)
             self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
+            following = _block_kind(item_blocks[0] if item_blocks else None)
+            self.pieces(rest, following, quote, indent + list_level * LIST_INDENT)
             self.blocks(item_blocks, quote, indent, level, own if node.type == "ordered_list" else None)
 
     # --- document ---------------------------------------------------------------------------
