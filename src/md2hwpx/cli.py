@@ -10,7 +10,7 @@ from pathlib import Path
 
 from hwpx.errors import HwpxError
 
-from md2hwpx.convert import convert_markdown
+from md2hwpx.convert import convert_markdown, read_markdown
 from md2hwpx.diagram import DiagramError, render_diagrams
 
 
@@ -22,12 +22,12 @@ def _natural_key(path: Path) -> list:
 def _read_input(path: Path) -> str:
     """The Markdown of a file, or of every .md file directly in a folder, joined in name order."""
     if not path.is_dir():
-        return path.read_text(encoding="utf-8")
+        return read_markdown(path)
     files = sorted((p for p in path.glob("*.md") if p.is_file()), key=_natural_key)
     if not files:
         raise FileNotFoundError(f"no .md files in folder: {path}")
     # A blank line between files keeps the last block of one file from running into the next.
-    return "\n\n".join(f.read_text(encoding="utf-8") for f in files)
+    return "\n\n".join(read_markdown(f) for f in files)
 
 
 def _output_path(input_path: Path, output: Path | None) -> Path:

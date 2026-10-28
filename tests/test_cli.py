@@ -68,7 +68,7 @@ def test_cli_folder_input(tmp_path, monkeypatch):
     folder = tmp_path / "chapters"
     folder.mkdir()
     (folder / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IHDR" + (1).to_bytes(4, "big") * 2)
-    (folder / "10-end.md").write_text("# 끝\n", encoding="utf-8")
+    (folder / "10-end.md").write_text("---\ntitle: 끝\n---\n# 끝\n", encoding="utf-8")  # front matter per file
     (folder / "2-body.md").write_text("[표] 둘째\n| a |\n|---|\n| 1 |", encoding="utf-8")  # no final newline
     (folder / "1-intro.md").write_text("# 소개\n\n[표] 첫째\n| b |\n|---|\n| 2 |\n\n![](a.png)\n", encoding="utf-8")
     (folder / "notes.txt").write_text("무시\n", encoding="utf-8")

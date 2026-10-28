@@ -14,6 +14,8 @@ from pygments.util import ClassNotFound
 
 from md2hwpx.diagram import LANGS
 
+# YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
+_FRONT_MATTER = re.compile(r"\A\ufeff?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 _IMAGE = re.compile(r"^\s*!\[[^\]]*\]\(([^)\s]+)\)\s*$")
 # File names render_diagrams gives the PNGs it renders.
@@ -366,8 +368,13 @@ def _continues_numbering(items: list[list], n: int) -> bool:
     return False
 
 
+def read_markdown(md_path: Path) -> str:
+    """Read *md_path* (UTF-8) without its front matter, which is metadata, not document content."""
+    return _FRONT_MATTER.sub("", md_path.read_text(encoding="utf-8"), count=1)
+
+
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
-    convert_markdown(md_path.read_text(encoding="utf-8"), md_path.parent, template_path, out_path)
+    convert_markdown(read_markdown(md_path), md_path.parent, template_path, out_path)
 
 
 def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None:

@@ -346,3 +346,32 @@ def test_convert_inline_formatting(tmp_path):
     table = doc.tables.all[0]
     assert texts(table.cell(0, 0).paragraphs[0]) == [("머리", {"bold"})]
     assert texts(table.cell(1, 0).paragraphs[0]) == [("셀", {"italic"})]
+
+
+def test_convert_skips_front_matter(tmp_path):
+    cases = {
+        "yaml.md": "---\ntitle: 제목\ntags: [a, b]\n---\n# 본문 제목\n",
+        "dots.md": "---\ntitle: x\n...\n# 본문 제목\n",
+        "bom.md": "﻿---\ntitle: x\n---\n# 본문 제목\n",
+        "empty.md": "---\n---\n# 본문 제목\n",
+    }
+    for name, text in cases.items():
+        md = tmp_path / name
+        md.write_text(text, encoding="utf-8")
+        out = tmp_path / f"{name}.hwpx"
+        convert(md, TEMPLATE, out)
+        assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["본문 제목"], name
+
+
+def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
+    md = tmp_path / "doc.md"
+    # Not at the very start, and an unclosed block: both stay content.
+    md.write_text("본문\n\n---\ntitle: x\n---\n", encoding="utf-8")
+    unclosed = tmp_path / "unclosed.md"
+    unclosed.write_text("---\ntitle: x\n", encoding="utf-8")
+
+    convert(md, TEMPLATE, tmp_path / "doc.hwpx")
+    convert(unclosed, TEMPLATE, tmp_path / "unclosed.hwpx")
+
+    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문", "--- title: x ---"]
+    assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["--- title: x"]

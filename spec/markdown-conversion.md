@@ -34,6 +34,14 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 
 템플릿의 기존 문단(첫 문단의 구역 설정 포함)은 그대로 두고, 그 뒤에 변환 결과를 추가한다.
 
+## Front matter
+
+- 파일 맨 앞(UTF-8 BOM 뒤 포함)의 YAML front matter 는 문서 내용이 아닌 메타데이터이므로 변환하지 않고 버린다.
+- 형태: 첫 줄이 `---`, 그 뒤 처음 나오는 `---` 또는 `...` 줄까지 (각 줄 끝 공백 허용).
+- 닫는 줄이 없거나 파일 맨 앞이 아닌 `---` 블록은 front matter 가 아니므로 본문으로 둔다.
+- 파일을 읽을 때(`read_markdown`) 제거하므로, 폴더 입력은 파일마다 각자의 front matter 를 제거한다.
+- TOML(`+++`) front matter 는 지원하지 않는다.
+
 ## 변환 규칙
 
 Markdown 을 한 줄씩 읽으며 아래 순서로 판단한다.
@@ -174,6 +182,7 @@ Markdown 을 한 줄씩 읽으며 아래 순서로 판단한다.
 ## 공개 API (`md2hwpx.convert`)
 
 ```python
+def read_markdown(md_path: Path) -> str
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None
 def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None
 ```
@@ -181,7 +190,9 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
 - `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
   `save_to_path(out_path)` 로 저장한다. 템플릿 파일은 바뀌지 않는다.
 - `convert_markdown` 은 Markdown 문자열을 받고, 이미지 경로를 `base_dir` 기준으로 찾는다.
-  `convert` 는 `md_path` (UTF-8) 를 읽어 `md_path` 의 폴더를 기준으로 `convert_markdown` 을 부른다.
+  `convert` 는 `read_markdown` 으로 `md_path` 를 읽어 `md_path` 의 폴더를 기준으로 `convert_markdown` 을 부른다.
+- `read_markdown` 은 파일을 UTF-8 로 읽고 front matter 를 제거한다.
+  `convert_markdown` 은 front matter 를 제거하지 않으므로, 파일 내용을 넘길 때는 `read_markdown` 으로 읽은 문자열을 넘긴다.
 - 템플릿에 필요한 스타일이 없으면 python-hwpx 의 `HwpxLookupError` 가 발생한다.
 - 이미지 파일이 없으면 `FileNotFoundError` 가 발생한다.
 
@@ -227,5 +238,6 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 인라인 코드 | 헤딩·문단·표 셀·캡션의 코드 조각이 D2Coding, 중첩 백틱, 닫히지 않은 백틱, 머리 행 굵게 유지 |
 | 인라인 서식 | 굵게·기울임·취소선(두 표기), 겹친 서식, `file_name`·이스케이프·닫히지 않은 기호는 글자 그대로, 링크 서식과 URL, 표 셀 |
 | 캡션 | 위치(TOP/BOTTOM), `[표 N]`/`[그림 N]` 번호, `표그림제목` 스타일, 개체 없는 캡션 줄은 문단 유지 |
+| Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
 | 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외, `.` 입력 이름, 없는 입력·템플릿·이미지·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
 | 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md -o samples/` 로 변환해 한/글로 확인 |
