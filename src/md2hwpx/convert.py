@@ -30,7 +30,10 @@ _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 # Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
 _MARKERS = {"toc": re.compile(r"\[TOC\]", re.IGNORECASE), "page_break": re.compile(r"\\(?:newpage|pagebreak)")}
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
-_HP_P = "{http://www.hancom.co.kr/hwpml/2011/paragraph}p"
+_HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+_HP_P = f"{_HP}p"
+# An image's width / height attribute: percent of the page body, or millimetres.
+_LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 BODY_STYLE = "본문"
@@ -47,7 +50,9 @@ RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic b
 TOC_TITLE = "차례"
 TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
+HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
+OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above and below: about one 10pt line
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
@@ -91,17 +96,35 @@ def _image_pixels(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def _picture_size(image_path: Path, data: bytes, max_width: int, max_height: int) -> tuple[int, int] | None:
+def _length(value: str | None, whole: int) -> int | None:
+    """A width / height attribute ("50%" of *whole*, or "80mm") in HWPUNIT, or None if absent, zero or neither."""
+    match = _LENGTH.fullmatch(value or "")
+    if match is None:
+        return None
+    number = float(match[1])
+    length = round(whole * number / 100 if match[2] == "%" else number * HWPUNIT_PER_MM)
+    return length or None
+
+
+def _picture_size(
+    image_path: Path, data: bytes, max_width: int, max_height: int, width: int | None = None, height: int | None = None
+) -> tuple[int, int] | None:
     """Picture (width, height) in HWPUNIT within *max_width* x *max_height*, or None if the image size is unknown.
 
-    A diagram is as wide as *max_width*; any other image keeps its size at 96 DPI.
-    Either is scaled down, keeping its aspect ratio, to fit.
+    The *width* / *height* asked for is used, the other side following the aspect ratio. Without either,
+    a diagram is as wide as *max_width*; any other image keeps its size at 96 DPI.
+    Any of them is scaled down, keeping its aspect ratio, to fit.
     """
     pixels = _image_pixels(data)
     if pixels is None or 0 in pixels:
         return None
-    width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
-    height = width * pixels[1] / pixels[0]
+    ratio = pixels[1] / pixels[0]
+    if width is None and height is None:
+        width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
+    if width is None:
+        width = height / ratio
+    if height is None:
+        height = width * ratio
     scale = min(1.0, max_width / width, max_height / height)
     return round(width * scale), round(height * scale)
 
@@ -152,6 +175,13 @@ def _strip(runs: list[Run]) -> list[Run]:
 
 def _display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
+def _space_above_below(obj) -> None:
+    """Keep about a line of space above and below the table or picture *obj*, none at its sides."""
+    margin = obj.element.find(f"{_HP}outMargin")
+    margin.set("top", str(OBJECT_SPACING))
+    margin.set("bottom", str(OBJECT_SPACING))
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -377,10 +407,24 @@ class _Writer:
         captioned = ("table", "fence", "code_block") if kind == "표" else ("image",)
         if following not in captioned:
             return False
-        self.numbers[kind] += 1
-        number = Run(f"[{kind} {self.numbers[kind]}] ")
-        self.caption = [number, first._replace(text=first.text[match.end() :]), *runs[1:]]
+        self.number_caption(kind, [first._replace(text=first.text[match.end() :]), *runs[1:]])
         return True
+
+    def number_caption(self, kind: str, title: list[Run]) -> None:
+        """Keep "[표 N] *title*" / "[그림 N] *title*" as the next caption, N counting each kind."""
+        self.numbers[kind] += 1
+        self.caption = [Run(f"[{kind} {self.numbers[kind]}] "), *title]
+
+    def add_table(self, rows: int, columns: int, quote: int, indent: int):
+        """A new table (a code block is one too) that runs on to the next pages, placed like a paragraph."""
+        table = self.doc.add_table(rows, columns, **self.body)
+        # Hancom never breaks a table laid out as a character (python-hwpx's default): rows past the page
+        # are left off. Placed from the paragraph, not the column, it keeps the paragraph's indent.
+        table.set_treat_as_char(False)
+        table.element.find(f"{_HP}pos").set("horzRelTo", "PARA")
+        _space_above_below(table)
+        self.place(table.paragraph, quote, indent)
+        return table
 
     # --- blocks -----------------------------------------------------------------------------
 
@@ -439,11 +483,23 @@ class _Writer:
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
         data = image_path.read_bytes()
-        max_height = self.body_height - (CAPTION_RESERVE if self.caption is not None else 0)
-        width, height = _picture_size(image_path, data, self.body_width, max_height) or (None, None)
+        if self.caption is None:  # without a "[그림] ..." line, the alt text (if any) is the caption
+            alt = _strip(_runs(node.children))
+            if alt:
+                self.number_caption("그림", alt)
+        max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
+        width, height = _picture_size(
+            image_path,
+            data,
+            self.body_width,
+            max_height,
+            _length(node.attrs.get("width"), self.body_width),
+            _length(node.attrs.get("height"), self.body_height),
+        ) or (None, None)
         picture = self.doc.add_picture(
             data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.body
         )
+        _space_above_below(picture)
         self.place(picture.paragraph, quote, indent)
         self.set_caption(picture, "BOTTOM")
 
@@ -451,8 +507,9 @@ class _Writer:
         rows = [tr for section in node.children for tr in section.children]
         cells = [[_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows]
         aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
-        table = self.doc.add_table(len(cells), len(cells[0]), **self.body)
-        self.place(table.paragraph, quote, indent)
+        table = self.add_table(len(cells), len(cells[0]), quote, indent)
+        # The header row's cells ("header") come again at the top of each page the table runs on to.
+        table.element.set("repeatHeader", "1")
         table.set_column_widths(
             [max(MIN_COLUMN_WEIGHT, *(_display_width(_plain(row[c])) for row in cells)) for c in range(len(cells[0]))]
         )
@@ -465,14 +522,13 @@ class _Writer:
                 if aligns[c]:
                     paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
                 if r == 0:
+                    cell.element.set("header", "1")
                     paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
                     table.set_cell_shading(r, c, HEADER_FILL)
                 self.write_runs(paragraph, runs)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
-        doc = self.doc
-        table = doc.add_table(1, 1, **self.body)
-        self.place(table.paragraph, quote, indent)
+        table = self.add_table(1, 1, quote, indent)
         self.set_caption(table, "TOP")
         cell = table.cell(0, 0)
         cell.set_text("\n".join(code), split_paragraphs=True)

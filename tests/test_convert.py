@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from hwpx import HwpxDocument
+from hwpx.layout import lint_layout
 
 from md2hwpx.convert import convert
 
@@ -64,6 +65,9 @@ def test_convert_code_block(tmp_path):
     doc = HwpxDocument.open(out)
     table = doc.tables.all[0]
     assert (table.row_count, table.column_count) == (1, 1)
+    # A line of space above and below, none at the sides, as a table.
+    margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
+    assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
     paragraphs = table.cell(0, 0).paragraphs
     assert [p.text for p in paragraphs] == ["def f():", '    """doc', '    string"""', "", "    return 1"]
     colors = {}
@@ -123,8 +127,33 @@ def test_convert_table(tmp_path):
     body = [table.cell(1, c) for c in range(4)]
     assert all(bold(cell) and fill(cell) == "#D9D9D9" for cell in header)
     assert not any(bold(cell) or fill(cell) for cell in body)
+    # A line of space above and below, none at the sides.
+    margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
+    assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
+    # The header row repeats on each page the table runs on to.
+    assert table.element.get("repeatHeader") == "1"
+    assert [cell.element.get("header") for cell in header + body] == ["1"] * 4 + ["0"] * 4
     assert [align(cell) for cell in body[:3]] == ["LEFT", "CENTER", "RIGHT"]
     assert doc.paragraphs[-1].text == "뒤 문단"
+
+
+def test_convert_tables_flow_across_pages(tmp_path):
+    # Taller than a page only once filled: a long code block, and a few rows of long text.
+    code = "".join(f"x = {i}\n" for i in range(90))
+    rows = "".join(f"| {i} | {'긴 내용 ' * 60} |\n" for i in range(10))
+    md = tmp_path / "long.md"
+    md.write_text(f"```python\n{code}```\n\n| a | b |\n|---|---|\n{rows}\n- 항목\n\n  | c |\n  |---|\n", encoding="utf-8")
+    out = tmp_path / "long.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    tables = HwpxDocument.open(out).tables.all
+    assert len(tables) == 3
+    for table in tables:
+        assert not table.treat_as_char
+        # From the paragraph, so a table in a list item keeps its indent.
+        assert table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}pos").get("horzRelTo") == "PARA"
+    assert not [f for f in lint_layout(out.read_bytes()).findings if f.code == "TABLE_TALLER_THAN_PAGE"]
 
 
 def test_convert_captions(tmp_path):
@@ -166,6 +195,39 @@ def test_convert_captions(tmp_path):
     assert pic_p.find(f"{hp}run").get("charPrIDRef") == str(style.char_pr_id_ref)
 
 
+def test_convert_alt_text_captions(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png())
+    md = tmp_path / "alt.md"
+    md.write_text(
+        "![대체 텍스트 제목](a.png)\n\n"
+        "[그림] 줄로 쓴 제목\n![대체 텍스트](a.png)\n\n"  # the "[그림]" line comes first
+        "![](a.png)\n\n"  # no alt text: no caption, not counted
+        "![ *기울임* 제목 ](a.png){width=50%}\n\n"
+        "# 헤딩 ![헤딩 안 그림](a.png)\n",  # alt text in a heading stays its text
+        encoding="utf-8",
+    )
+    out = tmp_path / "alt.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    captions = [pic.find(f"{hp}caption") for pic in pics]
+    assert [c is not None and "".join(c.itertext()) for c in captions] == [
+        "[그림 1] 대체 텍스트 제목",
+        "[그림 2] 줄로 쓴 제목",
+        False,
+        "[그림 3] 기울임 제목",
+    ]
+    assert captions[0].get("side") == "BOTTOM"
+    italic = [
+        run.get("charPrIDRef") for run in captions[3].iter(f"{hp}run") if "".join(run.itertext()) == "기울임"
+    ]
+    assert italic and "italic" in doc.styles.char_property(italic[0]).child_attributes
+    assert "헤딩 헤딩 안 그림" in [p.text for p in doc.paragraphs]
+
+
 def test_convert_picture_sizes(tmp_path):
     images = {
         "mermaid-0123456789ab.png": _png(10, 5),  # diagram: body width
@@ -190,8 +252,10 @@ def test_convert_picture_sizes(tmp_path):
     # template: A4 59528 x 84188, margins left/right 8504, top 5668, bottom/header/footer 4252,
     # 본문 left margin 1500
     body_width = 59528 - 8504 * 2 - 1500
-    body_height = 84188 - 5668 - 4252 * 3
-    sizes = [(ref.width, ref.height) for ref in HwpxDocument.open(out).media.picture_references()]
+    # less a line of space above and below the picture
+    body_height = 84188 - 5668 - 4252 * 3 - 1400 * 2
+    doc = HwpxDocument.open(out)
+    sizes = [(ref.width, ref.height) for ref in doc.media.picture_references()]
     assert sizes == [
         (body_width, body_width // 2),
         (round(body_height / 10), body_height),
@@ -201,6 +265,46 @@ def test_convert_picture_sizes(tmp_path):
         (400 * 75, 300 * 75),
         (300 * 75, 150 * 75),
     ]
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    margins = [pic.find(f"{hp}outMargin").attrib for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
+    assert margins == [{"left": "0", "right": "0", "top": "1400", "bottom": "1400"}] * len(images)
+
+
+def test_convert_picture_size_attributes(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png(100, 50))  # 7500 x 3750 at 96 DPI
+    attributes = [
+        "{width=50%}",  # of the body width
+        '{width="80mm"}',  # larger than the image: grows
+        "{height=40mm}",
+        "{width=30mm height=30mm}",  # both: as asked
+        "{width=200%}",  # wider than the body: scaled down
+        "{height=50%}",  # of the body height, then scaled down to the body width
+        "{width=300px .wide #a}",  # no such unit: its own size
+    ]
+    md = tmp_path / "sizes.md"
+    md.write_text("".join(f"![](a.png){a} 뒤\n\n" for a in attributes), encoding="utf-8")
+    out = tmp_path / "sizes.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    body_width = 59528 - 8504 * 2 - 1500
+
+    def mm(value):
+        return round(value * 7200 / 25.4)
+
+    sizes = [(ref.width, ref.height) for ref in doc.media.picture_references()]
+    assert sizes == [
+        (body_width // 2, body_width // 4),
+        (mm(80), round(mm(80) / 2)),
+        (mm(40) * 2, mm(40)),
+        (mm(30), mm(30)),
+        (body_width, body_width // 2),
+        (body_width, body_width // 2),
+        (7500, 3750),
+    ]
+    # The attribute block is not left as text.
+    assert [p.text for p in doc.paragraphs if "뒤" in p.text] == ["뒤"] * len(attributes)
 
 
 def test_convert_inline_code(tmp_path):
