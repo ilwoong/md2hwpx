@@ -30,7 +30,8 @@ _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 # Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
 _MARKERS = {"toc": re.compile(r"\[TOC\]", re.IGNORECASE), "page_break": re.compile(r"\\(?:newpage|pagebreak)")}
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
-_HP_P = "{http://www.hancom.co.kr/hwpml/2011/paragraph}p"
+_HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+_HP_P = f"{_HP}p"
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 BODY_STYLE = "본문"
@@ -382,6 +383,16 @@ class _Writer:
         self.caption = [number, first._replace(text=first.text[match.end() :]), *runs[1:]]
         return True
 
+    def add_table(self, rows: int, columns: int, quote: int, indent: int):
+        """A new table (a code block is one too) that runs on to the next pages, placed like a paragraph."""
+        table = self.doc.add_table(rows, columns, **self.body)
+        # Hancom never breaks a table laid out as a character (python-hwpx's default): rows past the page
+        # are left off. Placed from the paragraph, not the column, it keeps the paragraph's indent.
+        table.set_treat_as_char(False)
+        table.element.find(f"{_HP}pos").set("horzRelTo", "PARA")
+        self.place(table.paragraph, quote, indent)
+        return table
+
     # --- blocks -----------------------------------------------------------------------------
 
     def blocks(self, nodes: list[SyntaxTreeNode], quote: int = 0, indent: int = 0, level: int = 0,
@@ -451,8 +462,7 @@ class _Writer:
         rows = [tr for section in node.children for tr in section.children]
         cells = [[_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows]
         aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
-        table = self.doc.add_table(len(cells), len(cells[0]), **self.body)
-        self.place(table.paragraph, quote, indent)
+        table = self.add_table(len(cells), len(cells[0]), quote, indent)
         table.set_column_widths(
             [max(MIN_COLUMN_WEIGHT, *(_display_width(_plain(row[c])) for row in cells)) for c in range(len(cells[0]))]
         )
@@ -470,9 +480,7 @@ class _Writer:
                 self.write_runs(paragraph, runs)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
-        doc = self.doc
-        table = doc.add_table(1, 1, **self.body)
-        self.place(table.paragraph, quote, indent)
+        table = self.add_table(1, 1, quote, indent)
         self.set_caption(table, "TOP")
         cell = table.cell(0, 0)
         cell.set_text("\n".join(code), split_paragraphs=True)

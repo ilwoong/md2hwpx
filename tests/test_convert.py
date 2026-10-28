@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from hwpx import HwpxDocument
+from hwpx.layout import lint_layout
 
 from md2hwpx.convert import convert
 
@@ -125,6 +126,25 @@ def test_convert_table(tmp_path):
     assert not any(bold(cell) or fill(cell) for cell in body)
     assert [align(cell) for cell in body[:3]] == ["LEFT", "CENTER", "RIGHT"]
     assert doc.paragraphs[-1].text == "뒤 문단"
+
+
+def test_convert_tables_flow_across_pages(tmp_path):
+    # Taller than a page only once filled: a long code block, and a few rows of long text.
+    code = "".join(f"x = {i}\n" for i in range(90))
+    rows = "".join(f"| {i} | {'긴 내용 ' * 60} |\n" for i in range(10))
+    md = tmp_path / "long.md"
+    md.write_text(f"```python\n{code}```\n\n| a | b |\n|---|---|\n{rows}\n- 항목\n\n  | c |\n  |---|\n", encoding="utf-8")
+    out = tmp_path / "long.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    tables = HwpxDocument.open(out).tables.all
+    assert len(tables) == 3
+    for table in tables:
+        assert not table.treat_as_char
+        # From the paragraph, so a table in a list item keeps its indent.
+        assert table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}pos").get("horzRelTo") == "PARA"
+    assert not [f for f in lint_layout(out.read_bytes()).findings if f.code == "TABLE_TALLER_THAN_PAGE"]
 
 
 def test_convert_captions(tmp_path):
