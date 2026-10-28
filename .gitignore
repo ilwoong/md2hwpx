@@ -13,3 +13,5 @@ dist/
 
 # 변환 결과물
 samples/*.hwpx
+/*.hwpx
+!/template.hwpx

@@ -346,3 +346,180 @@ def test_convert_inline_formatting(tmp_path):
     table = doc.tables.all[0]
     assert texts(table.cell(0, 0).paragraphs[0]) == [("머리", {"bold"})]
     assert texts(table.cell(1, 0).paragraphs[0]) == [("셀", {"italic"})]
+
+
+def test_convert_skips_front_matter(tmp_path):
+    cases = {
+        "yaml.md": "---\ntitle: 제목\ntags: [a, b]\n---\n# 본문 제목\n",
+        "dots.md": "---\ntitle: x\n...\n# 본문 제목\n",
+        "bom.md": "﻿---\ntitle: x\n---\n# 본문 제목\n",
+        "empty.md": "---\n---\n# 본문 제목\n",
+    }
+    for name, text in cases.items():
+        md = tmp_path / name
+        md.write_text(text, encoding="utf-8")
+        out = tmp_path / f"{name}.hwpx"
+        convert(md, TEMPLATE, out)
+        assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["본문 제목"], name
+
+
+def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
+    md = tmp_path / "doc.md"
+    # Not at the very start, and an unclosed block: both stay content.
+    md.write_text("본문\n\n---\ntitle: x\n---\n", encoding="utf-8")
+    unclosed = tmp_path / "unclosed.md"
+    unclosed.write_text("---\ntitle: x\n", encoding="utf-8")
+
+    convert(md, TEMPLATE, tmp_path / "doc.hwpx")
+    convert(unclosed, TEMPLATE, tmp_path / "unclosed.hwpx")
+
+    # The "---" lines are then thematic breaks (empty paragraphs), not removed front matter.
+    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문", "", "title: x", ""]
+    assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["", "title: x"]
+
+
+
+def test_convert_thematic_break(tmp_path):
+    md = tmp_path / "rule.md"
+    md.write_text("앞\n\n---\n\n***\n- - -\n___\n\n뒤\n\n- 항목\n---\n", encoding="utf-8")
+    out = tmp_path / "rule.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    paragraphs = doc.paragraphs[1:]
+    assert [p.text for p in paragraphs] == ["앞", "", "", "", "", "뒤", "항목", ""]
+    for p in [paragraphs[i] for i in (1, 2, 3, 4, 7)]:
+        border = doc.styles.paragraph_property(p.para_pr_id_ref).border
+        info = doc.styles.border_fill_info(border.border_fill_id_ref)
+        assert (info.bottom.type, info.top.type, info.left.type) == ("SOLID", "NONE", "NONE")
+    assert doc.styles.paragraph_property(paragraphs[6].para_pr_id_ref).heading.type == "BULLET"
+
+
+def test_convert_block_quote(tmp_path):
+    md = tmp_path / "quote.md"
+    md.write_text(
+        "> 첫 줄\n> **둘째** 줄\n>\n> 새 문단\n>> 중첩\n\n문단\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "quote.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    body = doc.styles.resolve("본문")
+
+    def info(p):
+        pp = doc.styles.paragraph_property(p.para_pr_id_ref)
+        bar = doc.styles.border_fill_info(pp.border.border_fill_id_ref)
+        return p.text, int(pp.margin.left), bar.left.type, pp.border.connect
+
+    paragraphs = doc.paragraphs[1:]
+    assert [info(p) for p in paragraphs[:3]] == [
+        ("첫 줄 둘째 줄", 1500 + 1000, "SOLID", True),
+        ("새 문단", 1500 + 1000, "SOLID", True),
+        ("중첩", 1500 + 2000, "SOLID", True),
+    ]
+    assert all(int(p.style_id_ref) == body.id for p in paragraphs)
+    bold = [r.text for r in paragraphs[0].runs if "bold" in doc.styles.char_property(r.element.get("charPrIDRef")).child_attributes]
+    assert bold == ["둘째"]
+    assert info(paragraphs[3])[:2] == ("문단", 1500)
+
+
+def test_convert_hard_line_breaks(tmp_path):
+    md = tmp_path / "breaks.md"
+    md.write_text(
+        "공백 두 칸  \n백슬래시\\\n**굵게  \n이어짐** 끝\n\n- 항목  \n  둘째 줄\n\n> 인용\\\n> 둘째\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "breaks.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+
+    def lines(p):
+        # hp:lineBreak inside hp:t marks a line break; text() reads it as "\n".
+        return sum(1 for _ in p.element.iter(f"{hp}lineBreak")) + 1, p.text.replace("\n", "|")
+
+    assert lines(paragraphs[0]) == (4, "공백 두 칸|백슬래시|굵게|이어짐 끝")
+    assert lines(paragraphs[1]) == (2, "항목|둘째 줄")
+    assert lines(paragraphs[2]) == (2, "인용|둘째")
+
+
+def test_convert_footnotes(tmp_path):
+    md = tmp_path / "notes.md"
+    md.write_text(
+        "본문[^a] 중간 **굵게[^b]** 끝[^없음].\n\n"
+        "[^a]: 첫 각주 **서식은** 글자로\n"
+        "    이어지는 줄\n"
+        "[^b]: 둘째 각주\n\n"
+        "| 셀[^a] |\n|---|\n| 1 |\n\n"
+        "```\n[^a]: 코드 안은 그대로\n```\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "notes.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+
+    def sequence(p):
+        """Runs' text and footnotes (as their text in braces) in document order."""
+        items = []
+        for run in p.element.findall(f"{hp}run"):
+            for child in run:
+                if child.tag == f"{hp}t" and child.text:
+                    items.append(child.text)
+                elif child.tag == f"{hp}ctrl" and child.find(f"{hp}footNote") is not None:
+                    note = child.find(f"{hp}footNote")
+                    items.append("{" + "".join(note.find(f".//{hp}subList").itertext()) + "}")
+        return items
+
+    first = doc.paragraphs[1]
+    assert sequence(first) == [
+        "본문", "{첫 각주 서식은 글자로 이어지는 줄}", " 중간 ", "굵게", "{둘째 각주}", " 끝[^없음].",
+    ]
+    cell = doc.tables.all[0].cell(0, 0).paragraphs[0]
+    assert sequence(cell) == ["셀", "{첫 각주 서식은 글자로 이어지는 줄}"]
+    code = doc.tables.all[1].cell(0, 0).paragraphs[0]
+    assert code.text == "[^a]: 코드 안은 그대로"
+    assert not any("[^b]:" in p.text for p in doc.paragraphs)
+
+
+def test_convert_table_of_contents(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text(
+        "# 문서\n\n[TOC]\n\n## 소개\n\n본문\n\n```\n코드\n```\n\n## 사용법\n\n### 세부\n\n#### 4수준\n\n[toc]\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    texts = [p.text for p in doc.paragraphs[1:]]
+    # The TOC field sits where the first marker was; the second marker adds nothing.
+    assert texts[:6] == ["문서", "차례", "1. 문서\t1", "2. 소개\t1", "3. 사용법\t1", "4. 세부\t1"]
+    assert texts[6:] == ["", "소개", "본문", "", "사용법", "세부", "4수준"]  # level 4 is not listed
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    assert len(begins) == 1
+    command = "".join(begins[0].itertext())
+    assert "ContentsLevel:int:3" in command
+    assert begins[0].get("dirty") == "1"  # Hancom rebuilds it on open
+    # Body text in table cells is moved off 바탕글 so Hancom does not list it in the TOC.
+    code = doc.tables.all[0].cell(0, 0).paragraphs[0]
+    assert int(code.style_id_ref) == doc.styles.resolve("본문").id
+
+
+def test_convert_toc_without_headings_is_skipped(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("[TOC]\n\n본문\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["본문"]

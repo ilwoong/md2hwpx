@@ -54,6 +54,24 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx pytest -q -p 
 
 Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 빌드한다.
 
+## 실행 스크립트 (`md2hwpx.sh`)
+
+긴 `docker run` 명령 없이, 어느 폴더에서나 변환할 수 있게 하는 POSIX sh 스크립트.
+
+```sh
+/path/to/md2hwpx/md2hwpx.sh docs/guide.md [-o OUTPUT] [-t TEMPLATE]
+```
+
+- 현재 폴더를 `/work` (작업 폴더)로, 이 저장소를 `/md2hwpx` 로 읽기 전용 마운트하고
+  `PYTHONPATH=/md2hwpx/src` 로 `python -m md2hwpx` 를 실행한다. 인자는 그대로 넘긴다.
+  그래서 변환할 문서가 있는 폴더에 코드가 없어도 된다.
+- `--user "$(id -u):$(id -g)"` 로 실행해 결과 파일이 root 소유가 되지 않게 한다.
+- `-t` / `--template` 가 없고 현재 폴더에 `template.hwpx` 도 없으면 `-t /md2hwpx/template.hwpx` (이 저장소의 템플릿)를 덧붙인다.
+  인자가 없으면 덧붙이지 않으므로 도움말이 나온다.
+- 제한: 컨테이너에서는 현재 폴더 아래만 보이므로, 입력·출력·템플릿 경로는 현재 폴더 안의 상대 경로여야 한다.
+  `../` 처럼 밖을 가리키면 "No such file or directory" 오류가 난다.
+- 이미지 이름은 `md2hwpx` 로 고정이다 (`docker build -t md2hwpx .` 로 만든 이미지).
+
 ## 검증 기준
 
 | 항목 | 방법 |
@@ -63,4 +81,5 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 | 전체 테스트 | root 와 `--user` 두 방식 모두 skip 없이 통과 |
 | D2Coding | `fc-list` 에 Regular/Bold 가 보이고, 폰트를 지정한 두 다이어그램이 고정폭으로 그려짐 |
 | 한글 렌더링 | 한글 라벨을 가진 mermaid / plantuml 다이어그램 PNG 를 눈으로 확인 |
+| 실행 스크립트 | 저장소 밖 폴더에서 다이어그램이 있는 문서 변환, `-o` 폴더, 인자 없이 도움말, 저장소 템플릿 자동 사용, 밖 경로 오류 |
 | 마운트 폴더 오염 없음 | 실행 후 프로젝트 폴더에 core 덤프, `?` 폴더 등 새 파일이 없음 |

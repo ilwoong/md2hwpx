@@ -11,12 +11,14 @@ Markdown 파일을 한/글 문서 형식인 HWPX 파일로 변환하는 Python �
   - 헤딩(`#`~`######`) → `개요 1`~`개요 6` 스타일, 일반 문단 → `본문` 스타일
   - 이미지, 표(머리 행 굵게·회색 배경, 열 정렬), 코드블록(1×1 표, D2Coding 9pt, 줄간격 140%, Pygments 구문 강조)
   - 글머리표·번호 목록 (하위 목록 3단계까지)
+  - 각주(`[^1]` / `[^1]: 내용`), `[TOC]` 자리에 한/글 차례
+  - 파일 맨 앞의 YAML front matter(`---` ... `---`)는 변환하지 않고 무시
   - `[표] 제목` / `[그림] 제목` 줄 → `[표 N] 제목` / `[그림 N] 제목` 캡션 (`표그림제목` 스타일)
 
 HWPX 생성에는 [python-hwpx](https://github.com/airmang/python-hwpx) 를 사용합니다.
 템플릿에는 `개요 1`~`개요 6`, `본문`, `표그림제목` 스타일이 있어야 합니다.
 인라인 서식은 코드(D2Coding 글꼴), 굵게, 기울임, 취소선, 링크(한/글 하이퍼링크)를 지원합니다.
-인용문, 수평선, 강제 줄바꿈은 아직 지원하지 않습니다.
+인용문(왼쪽 선), 수평선, 강제 줄바꿈(줄 끝 공백 두 칸 또는 `\`)도 지원합니다.
 
 ## 실행 환경
 
@@ -38,7 +40,10 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 ### 명령줄
 
 ```sh
-# Docker (다이어그램 렌더링 도구 포함)
+# Docker (다이어그램 렌더링 도구 포함). 어느 폴더에서나 실행할 수 있다.
+/path/to/md2hwpx/md2hwpx.sh docs/guide.md -o docs/
+
+# 위 스크립트가 실행하는 명령 (저장소 루트에서)
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
     python -m md2hwpx docs/guide.md -o docs/ -t template.hwpx
 
@@ -47,6 +52,8 @@ uv run md2hwpx docs/guide.md          # ./guide.hwpx
 uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 합쳐 ./chapters.hwpx
 ```
 
+- `md2hwpx.sh` 는 현재 폴더를 컨테이너에 마운트하므로 입력·출력·템플릿은 현재 폴더 안에 있어야 한다.
+  `-t` 를 생략하고 현재 폴더에 `template.hwpx` 가 없으면 이 저장소의 `template.hwpx` 를 쓴다.
 - 인자 없이 실행하면 도움말을 보여 준다.
 - 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
   폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
@@ -98,6 +105,7 @@ samples/        변환 테스트용 샘플 Markdown (결과 HWPX 는 커밋하�
 docker/         Docker 이미지용 실행 스크립트와 설정
 Dockerfile      실행용 Alpine 이미지
 template.hwpx   변환에 사용하는 템플릿 HWPX
+md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
 ```
 
 ## 스펙 문서
