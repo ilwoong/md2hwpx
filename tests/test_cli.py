@@ -138,3 +138,16 @@ def test_cli_reports_missing_images_with_location(tmp_path, monkeypatch, capsys)
         f"md2hwpx: {folder / '2.md'}:6: 이미지 파일이 없습니다: {folder / 'b.png'}",
     ]
     assert not (tmp_path / "book.hwpx").exists()
+
+
+def test_cli_reports_inline_and_reference_images(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text("# 제목\n\n앞 ![](inline.png) 뒤\n\n![참조][pic]\n\n[pic]: ref%20image.png\n", encoding="utf-8")
+
+    assert main([str(md), "-t", str(TEMPLATE)]) == 1
+
+    assert capsys.readouterr().err.splitlines() == [
+        f"md2hwpx: {md}:3: 이미지 파일이 없습니다: {tmp_path / 'inline.png'}",
+        f"md2hwpx: {md}:5: 이미지 파일이 없습니다: {tmp_path / 'ref image.png'}",
+    ]

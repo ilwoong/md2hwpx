@@ -374,8 +374,11 @@ def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
     convert(md, TEMPLATE, tmp_path / "doc.hwpx")
     convert(unclosed, TEMPLATE, tmp_path / "unclosed.hwpx")
 
-    # The "---" lines are then thematic breaks (empty paragraphs), not removed front matter.
-    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문", "", "title: x", ""]
+    # Not removed as front matter: after a blank line "---" is a thematic break (an empty paragraph),
+    # right under a line it underlines a level 2 heading (CommonMark setext heading).
+    doc = HwpxDocument.open(tmp_path / "doc.hwpx")
+    assert [p.text for p in doc.paragraphs[1:]] == ["본문", "", "title: x"]
+    assert int(doc.paragraphs[3].style_id_ref) == doc.styles.resolve("개요 2").id
     assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["", "title: x"]
 
 
@@ -558,3 +561,126 @@ def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
     with pytest.raises(ConversionError, match="Contents/section0.xml:3: broken"):
         convert(md, TEMPLATE, out)
     assert not out.exists()
+
+
+def _paragraph_info(doc, p):
+    pp = doc.styles.paragraph_property(p.para_pr_id_ref)
+    return p.text, pp.heading.type, int(pp.margin.left)
+
+
+def test_convert_blocks_inside_list_items(tmp_path):
+    md = tmp_path / "nested.md"
+    md.write_text(
+        "1. 첫 항목\n\n   둘째 문단\n\n   ```py\n   x = 1\n   ```\n\n   | a |\n   |---|\n   | 1 |\n\n"
+        "   > 항목 안 인용\n\n2. 둘째 항목\n\n> - 인용 안 목록\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "nested.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    paragraphs = doc.paragraphs[1:]
+    assert [_paragraph_info(doc, p) for p in paragraphs] == [
+        ("첫 항목", "NUMBER", 1500),
+        ("둘째 문단", "NONE", 1500 + 1000),  # the item's other blocks sit one level in
+        ("", "NONE", 1500 + 1000),  # code block anchor
+        ("", "NONE", 1500 + 1000),  # table anchor
+        ("항목 안 인용", "NONE", 1500 + 1000 + 1000),  # quote inside the item
+        ("둘째 항목", "NUMBER", 1500),
+        ("인용 안 목록", "BULLET", 1500 + 1000),
+    ]
+    assert [t.cell(0, 0).text for t in doc.tables.all] == ["x = 1", "a"]
+    quote_bar = doc.styles.paragraph_property(paragraphs[4].para_pr_id_ref).border
+    assert doc.styles.border_fill_info(quote_bar.border_fill_id_ref).left.type == "SOLID"
+    numbering = {doc.styles.paragraph_property(paragraphs[i].para_pr_id_ref).heading.id_ref for i in (0, 5)}
+    assert len(numbering) == 1  # "2." numbers on after the item's blocks
+
+
+def test_convert_numbering_around_nested_lists(tmp_path):
+    md = tmp_path / "numbers.md"
+    md.write_text("1. 하나\n   - 글머리\n     1. 안쪽 번호\n2. 둘\n", encoding="utf-8")
+    out = tmp_path / "numbers.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    heads = [doc.styles.paragraph_property(p.para_pr_id_ref).heading for p in doc.paragraphs[1:]]
+    assert [(h.type, h.level) for h in heads] == [("NUMBER", 0), ("BULLET", 1), ("NUMBER", 2), ("NUMBER", 0)]
+    # "2." goes on with "1.", not with the inner list under the bullet.
+    assert heads[3].id_ref == heads[0].id_ref != heads[2].id_ref
+
+
+def test_convert_commonmark_blocks(tmp_path):
+    md = tmp_path / "commonmark.md"
+    md.write_text(
+        "제목 하나\n===\n\n제목 둘\n---\n\n문단\n\n---\n\n    들여쓴 코드\n\n"
+        "[참조 링크][ref] 와 ![참조 그림][pic]\n\n[ref]: https://example.com\n[pic]: a.png\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "a.png").write_bytes(_png(2, 1))
+    out = tmp_path / "commonmark.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    styles = {st.id: st.name for st in doc.styles.values()}
+    paragraphs = doc.paragraphs[1:]
+    assert [(p.text, styles[int(p.style_id_ref)]) for p in paragraphs] == [
+        ("제목 하나", "개요 1"),
+        ("제목 둘", "개요 2"),
+        ("문단", "본문"),
+        ("", "본문"),  # thematic break after a blank line
+        ("", "본문"),  # indented code block anchor
+        ("참조 링크 와", "본문"),
+        ("", "본문"),  # the referenced picture
+    ]
+    assert doc.tables.all[0].cell(0, 0).text == "들여쓴 코드"
+    assert [link["url"] for link in paragraphs[5].hyperlinks] == ["https://example.com"]
+    assert len(doc.media.picture_references()) == 1
+
+
+def test_convert_image_inside_text(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png(2, 1))
+    md = tmp_path / "inline.md"
+    md.write_text("앞 문장 ![](a.png) 뒤 문장\n\n[그림] 캡션\n![](a.png)\n", encoding="utf-8")
+    out = tmp_path / "inline.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    assert [p.text for p in doc.paragraphs[1:]] == ["앞 문장", "", "뒤 문장", ""]
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    assert len(pics) == 2
+    assert pics[0].find(f"{hp}caption") is None
+    assert "".join(pics[1].find(f"{hp}caption").itertext()) == "[그림 1] 캡션"
+
+
+def test_convert_emphasis_and_formatted_footnotes(tmp_path):
+    md = tmp_path / "emphasis.md"
+    md.write_text(
+        "***a** b* 끝[^n]\n\n[^n]: **굵은** 각주\n\n    둘째 문단 [링크](https://example.com)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "emphasis.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+
+    def marks(run):
+        char_pr = doc.styles.char_property(run.element.get("charPrIDRef"))
+        return run.text, {m for m in ("bold", "italic") if m in char_pr.child_attributes}
+
+    paragraph = doc.paragraphs[1]
+    assert [marks(r) for r in paragraph.runs if r.text][:3] == [("a", {"bold", "italic"}), (" b", {"italic"}), (" 끝", set())]
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    note = next(paragraph.element.iter(f"{hp}footNote"))
+    body = note.find(f".//{hp}p")
+    runs = [(r.find(f"{hp}t"), r.get("charPrIDRef")) for r in body.findall(f"{hp}run")]
+    texts = [("".join(t.itertext()), "bold" in doc.styles.char_property(c).child_attributes) for t, c in runs if t is not None]
+    assert texts[0] == ("굵은", True)
+    assert "둘째 문단" in "".join(note.itertext())
+    assert body.find(f".//{hp}lineBreak") is not None  # the second paragraph starts a new line
+    assert any(b.get("type") == "HYPERLINK" for b in note.iter(f"{hp}fieldBegin"))
