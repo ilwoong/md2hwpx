@@ -65,6 +65,9 @@ def test_convert_code_block(tmp_path):
     doc = HwpxDocument.open(out)
     table = doc.tables.all[0]
     assert (table.row_count, table.column_count) == (1, 1)
+    # A line of space above and below, none at the sides, as a table.
+    margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
+    assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
     paragraphs = table.cell(0, 0).paragraphs
     assert [p.text for p in paragraphs] == ["def f():", '    """doc', '    string"""', "", "    return 1"]
     colors = {}
@@ -124,6 +127,9 @@ def test_convert_table(tmp_path):
     body = [table.cell(1, c) for c in range(4)]
     assert all(bold(cell) and fill(cell) == "#D9D9D9" for cell in header)
     assert not any(bold(cell) or fill(cell) for cell in body)
+    # A line of space above and below, none at the sides.
+    margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
+    assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
     # The header row repeats on each page the table runs on to.
     assert table.element.get("repeatHeader") == "1"
     assert [cell.element.get("header") for cell in header + body] == ["1"] * 4 + ["0"] * 4
@@ -213,8 +219,10 @@ def test_convert_picture_sizes(tmp_path):
     # template: A4 59528 x 84188, margins left/right 8504, top 5668, bottom/header/footer 4252,
     # 본문 left margin 1500
     body_width = 59528 - 8504 * 2 - 1500
-    body_height = 84188 - 5668 - 4252 * 3
-    sizes = [(ref.width, ref.height) for ref in HwpxDocument.open(out).media.picture_references()]
+    # less a line of space above and below the picture
+    body_height = 84188 - 5668 - 4252 * 3 - 1400 * 2
+    doc = HwpxDocument.open(out)
+    sizes = [(ref.width, ref.height) for ref in doc.media.picture_references()]
     assert sizes == [
         (body_width, body_width // 2),
         (round(body_height / 10), body_height),
@@ -224,6 +232,9 @@ def test_convert_picture_sizes(tmp_path):
         (400 * 75, 300 * 75),
         (300 * 75, 150 * 75),
     ]
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    margins = [pic.find(f"{hp}outMargin").attrib for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
+    assert margins == [{"left": "0", "right": "0", "top": "1400", "bottom": "1400"}] * len(images)
 
 
 def test_convert_inline_code(tmp_path):

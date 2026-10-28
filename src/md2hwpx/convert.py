@@ -49,6 +49,7 @@ TOC_TITLE = "차례"
 TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
+OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above and below: about one 10pt line
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
@@ -153,6 +154,13 @@ def _strip(runs: list[Run]) -> list[Run]:
 
 def _display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
+def _space_above_below(obj) -> None:
+    """Keep about a line of space above and below the table or picture *obj*, none at its sides."""
+    margin = obj.element.find(f"{_HP}outMargin")
+    margin.set("top", str(OBJECT_SPACING))
+    margin.set("bottom", str(OBJECT_SPACING))
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -390,6 +398,7 @@ class _Writer:
         # are left off. Placed from the paragraph, not the column, it keeps the paragraph's indent.
         table.set_treat_as_char(False)
         table.element.find(f"{_HP}pos").set("horzRelTo", "PARA")
+        _space_above_below(table)
         self.place(table.paragraph, quote, indent)
         return table
 
@@ -450,11 +459,12 @@ class _Writer:
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
         data = image_path.read_bytes()
-        max_height = self.body_height - (CAPTION_RESERVE if self.caption is not None else 0)
+        max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
         width, height = _picture_size(image_path, data, self.body_width, max_height) or (None, None)
         picture = self.doc.add_picture(
             data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.body
         )
+        _space_above_below(picture)
         self.place(picture.paragraph, quote, indent)
         self.set_caption(picture, "BOTTOM")
 
