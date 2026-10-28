@@ -10,11 +10,13 @@ Markdown 파일을 한/글 문서 형식인 HWPX 파일로 변환하는 Python �
 - 템플릿 HWPX 를 열어 Markdown 내용을 추가하고 새 HWPX 로 저장
   - 헤딩(`#`~`######`) → `개요 1`~`개요 6` 스타일, 일반 문단 → `본문` 스타일
   - 이미지, 표(머리 행 굵게·회색 배경, 열 정렬), 코드블록(1×1 표, D2Coding 9pt, 줄간격 140%, Pygments 구문 강조)
+  - 글머리표·번호 목록 (하위 목록 3단계까지)
   - `[표] 제목` / `[그림] 제목` 줄 → `[표 N] 제목` / `[그림 N] 제목` 캡션 (`표그림제목` 스타일)
 
 HWPX 생성에는 [python-hwpx](https://github.com/airmang/python-hwpx) 를 사용합니다.
 템플릿에는 `개요 1`~`개요 6`, `본문`, `표그림제목` 스타일이 있어야 합니다.
-인라인 코드(`` `코드` ``)는 D2Coding 글꼴로 바꾸며, 그 밖의 인라인 서식과 목록, 인용문은 아직 지원하지 않습니다.
+인라인 서식은 코드(D2Coding 글꼴), 굵게, 기울임, 취소선, 링크(한/글 하이퍼링크)를 지원합니다.
+인용문, 수평선, 강제 줄바꿈은 아직 지원하지 않습니다.
 
 ## 실행 환경
 
@@ -33,22 +35,39 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 
 ## 사용 예
 
+### 명령줄
+
+```sh
+# Docker (다이어그램 렌더링 도구 포함)
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
+    python -m md2hwpx docs/guide.md -o docs/guide.hwpx -t template.hwpx
+
+# 로컬 (uv sync 후)
+uv run md2hwpx docs/guide.md
+```
+
+- `-o`, `--output`: 저장할 HWPX 파일. 생략하면 입력 파일 이름에 `.hwpx` 를 붙인다.
+- `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`.
+
+다이어그램은 임시 폴더에 렌더링해 HWPX 에 넣고 지우므로, 입력 폴더에 이미지 파일이 남지 않습니다.
+성공하면 저장한 파일 경로를 출력하고, 실패하면 오류를 stderr 에 출력하고 종료 코드 1 로 끝납니다.
+
+### Python
+
 ```python
 from pathlib import Path
-from md2hwpx.convert import convert
+from md2hwpx.convert import convert_markdown
 from md2hwpx.diagram import render_diagrams
 
 doc = Path("docs/guide.md")
-markdown = render_diagrams(doc.read_text(), out_dir=doc.parent / "images", link_base=doc.parent)
-rendered = doc.with_name("guide.rendered.md")
-rendered.write_text(markdown, encoding="utf-8")
-
-convert(rendered, Path("template.hwpx"), doc.with_suffix(".hwpx"))
+markdown = render_diagrams(doc.read_text(encoding="utf-8"), out_dir=doc.parent / "images", link_base=doc.parent)
+convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".hwpx"))
 ```
 
-다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장됩니다.
+다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장되고,
 반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
-`convert` 는 이미지 경로를 Markdown 파일 위치 기준으로 찾으므로, 렌더링 결과는 원본과 같은 폴더에 저장합니다.
+이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
+파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
 
 ## 로컬 개발
 

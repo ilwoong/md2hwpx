@@ -10,6 +10,9 @@ dependencies = [
     "python-hwpx>=6.10.0",
 ]
 
+[project.scripts]
+md2hwpx = "md2hwpx.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
