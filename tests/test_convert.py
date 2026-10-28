@@ -374,8 +374,11 @@ def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
     convert(md, TEMPLATE, tmp_path / "doc.hwpx")
     convert(unclosed, TEMPLATE, tmp_path / "unclosed.hwpx")
 
-    # The "---" lines are then thematic breaks (empty paragraphs), not removed front matter.
-    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문", "", "title: x", ""]
+    # Not removed as front matter: after a blank line "---" is a thematic break (an empty paragraph),
+    # right under a line it underlines a level 2 heading (CommonMark setext heading).
+    doc = HwpxDocument.open(tmp_path / "doc.hwpx")
+    assert [p.text for p in doc.paragraphs[1:]] == ["본문", "", "title: x"]
+    assert int(doc.paragraphs[3].style_id_ref) == doc.styles.resolve("개요 2").id
     assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["", "title: x"]
 
 

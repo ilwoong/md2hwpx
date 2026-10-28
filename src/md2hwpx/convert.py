@@ -4,58 +4,36 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable
 from pathlib import Path
+from urllib.parse import unquote
 
 from hwpx import HwpxDocument
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
+from markdown_it import MarkdownIt
+from markdown_it.tree import SyntaxTreeNode
+from mdit_py_plugins.footnote import footnote_plugin
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 
 from md2hwpx.diagram import LANGS
 
+# CommonMark with GFM tables and strikethrough, and footnotes. Raw HTML stays text.
+_PARSER = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"]).use(footnote_plugin)
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
-_FRONT_MATTER = re.compile(r"\A\ufeff?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
-_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
-_IMAGE = re.compile(r"^\s*!\[[^\]]*\]\(([^)\s]+)\)\s*$")
+_FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
 # File names render_diagrams gives the PNGs it renders.
 _DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
-# "[표] ..." / "[그림] ..." right before a table or code block / image (blank lines allowed) is its caption,
+# "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
-_CAPTION = re.compile(r"^\s*\[(표|그림)\]\s*(.*?)\s*$")
-# Inline markup, leftmost match first: backslash escape, code span (a backtick run closed by
-# one of the same length), footnote reference, link, bold italic, bold, strikethrough, italic. Emphasis content may not start
-# or end with a space, and "_" only works at word boundaries so snake_case stays as it is.
-_INLINE = re.compile(
-    r"\\(?P<escape>[!-/:-@\[-`{-~])"
-    r"|(?<!`)(?P<ticks>`+)(?!`)(?P<code>.+?)(?<!`)(?P=ticks)(?!`)"
-    r"|\[\^(?P<note>[^\]\s]+)\]"
-    r"|\[(?P<link>[^\]]+)\]\((?P<url>[^)\s]+)\)"
-    r"|\*\*\*(?P<bold_italic>\S(?:.*?\S)?)\*\*\*"
-    r"|\*\*(?P<bold>\S(?:.*?\S)?)\*\*"
-    r"|(?<!\w)__(?P<bold_>\S(?:.*?\S)?)__(?!\w)"
-    r"|~~(?P<strike>\S(?:.*?\S)?)~~"
-    r"|\*(?P<italic>[^\s*](?:.*?[^\s*])?)\*"
-    r"|(?<!\w)_(?P<italic_>[^\s_](?:.*?[^\s_])?)_(?!\w)",
-    re.DOTALL,  # markup may span a hard line break
-)
-# List item: indent, marker ("-", "*", "+" or "1." / "1)"), at least one space, content.
-_LIST_ITEM = re.compile(r"^( *)([-*+]|(\d{1,9})[.)])[ \t]+(\S.*)$")
-# Thematic break: three or more "-", "*" or "_" (spaces allowed between them).
-_RULE = re.compile(r"^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$")
-# Block quote line: one or more ">" markers (depth), each with an optional space, then content.
-_QUOTE = re.compile(r"^((?: {0,3}> ?)+)(.*)$")
-# Footnote definition "[^id]: text"; lines indented by 4 spaces or a tab continue it.
-_NOTE_DEF = re.compile(r"^ {0,3}\[\^([^\]\s]+)\]:[ \t]*(.*)$")
-# Table of contents marker line.
-_TOC = re.compile(r"^ {0,3}\[TOC\][ \t]*$", re.IGNORECASE)
-# Page break line, as pandoc writes it.
-_PAGE_BREAK = re.compile(r"^ {0,3}\\(?:newpage|pagebreak)[ \t]*$")
-_DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
-# (starts with ':', ends with ':') -> paragraph alignment; no colon keeps the default.
-_ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
+_CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
+# Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
+_MARKERS = {"toc": re.compile(r"\[TOC\]", re.IGNORECASE), "page_break": re.compile(r"\\(?:newpage|pagebreak)")}
+_MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
+# Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
+_ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 BODY_STYLE = "본문"
 CAPTION_STYLE = "표그림제목"
 HEADER_FILL = "#D9D9D9"
@@ -76,6 +54,10 @@ CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
 CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
 
+# (text, marks, link url). Marks are bold, italic, strike, code; a run marked "footnote" holds
+# the footnote id as its text.
+Run = tuple[str, frozenset[str], "str | None"]
+
 
 class ConversionError(Exception):
     """The converted document failed HWPX validation, so it was not saved."""
@@ -86,101 +68,15 @@ def _body(doc: HwpxDocument) -> dict:
     return {"style": BODY_STYLE, "para_pr_id_ref": doc.styles.resolve(BODY_STYLE).para_pr_id_ref}
 
 
+def _body_left(doc: HwpxDocument) -> int:
+    return int(doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin.left)
+
+
 def _body_width(doc: HwpxDocument) -> int:
     """Width a 본문 paragraph can hold: the page text width minus the style's side margins."""
     size, page = doc.page.size(), doc.page.margins()
     margin = doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin
     return size.width - page.left - page.right - page.gutter - int(margin.left) - int(margin.right)
-
-
-_EMPHASIS = {
-    "bold_italic": frozenset({"bold", "italic"}),
-    "bold": frozenset({"bold"}),
-    "bold_": frozenset({"bold"}),
-    "strike": frozenset({"strike"}),
-    "italic": frozenset({"italic"}),
-    "italic_": frozenset({"italic"}),
-}
-
-
-def _inline_runs(
-    text: str, notes: dict[str, str] | None = None, marks: frozenset[str] = frozenset(), url: str | None = None
-) -> list[tuple[str, frozenset[str], str | None]]:
-    """Split *text* into (text, marks, link url) runs; marks are bold, italic, strike, code.
-
-    A reference to a footnote in *notes* is a run of its id marked "footnote";
-    any other "[^id]" stays as text.
-    """
-    runs: list[tuple[str, frozenset[str], str | None]] = []
-    pos = 0
-    for m in _INLINE.finditer(text):
-        if m.start() > pos:
-            runs.append((text[pos : m.start()], marks, url))
-        if m["escape"] is not None:
-            runs.append((m["escape"], marks, url))
-        elif m["code"] is not None:
-            code = m["code"]
-            # CommonMark: one space on both sides of the content is stripped.
-            if len(code) > 2 and code[0] == code[-1] == " " and code.strip():
-                code = code[1:-1]
-            runs.append((code, marks | {"code"}, url))
-        elif m["note"] is not None:
-            if notes and m["note"] in notes:
-                runs.append((m["note"], marks | {"footnote"}, url))
-            else:
-                runs.append((m.group(0), marks, url))
-        elif m["link"] is not None:
-            runs += _inline_runs(m["link"], notes, marks, m["url"])
-        else:
-            name = next(n for n in _EMPHASIS if m[n] is not None)
-            runs += _inline_runs(m[name], notes, marks | _EMPHASIS[name], url)
-        pos = m.end()
-    if pos < len(text):
-        runs.append((text[pos:], marks, url))
-    return runs
-
-
-def _plain(text: str) -> str:
-    """*text* without its inline markup."""
-    return "".join(run_text for run_text, _, _ in _inline_runs(text))
-
-
-def _write_inline(doc: HwpxDocument, paragraph, text: str, notes: dict[str, str] | None = None) -> None:
-    """Rewrite *paragraph* (holding *text* in one run) with runs for the inline markup in *text*,
-    and a footnote, with the plain text of its definition in *notes*, at each reference."""
-    runs: list[tuple[str, frozenset[str], str | None]] = []
-    for run in _inline_runs(text, notes):
-        if runs and runs[-1][1:] == run[1:] and "footnote" not in run[1]:
-            runs[-1] = (runs[-1][0] + run[0], *run[1:])  # e.g. text around an escape
-        else:
-            runs.append(run)
-    if runs == [(text, frozenset(), None)] or not runs:
-        return
-    base = paragraph.char_pr_id_ref
-    char_prs: dict[frozenset[str], str | None] = {frozenset(): base}
-
-    def char_pr(marks: frozenset[str]) -> str | None:
-        if marks not in char_prs:
-            # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
-            char_prs[marks] = doc.styles.ensure_run(
-                bold=True if "bold" in marks else None,
-                italic=True if "italic" in marks else None,
-                strike=True if "strike" in marks else None,
-                font=CODE_FONT if "code" in marks else None,
-                base_char_pr_id=base,
-            )
-        return char_prs[marks]
-
-    paragraph.clear_text()
-    for run_text, marks, url in runs:
-        if "footnote" in marks:
-            doc.notes.add_footnote(_plain(notes[run_text]), paragraph)
-        elif url is None:
-            paragraph.add_run(run_text, char_pr_id_ref=char_pr(marks))
-        else:
-            # Hancom's link look (blue, underlined) on top of the run's own marks.
-            link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(marks))
-            paragraph.add_hyperlink(url, run_text, char_pr_id_ref=link_pr)
 
 
 def _body_height(doc: HwpxDocument) -> int:
@@ -223,74 +119,50 @@ def _picture_size(doc: HwpxDocument, image_path: Path, data: bytes, captioned: b
     return round(width * scale), round(height * scale)
 
 
-def _set_caption(doc: HwpxDocument, obj, text: str, side: str) -> None:
-    style = doc.styles.resolve(CAPTION_STYLE)
-    caption = obj.set_caption(text, side=side, char_pr_id_ref=style.char_pr_id_ref)
-    for paragraph in caption.paragraphs:
-        paragraph.style_id_ref = style.id
-        paragraph.para_pr_id_ref = style.para_pr_id_ref
-        _write_inline(doc, paragraph, text)
+def _runs(nodes: Iterable[SyntaxTreeNode], marks: frozenset[str] = frozenset(), url: str | None = None) -> list[Run]:
+    """The runs of inline *nodes*. An image here (in a heading or table cell) gives its alt text."""
+    runs: list[Run] = []
+    for node in nodes:
+        if node.type == "text":
+            runs.append((node.content, marks, url))
+        elif node.type == "softbreak":
+            runs.append((" ", marks, url))
+        elif node.type == "hardbreak":
+            runs.append(("\n", marks, url))
+        elif node.type == "code_inline":
+            runs.append((node.content, marks | {"code"}, url))
+        elif node.type in _MARKS:
+            runs += _runs(node.children, marks | {_MARKS[node.type]}, url)
+        elif node.type == "link":
+            runs += _runs(node.children, marks, node.attrs["href"])
+        elif node.type == "image":
+            runs += _runs(node.children, marks, url)
+        elif node.type == "footnote_ref":
+            runs.append((str(node.meta["id"]), marks | {"footnote"}, url))
+    return runs
 
 
-def _cells(line: str) -> list[str]:
-    line = line.strip()
-    if line.startswith("|"):
-        line = line[1:]
-    if line.endswith("|") and not line.endswith("\\|"):
-        line = line[:-1]
-    return [cell.strip().replace("\\|", "|") for cell in re.split(r"(?<!\\)\|", line)]
+def _plain(runs: list[Run]) -> str:
+    """The text of *runs* without footnotes."""
+    return "".join(text for text, marks, _ in runs if "footnote" not in marks)
 
 
-def _is_table_start(lines: list[str], i: int) -> bool:
-    return (
-        i + 1 < len(lines)
-        and "|" in lines[i]
-        and _DELIMITER.match(lines[i + 1]) is not None
-        and len(_cells(lines[i])) == len(_cells(lines[i + 1]))
-    )
-
-
-def _captioned(lines: list[str], i: int, kind: str) -> int | None:
-    """Index of the table, code block or image line that the caption at *i* belongs to, or None."""
-    j = i + 1
-    while j < len(lines) and not lines[j].strip():
-        j += 1
-    if kind == "표" and (_is_table_start(lines, j) or (j < len(lines) and _FENCE.match(lines[j]))):
-        return j
-    if kind == "그림" and j < len(lines) and _IMAGE.match(lines[j]):
-        return j
-    return None
+def _strip(runs: list[Run]) -> list[Run]:
+    """*runs* without the white space at their start and end."""
+    runs = list(runs)
+    while runs and "footnote" not in runs[0][1] and not runs[0][0].strip():
+        runs.pop(0)
+    while runs and "footnote" not in runs[-1][1] and not runs[-1][0].strip():
+        runs.pop()
+    if runs and "footnote" not in runs[0][1]:
+        runs[0] = (runs[0][0].lstrip(), *runs[0][1:])
+    if runs and "footnote" not in runs[-1][1]:
+        runs[-1] = (runs[-1][0].rstrip(), *runs[-1][1:])
+    return runs
 
 
 def _display_width(text: str) -> int:
-    text = _plain(text)
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
-
-
-def _add_table(
-    doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None], caption: str | None, notes: dict[str, str]
-) -> None:
-    table = doc.add_table(len(rows), len(rows[0]), **_body(doc))
-    table.set_column_widths(
-        [max(MIN_COLUMN_WEIGHT, *(_display_width(row[c]) for row in rows)) for c in range(len(rows[0]))]
-    )
-    if caption is not None:
-        _set_caption(doc, table, caption, "TOP")
-    for r, row in enumerate(rows):
-        for c, text in enumerate(row):
-            cell = table.cell(r, c)
-            cell.text = text
-            paragraph = cell.paragraphs[0]
-            if aligns[c]:
-                paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
-                    base_para_pr_id=paragraph.para_pr_id_ref, alignment=aligns[c]
-                )
-            if r == 0:
-                paragraph.char_pr_id_ref = doc.styles.ensure_run(
-                    bold=True, base_char_pr_id=paragraph.char_pr_id_ref
-                )
-                table.set_cell_shading(r, c, HEADER_FILL)
-            _write_inline(doc, paragraph, text, notes)
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -310,213 +182,374 @@ def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
     return lines
 
 
-def _add_code_block(doc: HwpxDocument, code: list[str], lang: str, caption: str | None) -> None:
-    table = doc.add_table(1, 1, **_body(doc))
-    if caption is not None:
-        _set_caption(doc, table, caption, "TOP")
-    cell = table.cell(0, 0)
-    cell.set_text("\n".join(code), split_paragraphs=True)
-    char_prs: dict[tuple, str] = {}
+def _starts_with_image(node: SyntaxTreeNode | None) -> bool:
+    if node is None or node.type != "paragraph":
+        return False
+    first = next((c for c in node.children[0].children if not (c.type == "text" and not c.content.strip())), None)
+    return first is not None and first.type == "image"
 
-    def char_pr(base: str | None, color: str | None, bold: bool, italic: bool) -> str:
-        key = (base, color, bold, italic)
-        if key not in char_prs:
-            char_prs[key] = doc.styles.ensure_run(
-                font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}",
-                bold=bold, italic=italic, base_char_pr_id=base,
-            )
-        return char_prs[key]
 
-    for paragraph, runs in zip(cell.paragraphs, _highlight(code, lang)):
+class _Writer:
+    """Writes the block tree of a Markdown document into an HWPX document."""
+
+    def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode):
+        self.doc = doc
+        self.base_dir = base_dir
+        self.body_left = _body_left(doc)
+        # Footnote definitions by id, from the block the footnote plugin puts at the end.
+        self.notes = {
+            note.meta["id"]: note for block in root.children if block.type == "footnote_block" for note in block.children
+        }
+        self.caption: list[Run] | None = None  # for the next table, code block or picture
+        self.numbers = {"표": 0, "그림": 0}
+        self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
+        self.toc_page_break = False  # a page break right before the [TOC] marker
+        self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
+
+    # --- runs -------------------------------------------------------------------------------
+
+    def write_runs(self, paragraph, runs: list[Run], footnotes: bool = True) -> None:
+        """Rewrite *paragraph* (holding the plain text of *runs* in one run) with *runs*:
+        a run per change of marks, links as hyperlinks, footnotes (dropped if not *footnotes*)."""
+        merged: list[Run] = []
+        for run in runs:
+            if ("footnote" in run[1] and not footnotes) or (not run[0] and "footnote" not in run[1]):
+                continue  # markdown-it leaves empty text around emphasis
+            if merged and merged[-1][1:] == run[1:] and "footnote" not in run[1]:
+                merged[-1] = (merged[-1][0] + run[0], *run[1:])
+            else:
+                merged.append(run)
+        if all(not marks and url is None for _, marks, url in merged):
+            return
         base = paragraph.char_pr_id_ref
+        char_prs: dict[frozenset[str], str | None] = {frozenset(): base}
+
+        def char_pr(marks: frozenset[str]) -> str | None:
+            if marks not in char_prs:
+                # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
+                char_prs[marks] = self.doc.styles.ensure_run(
+                    bold=True if "bold" in marks else None,
+                    italic=True if "italic" in marks else None,
+                    strike=True if "strike" in marks else None,
+                    font=CODE_FONT if "code" in marks else None,
+                    base_char_pr_id=base,
+                )
+            return char_prs[marks]
+
         paragraph.clear_text()
-        if not runs:
-            paragraph.add_run("", char_pr_id_ref=char_pr(base, None, False, False))
-        for text, token_style in runs:
-            paragraph.add_run(
-                text,
-                char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
-            )
-        paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
-            base_para_pr_id=paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING
-        )
+        for text, marks, url in merged:
+            if "footnote" in marks:
+                self.add_footnote(paragraph, int(text))
+            elif url is None:
+                paragraph.add_run(text, char_pr_id_ref=char_pr(marks))
+            else:
+                # Hancom's link look (blue, underlined) on top of the run's own marks.
+                link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(marks))
+                paragraph.add_hyperlink(url, text, char_pr_id_ref=link_pr)
 
+    def add_footnote(self, paragraph, note_id: int) -> None:
+        """A Hancom footnote at the end of *paragraph*; the definition's paragraphs become lines."""
+        runs: list[Run] = []
+        for block in self.notes[note_id].children:
+            if block.type == "paragraph":
+                if runs:
+                    runs.append(("\n", frozenset(), None))
+                runs += _runs(block.children[0].children)
+        runs = _strip(runs)
+        note = self.doc.notes.add_footnote(_plain(runs), paragraph)
+        self.write_runs(note.body_paragraph, runs, footnotes=False)
 
-def _join_lines(lines: list[str]) -> str:
-    """Join the lines of a paragraph with spaces, or with a line break after a line that ends
-    in two spaces or a backslash (a CommonMark hard line break)."""
-    text = ""
-    for line in lines[:-1]:
-        if line.endswith("\\"):
-            text += line[:-1].strip() + "\n"
-        else:
-            text += line.strip() + ("\n" if line.endswith("  ") else " ")
-    return text + lines[-1].strip()
+    def text_paragraph(self, runs: list[Run], quote: int, indent: int):
+        paragraph = self.doc.add_paragraph(_plain(runs), style=BODY_STYLE)
+        self.write_runs(paragraph, runs)
+        self.place(paragraph, quote, indent)
+        return paragraph
 
-
-def _body_left(doc: HwpxDocument) -> int:
-    return int(doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin.left)
-
-
-def _add_rule(doc: HwpxDocument) -> None:
-    """A thematic break: an empty 본문 paragraph with a bottom border."""
-    paragraph = doc.add_paragraph("", style=BODY_STYLE)
-    line = doc.styles.ensure_border_fill(active_borders=["BOTTOM"], **RULE_LINE)
-    paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
-        base_para_pr_id=paragraph.para_pr_id_ref, border={"borderFillIDRef": line}
-    )
-
-
-def _add_quote(doc: HwpxDocument, lines: list[str], i: int, notes: dict[str, str]) -> int:
-    """Add the block quote starting at line *i* and return the index of the first line after it.
-
-    Each paragraph of the quote becomes a 본문 paragraph indented by its depth, with a bar on the left.
-    """
-    paragraphs: list[tuple[int, list[str]]] = []  # (depth, lines)
-    open_paragraph = False
-    while i < len(lines) and (quote := _QUOTE.match(lines[i])):
-        depth, content = quote.group(1).count(">"), quote.group(2)
-        if not content.strip():
-            open_paragraph = False
-        elif open_paragraph and paragraphs[-1][0] == depth:
-            paragraphs[-1][1].append(content)
-        else:
-            paragraphs.append((depth, [content]))
-            open_paragraph = True
-        i += 1
-
-    bar = doc.styles.ensure_border_fill(active_borders=["LEFT"], **QUOTE_BAR)
-    for depth, quote_lines in paragraphs:
-        text = _join_lines(quote_lines)
-        paragraph = doc.add_paragraph(text, style=BODY_STYLE)
-        _write_inline(doc, paragraph, text, notes)
-        paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
-            base_para_pr_id=paragraph.para_pr_id_ref,
-            margins={"left": _body_left(doc) + depth * QUOTE_INDENT},
+    def place(self, paragraph, quote: int, indent: int, bar: bool = True) -> None:
+        """Indent *paragraph* by its quote depth and *indent*, with the quote bar on the left."""
+        if not quote and not indent:
+            return
+        layout: dict = {"margins": {"left": self.body_left + quote * QUOTE_INDENT + indent}}
+        if quote and bar:
+            line = self.doc.styles.ensure_border_fill(active_borders=["LEFT"], **QUOTE_BAR)
             # connect: one bar along consecutive quote paragraphs
-            border={"borderFillIDRef": bar, "offsetLeft": QUOTE_BAR_GAP, "connect": "1"},
+            layout["border"] = {"borderFillIDRef": line, "offsetLeft": QUOTE_BAR_GAP, "connect": "1"}
+        paragraph.para_pr_id_ref = self.doc.styles.ensure_paragraph_format(
+            base_para_pr_id=paragraph.para_pr_id_ref, **layout
         )
-    return i
+
+    def set_caption(self, obj, side: str) -> None:
+        if self.caption is None:
+            return
+        style = self.doc.styles.resolve(CAPTION_STYLE)
+        caption = obj.set_caption(_plain(self.caption), side=side, char_pr_id_ref=style.char_pr_id_ref)
+        for paragraph in caption.paragraphs:
+            paragraph.style_id_ref = style.id
+            paragraph.para_pr_id_ref = style.para_pr_id_ref
+            self.write_runs(paragraph, self.caption, footnotes=False)
+        self.caption = None
+
+    def take_caption(self, runs: list[Run], following: SyntaxTreeNode | str | None) -> bool:
+        """If *runs* is a "[표] ..." / "[그림] ..." line and *following* (a block, or "image")
+        is what it captions, keep it as the next caption and return True."""
+        match = _CAPTION.match(runs[0][0]) if runs and not runs[0][1] and runs[0][2] is None else None
+        if match is None:
+            return False
+        kind = match.group(1)
+        if kind == "표":
+            fits = isinstance(following, SyntaxTreeNode) and following.type in ("table", "fence", "code_block")
+        else:
+            fits = following == "image" or (isinstance(following, SyntaxTreeNode) and _starts_with_image(following))
+        if not fits:
+            return False
+        self.numbers[kind] += 1
+        rest = [(runs[0][0][match.end() :], *runs[0][1:]), *runs[1:]]
+        self.caption = [(f"[{kind} {self.numbers[kind]}] ", frozenset(), None), *rest]
+        return True
+
+    # --- blocks -----------------------------------------------------------------------------
+
+    def blocks(self, nodes: list[SyntaxTreeNode], quote: int = 0, indent: int = 0, level: int = 0,
+               numbering: str | None = None) -> None:
+        """Write *nodes*, inside *quote* quotes and *level* list items placed at *indent*.
+
+        *numbering* is the numbering id of the numbered list item holding them, if any.
+        """
+        content = indent + min(level, LIST_MAX_LEVEL) * LIST_INDENT
+        for k, node in enumerate(nodes):
+            following = nodes[k + 1] if k + 1 < len(nodes) else None
+            if node.type == "heading":
+                runs = _runs(node.children[0].children)
+                self.write_runs(self.doc.add_heading(_plain(runs), level=int(node.tag[1])), runs)
+            elif node.type == "paragraph":
+                self.paragraph(node, following, quote, content)
+            elif node.type in ("fence", "code_block"):
+                lang = node.info.split()[0] if node.info.strip() else ""
+                self.code_block(node.content.split("\n")[:-1], lang, quote, content)
+            elif node.type == "table":
+                self.table(node, quote, content)
+            elif node.type == "hr":
+                self.rule(quote, content)
+            elif node.type in ("bullet_list", "ordered_list"):
+                self.list(node, quote, indent, level + 1, numbering)
+            elif node.type == "blockquote":
+                self.blocks(node.children, quote + 1, indent, level)
+
+    def paragraph(self, node: SyntaxTreeNode, following: SyntaxTreeNode | None, quote: int, indent: int) -> None:
+        """A paragraph's lines become text paragraphs, pictures, markers and captions."""
+        pieces: list[tuple] = []  # ("runs", runs) | ("image", node) | ("toc",) | ("page_break",)
+        runs: list[Run] = []
+
+        def flush() -> None:
+            if any(text.strip() or "footnote" in marks for text, marks, _ in runs):
+                pieces.append(("runs", _strip(runs)))
+            runs.clear()
+
+        lines: list[list[SyntaxTreeNode]] = [[]]
+        for child in node.children[0].children:
+            if child.type == "softbreak":
+                lines.append([])
+            else:
+                lines[-1].append(child)
+        for line in lines:
+            text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else None
+            marker = next((name for name, pattern in _MARKERS.items() if text and pattern.fullmatch(text)), None)
+            if marker:
+                flush()
+                pieces.append((marker,))
+                continue
+            if runs:
+                runs.append((" ", frozenset(), None))
+            for child in line:
+                if child.type == "image":
+                    flush()
+                    pieces.append(("image", child))
+                else:
+                    runs += _runs([child])
+        flush()
+
+        for k, piece in enumerate(pieces):
+            if piece[0] == "toc":
+                if self.toc_at is None:
+                    self.toc_at = len(self.doc.paragraphs)
+                    if self.toc_at in self.page_breaks:
+                        self.page_breaks.remove(self.toc_at)
+                        self.toc_page_break = True
+            elif piece[0] == "page_break":
+                self.page_breaks.append(len(self.doc.paragraphs))
+            elif piece[0] == "image":
+                self.picture(piece[1], quote, indent)
+            else:
+                # What a caption line would caption: the next piece of this paragraph, or the next block.
+                next_piece = pieces[k + 1][0] if k + 1 < len(pieces) else following
+                if self.take_caption(piece[1], next_piece):
+                    continue
+                self.text_paragraph(piece[1], quote, indent)
+
+    def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
+        image_path = self.base_dir / unquote(node.attrs["src"])
+        data = image_path.read_bytes()
+        width, height = _picture_size(self.doc, image_path, data, self.caption is not None) or (None, None)
+        picture = self.doc.add_picture(
+            data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **_body(self.doc)
+        )
+        self.place(picture.paragraph, quote, indent)
+        self.set_caption(picture, "BOTTOM")
+
+    def table(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
+        rows = [tr for section in node.children for tr in section.children]
+        cells = [[_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows]
+        aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
+        table = self.doc.add_table(len(cells), len(cells[0]), **_body(self.doc))
+        self.place(table.paragraph, quote, indent)
+        table.set_column_widths(
+            [max(MIN_COLUMN_WEIGHT, *(_display_width(_plain(row[c])) for row in cells)) for c in range(len(cells[0]))]
+        )
+        self.set_caption(table, "TOP")
+        for r, row in enumerate(cells):
+            for c, runs in enumerate(row):
+                cell = table.cell(r, c)
+                cell.text = _plain(runs)
+                paragraph = cell.paragraphs[0]
+                if aligns[c]:
+                    paragraph.para_pr_id_ref = self.doc.styles.ensure_paragraph_format(
+                        base_para_pr_id=paragraph.para_pr_id_ref, alignment=aligns[c]
+                    )
+                if r == 0:
+                    paragraph.char_pr_id_ref = self.doc.styles.ensure_run(
+                        bold=True, base_char_pr_id=paragraph.char_pr_id_ref
+                    )
+                    table.set_cell_shading(r, c, HEADER_FILL)
+                self.write_runs(paragraph, runs)
+
+    def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
+        doc = self.doc
+        table = doc.add_table(1, 1, **_body(doc))
+        self.place(table.paragraph, quote, indent)
+        self.set_caption(table, "TOP")
+        cell = table.cell(0, 0)
+        cell.set_text("\n".join(code), split_paragraphs=True)
+        char_prs: dict[tuple, str] = {}
+
+        def char_pr(base: str | None, color: str | None, bold: bool, italic: bool) -> str:
+            key = (base, color, bold, italic)
+            if key not in char_prs:
+                char_prs[key] = doc.styles.ensure_run(
+                    font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}",
+                    bold=bold, italic=italic, base_char_pr_id=base,
+                )
+            return char_prs[key]
+
+        for paragraph, runs in zip(cell.paragraphs, _highlight(code, lang)):
+            base = paragraph.char_pr_id_ref
+            paragraph.clear_text()
+            if not runs:
+                paragraph.add_run("", char_pr_id_ref=char_pr(base, None, False, False))
+            for text, token_style in runs:
+                paragraph.add_run(
+                    text,
+                    char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
+                )
+            paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
+                base_para_pr_id=paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING
+            )
+
+    def rule(self, quote: int, indent: int) -> None:
+        """A thematic break: an empty 본문 paragraph with a bottom border."""
+        paragraph = self.doc.add_paragraph("", style=BODY_STYLE)
+        line = self.doc.styles.ensure_border_fill(active_borders=["BOTTOM"], **RULE_LINE)
+        paragraph.para_pr_id_ref = self.doc.styles.ensure_paragraph_format(
+            base_para_pr_id=paragraph.para_pr_id_ref, border={"borderFillIDRef": line}
+        )
+        self.place(paragraph, quote, indent, bar=False)
+
+    def list(self, node: SyntaxTreeNode, quote: int, indent: int, level: int, numbering: str | None) -> None:
+        """Each item's first paragraph gets the bullet or number; its other blocks follow, indented.
+
+        A numbered list starts its own numbering, or numbers on within the *numbering* of the
+        numbered item holding it (Hancom numbers sub-levels within one definition).
+        """
+        styles = self.doc.styles
+        list_level = min(level, LIST_MAX_LEVEL)
+        start = int(node.attrs.get("start", 1))
+        own: str | None = None  # this list's numbering id
+        for k, item in enumerate(node.children):
+            blocks = list(item.children)
+            if blocks and blocks[0].type == "paragraph":
+                first = _strip(_runs(blocks.pop(0).children[0].children))
+            else:
+                first = []
+            paragraph = self.doc.add_paragraph(_plain(first), style=BODY_STYLE)
+            self.write_runs(paragraph, first)
+            index = len(self.doc.paragraphs) - 1
+            if node.type == "bullet_list":
+                styles.apply_list_format(paragraph_index=index, kind="bullet", level=list_level)
+            else:
+                wanted = own if k else numbering
+                styles.apply_list_format(
+                    paragraph_index=index, kind="number", level=list_level, continue_list=wanted is not None,
+                    start=None if wanted is not None or start == 1 else start,
+                )
+                heading = styles.paragraph_property(paragraph.para_pr_id_ref).heading
+                if wanted is not None and str(heading.id_ref) != wanted:
+                    # continue_list goes on with the last numbered paragraph, which may sit in a
+                    # nested list: point the item back at its own list's numbering.
+                    paragraph.para_pr_id_ref = styles.ensure_paragraph_format(
+                        base_para_pr_id=paragraph.para_pr_id_ref,
+                        heading={"type": "NUMBER", "idRef": wanted, "level": list_level - 1},
+                    )
+                own = own or str(styles.paragraph_property(paragraph.para_pr_id_ref).heading.id_ref)
+            self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
+            self.blocks(blocks, quote, indent, level, own if node.type == "ordered_list" else None)
+
+    # --- document ---------------------------------------------------------------------------
+
+    def finish(self) -> None:
+        """Page breaks and the table of contents, which go in once all paragraphs are there."""
+        # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
+        paragraphs = self.doc.paragraphs
+        for index in self.page_breaks:
+            if index < len(paragraphs):
+                paragraphs[index].element.set("pageBreak", "1")
+
+        headings = [p for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL]
+        if self.toc_at is not None and headings:
+            # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
+            ensure_body_styles_not_collected(self.doc)
+            # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
+            add_native_toc(
+                self.doc, at_index=self.toc_at, title=TOC_TITLE, level=TOC_LEVEL, headings=headings, dirty=True
+            )
+            if self.toc_page_break:
+                self.doc.paragraphs[self.toc_at].element.set("pageBreak", "1")
 
 
-def _closing_fence(fence: str) -> re.Pattern[str]:
-    """The line closing a code block opened by *fence*: the same character, at least as many."""
-    return re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$")
+def _walk(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
+    yield node
+    for child in node.children:
+        yield from _walk(child)
 
 
 def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
-    """(line number, path) of each image line, outside code blocks, whose file is not in *base_dir*."""
+    """(line number, path) of each image, outside code blocks, whose file is not in *base_dir*."""
+    # Front matter becomes blank lines, so line numbers still count it.
+    markdown = _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
+    lines = markdown.splitlines()
     missing: list[tuple[int, Path]] = []
-    close: re.Pattern[str] | None = None
-    for number, line in enumerate(markdown.splitlines(), start=1):
-        if close is not None:
-            if close.match(line):
-                close = None
-        elif fence := _FENCE.match(line):
-            close = _closing_fence(fence.group(1))
-        elif (image := _IMAGE.match(line)) and not (base_dir / image.group(1)).is_file():
-            missing.append((number, base_dir / image.group(1)))
-    return missing
-
-
-def _take_footnotes(lines: list[str]) -> tuple[list[str], dict[str, str]]:
-    """Split *lines* into the lines without footnote definitions, and the definitions by id.
-
-    Lines in fenced code blocks are left alone. The first definition of an id wins.
-    """
-    body: list[str] = []
-    notes: dict[str, str] = {}
-    close: re.Pattern[str] | None = None
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        i += 1
-        if close is not None:
-            if close.match(line):
-                close = None
-        elif fence := _FENCE.match(line):
-            close = _closing_fence(fence.group(1))
-        elif note := _NOTE_DEF.match(line):
-            note_lines = [note.group(2)]
-            while i < len(lines) and lines[i].startswith(("    ", "\t")) and lines[i].strip():
-                note_lines.append(lines[i])
-                i += 1
-            notes.setdefault(note.group(1), _join_lines(note_lines))
+    for node in _walk(SyntaxTreeNode(_PARSER.parse(markdown))):
+        if node.type != "inline" or node.map is None:
             continue
-        body.append(line)
-    return body, notes
-
-
-def _ends_list(lines: list[str], i: int) -> bool:
-    line = lines[i]
-    return bool(
-        _HEADING.match(line) or _FENCE.match(line) or _IMAGE.match(line) or _CAPTION.match(line)
-        or _RULE.match(line) or _QUOTE.match(line) or _TOC.match(line) or _PAGE_BREAK.match(line)
-        or _is_table_start(lines, i)
-    )
-
-
-def _add_list(doc: HwpxDocument, lines: list[str], i: int, notes: dict[str, str]) -> int:
-    """Add the list starting at line *i* and return the index of the first line after it."""
-    items: list[list] = []  # [level, number (None for a bullet), lines]
-    stack: list[int] = []  # content columns of the open items
-    while i < len(lines):
-        line = lines[i].expandtabs(4)
-        if _RULE.match(line):
-            break
-        if item := _LIST_ITEM.match(line):
-            indent = len(item.group(1))
-            while stack and indent < stack[-1]:
-                stack.pop()
-            stack.append(item.start(4))
-            number = int(item.group(3)) if item.group(3) else None
-            items.append([min(len(stack), LIST_MAX_LEVEL), number, [item.group(4)]])
-        elif not line.strip():
-            # A blank line ends the list unless another item follows it.
-            j = i + 1
-            while j < len(lines) and not lines[j].strip():
-                j += 1
-            if j < len(lines) and _LIST_ITEM.match(lines[j].expandtabs(4)):
-                i = j
+        for image in (n for n in _walk(node) if n.type == "image"):
+            src = image.attrs["src"]
+            path = base_dir / unquote(src)
+            if path.is_file():
                 continue
-            break
-        elif _ends_list(lines, i):
-            break
-        else:
-            items[-1][2].append(line)  # continuation line of the item
-        i += 1
-
-    body_left = _body_left(doc)
-    for n, (level, number, item_lines) in enumerate(items):
-        text = _join_lines(item_lines)
-        paragraph = doc.add_paragraph(text, style=BODY_STYLE)
-        _write_inline(doc, paragraph, text, notes)
-        index = len(doc.paragraphs) - 1
-        if number is None:
-            doc.styles.apply_list_format(paragraph_index=index, kind="bullet", level=level)
-        else:
-            continued = _continues_numbering(items, n)
-            doc.styles.apply_list_format(
-                paragraph_index=index, kind="number", level=level, continue_list=continued,
-                start=None if continued or number == 1 else number,
-            )
-        paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
-            base_para_pr_id=paragraph.para_pr_id_ref, margins={"left": body_left + (level - 1) * LIST_INDENT}
-        )
-    return i
-
-
-def _continues_numbering(items: list[list], n: int) -> bool:
-    """Whether numbered item *n* goes on with the numbering before it.
-
-    It does after a numbered item at the same level of the same list, or as the
-    first child of a numbered item (Hancom numbers sub-levels within one definition).
-    """
-    level = items[n][0]
-    for prev_level, prev_number, _ in reversed(items[:n]):
-        if prev_level <= level:
-            return prev_number is not None
-    return False
+            # The line of the paragraph that names the image.
+            start, end = node.map
+            raw = next((s for s in (src, unquote(src)) if any(s in line for line in lines[start:end])), None)
+            number = next((i + 1 for i in range(start, end) if raw and raw in lines[i]), start + 1)
+            missing.append((number, path))
+    return missing
 
 
 def read_markdown(md_path: Path) -> str:
@@ -531,111 +564,10 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None:
     """Convert *markdown*, whose image paths are relative to *base_dir*."""
     doc = HwpxDocument.open(template_path)
-    lines, notes = _take_footnotes(markdown.splitlines())
-    paragraph: list[str] = []
-    caption: str | None = None
-    toc_at: int | None = None  # paragraph index of the first [TOC] marker
-    toc_page_break = False  # a page break right before the [TOC] marker
-    page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
-    numbers = {"표": 0, "그림": 0}
-
-    def flush() -> None:
-        if paragraph:
-            text = _join_lines(paragraph)
-            _write_inline(doc, doc.add_paragraph(text, style=BODY_STYLE), text, notes)
-            paragraph.clear()
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if fence := _FENCE.match(line):
-            flush()
-            close = _closing_fence(fence.group(1))
-            i += 1
-            code = []
-            while i < len(lines) and not close.match(lines[i]):
-                code.append(lines[i])
-                i += 1
-            _add_code_block(doc, code, fence.group(2), caption)
-            caption = None
-        elif _is_table_start(lines, i):
-            flush()
-            header = _cells(line)
-            aligns = [_ALIGN.get((d.startswith(":"), d.endswith(":"))) for d in _cells(lines[i + 1])]
-            rows = [header]
-            i += 2
-            while i < len(lines) and lines[i].strip() and not _HEADING.match(lines[i]) and not _FENCE.match(lines[i]):
-                rows.append((_cells(lines[i]) + [""] * len(header))[: len(header)])
-                i += 1
-            _add_table(doc, rows, aligns, caption, notes)
-            caption = None
-            continue
-        elif heading := _HEADING.match(line):
-            flush()
-            _write_inline(doc, doc.add_heading(heading.group(2), level=len(heading.group(1))), heading.group(2), notes)
-        elif image := _IMAGE.match(line):
-            flush()
-            image_path = base_dir / image.group(1)
-            data = image_path.read_bytes()
-            width, height = _picture_size(doc, image_path, data, caption is not None) or (None, None)
-            picture = doc.add_picture(
-                data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **_body(doc)
-            )
-            if caption is not None:
-                _set_caption(doc, picture, caption, "BOTTOM")
-                caption = None
-        elif (match := _CAPTION.match(line)) and (target := _captioned(lines, i, match.group(1))) is not None:
-            flush()
-            kind = match.group(1)
-            numbers[kind] += 1
-            caption = f"[{kind} {numbers[kind]}] {match.group(2)}"
-            i = target
-            continue
-        elif _TOC.match(line):
-            flush()
-            if toc_at is None:
-                toc_at = len(doc.paragraphs)
-                if toc_at in page_breaks:
-                    page_breaks.remove(toc_at)
-                    toc_page_break = True
-        elif _PAGE_BREAK.match(line):
-            flush()
-            page_breaks.append(len(doc.paragraphs))
-        elif _RULE.match(line):
-            flush()
-            _add_rule(doc)
-        elif _QUOTE.match(line):
-            flush()
-            i = _add_quote(doc, lines, i, notes)
-            continue
-        elif (item := _LIST_ITEM.match(line.expandtabs(4))) and not (
-            # As in CommonMark, only a list starting at 1 can interrupt a paragraph.
-            paragraph and item.group(3) and int(item.group(3)) != 1
-        ):
-            flush()
-            i = _add_list(doc, lines, i, notes)
-            continue
-        elif line.strip():
-            paragraph.append(line)
-        else:
-            flush()
-        i += 1
-    flush()
-
-    # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
-    paragraphs = doc.paragraphs
-    for index in page_breaks:
-        if index < len(paragraphs):
-            paragraphs[index].element.set("pageBreak", "1")
-
-    headings = [p for p, level, _ in outline_heading_paragraphs(doc) if level <= TOC_LEVEL]
-    if toc_at is not None and headings:
-        # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
-        ensure_body_styles_not_collected(doc)
-        # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
-        add_native_toc(doc, at_index=toc_at, title=TOC_TITLE, level=TOC_LEVEL, headings=headings, dirty=True)
-        if toc_page_break:
-            doc.paragraphs[toc_at].element.set("pageBreak", "1")
+    root = SyntaxTreeNode(_PARSER.parse(markdown))
+    writer = _Writer(doc, base_dir, root)
+    writer.blocks(root.children)
+    writer.finish()
 
     report = doc.validate()
     if not report.ok:
