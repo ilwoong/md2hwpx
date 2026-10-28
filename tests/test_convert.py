@@ -195,6 +195,39 @@ def test_convert_captions(tmp_path):
     assert pic_p.find(f"{hp}run").get("charPrIDRef") == str(style.char_pr_id_ref)
 
 
+def test_convert_alt_text_captions(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png())
+    md = tmp_path / "alt.md"
+    md.write_text(
+        "![대체 텍스트 제목](a.png)\n\n"
+        "[그림] 줄로 쓴 제목\n![대체 텍스트](a.png)\n\n"  # the "[그림]" line comes first
+        "![](a.png)\n\n"  # no alt text: no caption, not counted
+        "![ *기울임* 제목 ](a.png){width=50%}\n\n"
+        "# 헤딩 ![헤딩 안 그림](a.png)\n",  # alt text in a heading stays its text
+        encoding="utf-8",
+    )
+    out = tmp_path / "alt.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    captions = [pic.find(f"{hp}caption") for pic in pics]
+    assert [c is not None and "".join(c.itertext()) for c in captions] == [
+        "[그림 1] 대체 텍스트 제목",
+        "[그림 2] 줄로 쓴 제목",
+        False,
+        "[그림 3] 기울임 제목",
+    ]
+    assert captions[0].get("side") == "BOTTOM"
+    italic = [
+        run.get("charPrIDRef") for run in captions[3].iter(f"{hp}run") if "".join(run.itertext()) == "기울임"
+    ]
+    assert italic and "italic" in doc.styles.char_property(italic[0]).child_attributes
+    assert "헤딩 헤딩 안 그림" in [p.text for p in doc.paragraphs]
+
+
 def test_convert_picture_sizes(tmp_path):
     images = {
         "mermaid-0123456789ab.png": _png(10, 5),  # diagram: body width

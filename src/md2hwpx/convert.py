@@ -407,10 +407,13 @@ class _Writer:
         captioned = ("table", "fence", "code_block") if kind == "표" else ("image",)
         if following not in captioned:
             return False
-        self.numbers[kind] += 1
-        number = Run(f"[{kind} {self.numbers[kind]}] ")
-        self.caption = [number, first._replace(text=first.text[match.end() :]), *runs[1:]]
+        self.number_caption(kind, [first._replace(text=first.text[match.end() :]), *runs[1:]])
         return True
+
+    def number_caption(self, kind: str, title: list[Run]) -> None:
+        """Keep "[표 N] *title*" / "[그림 N] *title*" as the next caption, N counting each kind."""
+        self.numbers[kind] += 1
+        self.caption = [Run(f"[{kind} {self.numbers[kind]}] "), *title]
 
     def add_table(self, rows: int, columns: int, quote: int, indent: int):
         """A new table (a code block is one too) that runs on to the next pages, placed like a paragraph."""
@@ -480,6 +483,10 @@ class _Writer:
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
         data = image_path.read_bytes()
+        if self.caption is None:  # without a "[그림] ..." line, the alt text (if any) is the caption
+            alt = _strip(_runs(node.children))
+            if alt:
+                self.number_caption("그림", alt)
         max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
         width, height = _picture_size(
             image_path,
