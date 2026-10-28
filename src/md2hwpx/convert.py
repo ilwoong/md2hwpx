@@ -8,6 +8,7 @@ from pathlib import Path
 
 from hwpx import HwpxDocument
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
+from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
@@ -25,11 +26,12 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\s*\[(표|그림)\]\s*(.*?)\s*$")
 # Inline markup, leftmost match first: backslash escape, code span (a backtick run closed by
-# one of the same length), link, bold italic, bold, strikethrough, italic. Emphasis content may not start
+# one of the same length), footnote reference, link, bold italic, bold, strikethrough, italic. Emphasis content may not start
 # or end with a space, and "_" only works at word boundaries so snake_case stays as it is.
 _INLINE = re.compile(
     r"\\(?P<escape>[!-/:-@\[-`{-~])"
     r"|(?<!`)(?P<ticks>`+)(?!`)(?P<code>.+?)(?<!`)(?P=ticks)(?!`)"
+    r"|\[\^(?P<note>[^\]\s]+)\]"
     r"|\[(?P<link>[^\]]+)\]\((?P<url>[^)\s]+)\)"
     r"|\*\*\*(?P<bold_italic>\S(?:.*?\S)?)\*\*\*"
     r"|\*\*(?P<bold>\S(?:.*?\S)?)\*\*"
@@ -45,6 +47,10 @@ _LIST_ITEM = re.compile(r"^( *)([-*+]|(\d{1,9})[.)])[ \t]+(\S.*)$")
 _RULE = re.compile(r"^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$")
 # Block quote line: one or more ">" markers (depth), each with an optional space, then content.
 _QUOTE = re.compile(r"^((?: {0,3}> ?)+)(.*)$")
+# Footnote definition "[^id]: text"; lines indented by 4 spaces or a tab continue it.
+_NOTE_DEF = re.compile(r"^ {0,3}\[\^([^\]\s]+)\]:[ \t]*(.*)$")
+# Table of contents marker line.
+_TOC = re.compile(r"^ {0,3}\[TOC\][ \t]*$", re.IGNORECASE)
 _DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 # (starts with ':', ends with ':') -> paragraph alignment; no colon keeps the default.
 _ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
@@ -59,6 +65,8 @@ QUOTE_INDENT = 1000  # HWPUNIT added to the left margin per quote depth
 QUOTE_BAR = {"border_color": "#A6A6A6", "border_width": "0.7 mm"}  # left bar of a quote
 QUOTE_BAR_GAP = 850  # HWPUNIT between the quote bar and the text
 RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic break
+TOC_TITLE = "차례"
+TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
 CODE_FONT = "D2Coding"
@@ -90,9 +98,13 @@ _EMPHASIS = {
 
 
 def _inline_runs(
-    text: str, marks: frozenset[str] = frozenset(), url: str | None = None
+    text: str, notes: dict[str, str] | None = None, marks: frozenset[str] = frozenset(), url: str | None = None
 ) -> list[tuple[str, frozenset[str], str | None]]:
-    """Split *text* into (text, marks, link url) runs; marks are bold, italic, strike, code."""
+    """Split *text* into (text, marks, link url) runs; marks are bold, italic, strike, code.
+
+    A reference to a footnote in *notes* is a run of its id marked "footnote";
+    any other "[^id]" stays as text.
+    """
     runs: list[tuple[str, frozenset[str], str | None]] = []
     pos = 0
     for m in _INLINE.finditer(text):
@@ -106,22 +118,33 @@ def _inline_runs(
             if len(code) > 2 and code[0] == code[-1] == " " and code.strip():
                 code = code[1:-1]
             runs.append((code, marks | {"code"}, url))
+        elif m["note"] is not None:
+            if notes and m["note"] in notes:
+                runs.append((m["note"], marks | {"footnote"}, url))
+            else:
+                runs.append((m.group(0), marks, url))
         elif m["link"] is not None:
-            runs += _inline_runs(m["link"], marks, m["url"])
+            runs += _inline_runs(m["link"], notes, marks, m["url"])
         else:
             name = next(n for n in _EMPHASIS if m[n] is not None)
-            runs += _inline_runs(m[name], marks | _EMPHASIS[name], url)
+            runs += _inline_runs(m[name], notes, marks | _EMPHASIS[name], url)
         pos = m.end()
     if pos < len(text):
         runs.append((text[pos:], marks, url))
     return runs
 
 
-def _write_inline(doc: HwpxDocument, paragraph, text: str) -> None:
-    """Rewrite *paragraph* (holding *text* in one run) with runs for the inline markup in *text*."""
+def _plain(text: str) -> str:
+    """*text* without its inline markup."""
+    return "".join(run_text for run_text, _, _ in _inline_runs(text))
+
+
+def _write_inline(doc: HwpxDocument, paragraph, text: str, notes: dict[str, str] | None = None) -> None:
+    """Rewrite *paragraph* (holding *text* in one run) with runs for the inline markup in *text*,
+    and a footnote, with the plain text of its definition in *notes*, at each reference."""
     runs: list[tuple[str, frozenset[str], str | None]] = []
-    for run in _inline_runs(text):
-        if runs and runs[-1][1:] == run[1:]:
+    for run in _inline_runs(text, notes):
+        if runs and runs[-1][1:] == run[1:] and "footnote" not in run[1]:
             runs[-1] = (runs[-1][0] + run[0], *run[1:])  # e.g. text around an escape
         else:
             runs.append(run)
@@ -144,7 +167,9 @@ def _write_inline(doc: HwpxDocument, paragraph, text: str) -> None:
 
     paragraph.clear_text()
     for run_text, marks, url in runs:
-        if url is None:
+        if "footnote" in marks:
+            doc.notes.add_footnote(_plain(notes[run_text]), paragraph)
+        elif url is None:
             paragraph.add_run(run_text, char_pr_id_ref=char_pr(marks))
         else:
             # Hancom's link look (blue, underlined) on top of the run's own marks.
@@ -232,11 +257,13 @@ def _captioned(lines: list[str], i: int, kind: str) -> int | None:
 
 
 def _display_width(text: str) -> int:
-    text = "".join(run_text for run_text, _, _ in _inline_runs(text))
+    text = _plain(text)
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
 
 
-def _add_table(doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None], caption: str | None) -> None:
+def _add_table(
+    doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None], caption: str | None, notes: dict[str, str]
+) -> None:
     table = doc.add_table(len(rows), len(rows[0]), **_body(doc))
     table.set_column_widths(
         [max(MIN_COLUMN_WEIGHT, *(_display_width(row[c]) for row in rows)) for c in range(len(rows[0]))]
@@ -257,7 +284,7 @@ def _add_table(doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None
                     bold=True, base_char_pr_id=paragraph.char_pr_id_ref
                 )
                 table.set_cell_shading(r, c, HEADER_FILL)
-            _write_inline(doc, paragraph, text)
+            _write_inline(doc, paragraph, text, notes)
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -334,7 +361,7 @@ def _add_rule(doc: HwpxDocument) -> None:
     )
 
 
-def _add_quote(doc: HwpxDocument, lines: list[str], i: int) -> int:
+def _add_quote(doc: HwpxDocument, lines: list[str], i: int, notes: dict[str, str]) -> int:
     """Add the block quote starting at line *i* and return the index of the first line after it.
 
     Each paragraph of the quote becomes a 본문 paragraph indented by its depth, with a bar on the left.
@@ -356,7 +383,7 @@ def _add_quote(doc: HwpxDocument, lines: list[str], i: int) -> int:
     for depth, quote_lines in paragraphs:
         text = _join_lines(quote_lines)
         paragraph = doc.add_paragraph(text, style=BODY_STYLE)
-        _write_inline(doc, paragraph, text)
+        _write_inline(doc, paragraph, text, notes)
         paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
             base_para_pr_id=paragraph.para_pr_id_ref,
             margins={"left": _body_left(doc) + depth * QUOTE_INDENT},
@@ -366,15 +393,48 @@ def _add_quote(doc: HwpxDocument, lines: list[str], i: int) -> int:
     return i
 
 
+def _closing_fence(fence: str) -> re.Pattern[str]:
+    """The line closing a code block opened by *fence*: the same character, at least as many."""
+    return re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$")
+
+
+def _take_footnotes(lines: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Split *lines* into the lines without footnote definitions, and the definitions by id.
+
+    Lines in fenced code blocks are left alone. The first definition of an id wins.
+    """
+    body: list[str] = []
+    notes: dict[str, str] = {}
+    close: re.Pattern[str] | None = None
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if close is not None:
+            if close.match(line):
+                close = None
+        elif fence := _FENCE.match(line):
+            close = _closing_fence(fence.group(1))
+        elif note := _NOTE_DEF.match(line):
+            note_lines = [note.group(2)]
+            while i < len(lines) and lines[i].startswith(("    ", "\t")) and lines[i].strip():
+                note_lines.append(lines[i])
+                i += 1
+            notes.setdefault(note.group(1), _join_lines(note_lines))
+            continue
+        body.append(line)
+    return body, notes
+
+
 def _ends_list(lines: list[str], i: int) -> bool:
     line = lines[i]
     return bool(
         _HEADING.match(line) or _FENCE.match(line) or _IMAGE.match(line) or _CAPTION.match(line)
-        or _RULE.match(line) or _QUOTE.match(line) or _is_table_start(lines, i)
+        or _RULE.match(line) or _QUOTE.match(line) or _TOC.match(line) or _is_table_start(lines, i)
     )
 
 
-def _add_list(doc: HwpxDocument, lines: list[str], i: int) -> int:
+def _add_list(doc: HwpxDocument, lines: list[str], i: int, notes: dict[str, str]) -> int:
     """Add the list starting at line *i* and return the index of the first line after it."""
     items: list[list] = []  # [level, number (None for a bullet), lines]
     stack: list[int] = []  # content columns of the open items
@@ -408,7 +468,7 @@ def _add_list(doc: HwpxDocument, lines: list[str], i: int) -> int:
     for n, (level, number, item_lines) in enumerate(items):
         text = _join_lines(item_lines)
         paragraph = doc.add_paragraph(text, style=BODY_STYLE)
-        _write_inline(doc, paragraph, text)
+        _write_inline(doc, paragraph, text, notes)
         index = len(doc.paragraphs) - 1
         if number is None:
             doc.styles.apply_list_format(paragraph_index=index, kind="bullet", level=level)
@@ -449,15 +509,16 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None:
     """Convert *markdown*, whose image paths are relative to *base_dir*."""
     doc = HwpxDocument.open(template_path)
-    lines = markdown.splitlines()
+    lines, notes = _take_footnotes(markdown.splitlines())
     paragraph: list[str] = []
     caption: str | None = None
+    toc_at: int | None = None  # paragraph index of the first [TOC] marker
     numbers = {"표": 0, "그림": 0}
 
     def flush() -> None:
         if paragraph:
             text = _join_lines(paragraph)
-            _write_inline(doc, doc.add_paragraph(text, style=BODY_STYLE), text)
+            _write_inline(doc, doc.add_paragraph(text, style=BODY_STYLE), text, notes)
             paragraph.clear()
 
     i = 0
@@ -465,7 +526,7 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
         line = lines[i]
         if fence := _FENCE.match(line):
             flush()
-            close = re.compile(rf"^ {{0,3}}{re.escape(fence.group(1)[0])}{{{len(fence.group(1))},}}\s*$")
+            close = _closing_fence(fence.group(1))
             i += 1
             code = []
             while i < len(lines) and not close.match(lines[i]):
@@ -482,12 +543,12 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
             while i < len(lines) and lines[i].strip() and not _HEADING.match(lines[i]) and not _FENCE.match(lines[i]):
                 rows.append((_cells(lines[i]) + [""] * len(header))[: len(header)])
                 i += 1
-            _add_table(doc, rows, aligns, caption)
+            _add_table(doc, rows, aligns, caption, notes)
             caption = None
             continue
         elif heading := _HEADING.match(line):
             flush()
-            _write_inline(doc, doc.add_heading(heading.group(2), level=len(heading.group(1))), heading.group(2))
+            _write_inline(doc, doc.add_heading(heading.group(2), level=len(heading.group(1))), heading.group(2), notes)
         elif image := _IMAGE.match(line):
             flush()
             image_path = base_dir / image.group(1)
@@ -506,19 +567,23 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
             caption = f"[{kind} {numbers[kind]}] {match.group(2)}"
             i = target
             continue
+        elif _TOC.match(line):
+            flush()
+            if toc_at is None:
+                toc_at = len(doc.paragraphs)
         elif _RULE.match(line):
             flush()
             _add_rule(doc)
         elif _QUOTE.match(line):
             flush()
-            i = _add_quote(doc, lines, i)
+            i = _add_quote(doc, lines, i, notes)
             continue
         elif (item := _LIST_ITEM.match(line.expandtabs(4))) and not (
             # As in CommonMark, only a list starting at 1 can interrupt a paragraph.
             paragraph and item.group(3) and int(item.group(3)) != 1
         ):
             flush()
-            i = _add_list(doc, lines, i)
+            i = _add_list(doc, lines, i, notes)
             continue
         elif line.strip():
             paragraph.append(line)
@@ -527,4 +592,10 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
         i += 1
     flush()
 
+    headings = [p for p, level, _ in outline_heading_paragraphs(doc) if level <= TOC_LEVEL]
+    if toc_at is not None and headings:
+        # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
+        ensure_body_styles_not_collected(doc)
+        # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
+        add_native_toc(doc, at_index=toc_at, title=TOC_TITLE, level=TOC_LEVEL, headings=headings, dirty=True)
     doc.save_to_path(out_path)
