@@ -6,22 +6,19 @@ import re
 import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import unquote
 
 from hwpx import HwpxDocument
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
-from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
-from mdit_py_plugins.footnote import footnote_plugin
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 
 from md2hwpx.diagram import LANGS
-
-# CommonMark with GFM tables and strikethrough, and footnotes. Raw HTML stays text.
-_PARSER = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"]).use(footnote_plugin)
+from md2hwpx.parser import PARSER
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
 # File names render_diagrams gives the PNGs it renders.
@@ -54,9 +51,21 @@ CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
 CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
 
-# (text, marks, link url). Marks are bold, italic, strike, code; a run marked "footnote" holds
-# the footnote id as its text.
-Run = tuple[str, frozenset[str], "str | None"]
+class Run(NamedTuple):
+    """Inline text with one look, or a footnote reference (*note*, with no text)."""
+
+    text: str
+    marks: frozenset[str] = frozenset()  # bold, italic, strike, code
+    url: str | None = None  # link target
+    note: int | None = None  # footnote id
+
+
+class _Piece(NamedTuple):
+    """Part of a paragraph: text "runs", an "image", or a "toc" / "page_break" marker line."""
+
+    kind: str
+    runs: list[Run] | None = None
+    image: SyntaxTreeNode | None = None
 
 
 class ConversionError(Exception):
@@ -124,13 +133,13 @@ def _runs(nodes: Iterable[SyntaxTreeNode], marks: frozenset[str] = frozenset(), 
     runs: list[Run] = []
     for node in nodes:
         if node.type == "text":
-            runs.append((node.content, marks, url))
+            runs.append(Run(node.content, marks, url))
         elif node.type == "softbreak":
-            runs.append((" ", marks, url))
+            runs.append(Run(" ", marks, url))
         elif node.type == "hardbreak":
-            runs.append(("\n", marks, url))
+            runs.append(Run("\n", marks, url))
         elif node.type == "code_inline":
-            runs.append((node.content, marks | {"code"}, url))
+            runs.append(Run(node.content, marks | {"code"}, url))
         elif node.type in _MARKS:
             runs += _runs(node.children, marks | {_MARKS[node.type]}, url)
         elif node.type == "link":
@@ -138,26 +147,28 @@ def _runs(nodes: Iterable[SyntaxTreeNode], marks: frozenset[str] = frozenset(), 
         elif node.type == "image":
             runs += _runs(node.children, marks, url)
         elif node.type == "footnote_ref":
-            runs.append((str(node.meta["id"]), marks | {"footnote"}, url))
+            runs.append(Run("", marks, url, note=node.meta["id"]))
     return runs
 
 
 def _plain(runs: list[Run]) -> str:
-    """The text of *runs* without footnotes."""
-    return "".join(text for text, marks, _ in runs if "footnote" not in marks)
+    return "".join(run.text for run in runs)
+
+
+def _is_blank(run: Run) -> bool:
+    return run.note is None and not run.text.strip()
 
 
 def _strip(runs: list[Run]) -> list[Run]:
     """*runs* without the white space at their start and end."""
     runs = list(runs)
-    while runs and "footnote" not in runs[0][1] and not runs[0][0].strip():
+    while runs and _is_blank(runs[0]):
         runs.pop(0)
-    while runs and "footnote" not in runs[-1][1] and not runs[-1][0].strip():
+    while runs and _is_blank(runs[-1]):
         runs.pop()
-    if runs and "footnote" not in runs[0][1]:
-        runs[0] = (runs[0][0].lstrip(), *runs[0][1:])
-    if runs and "footnote" not in runs[-1][1]:
-        runs[-1] = (runs[-1][0].rstrip(), *runs[-1][1:])
+    if runs:
+        runs[0] = runs[0]._replace(text=runs[0].text.lstrip())
+        runs[-1] = runs[-1]._replace(text=runs[-1].text.rstrip())
     return runs
 
 
@@ -182,11 +193,51 @@ def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
     return lines
 
 
-def _starts_with_image(node: SyntaxTreeNode | None) -> bool:
-    if node is None or node.type != "paragraph":
-        return False
-    first = next((c for c in node.children[0].children if not (c.type == "text" and not c.content.strip())), None)
-    return first is not None and first.type == "image"
+def _block_kind(node: SyntaxTreeNode | None) -> str | None:
+    """The block's type, or "image" for a paragraph that starts with an image (a caption may precede it)."""
+    if node is None:
+        return None
+    if node.type == "paragraph":
+        first = next((c for c in node.children[0].children if not (c.type == "text" and not c.content.strip())), None)
+        if first is not None and first.type == "image":
+            return "image"
+    return node.type
+
+
+def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
+    """Split a paragraph's inline content into pieces: each image, and each line holding only
+    a marker, stands apart; the text between them is a "runs" piece (blank ones are dropped)."""
+    pieces: list[_Piece] = []
+    runs: list[Run] = []
+
+    def flush() -> None:
+        if not all(_is_blank(run) for run in runs):
+            pieces.append(_Piece("runs", _strip(runs)))
+        runs.clear()
+
+    lines: list[list[SyntaxTreeNode]] = [[]]
+    for child in inline.children:
+        if child.type == "softbreak":
+            lines.append([])
+        else:
+            lines[-1].append(child)
+    for line in lines:
+        text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
+        marker = next((name for name, pattern in _MARKERS.items() if pattern.fullmatch(text)), None)
+        if marker:
+            flush()
+            pieces.append(_Piece(marker))
+            continue
+        if runs:
+            runs.append(Run(" "))  # the line break between two lines of text
+        for child in line:
+            if child.type == "image":
+                flush()
+                pieces.append(_Piece("image", image=child))
+            else:
+                runs += _runs([child])
+    flush()
+    return pieces
 
 
 class _Writer:
@@ -213,13 +264,16 @@ class _Writer:
         a run per change of marks, links as hyperlinks, footnotes (dropped if not *footnotes*)."""
         merged: list[Run] = []
         for run in runs:
-            if ("footnote" in run[1] and not footnotes) or (not run[0] and "footnote" not in run[1]):
+            if run.note is None and not run.text:
                 continue  # markdown-it leaves empty text around emphasis
-            if merged and merged[-1][1:] == run[1:] and "footnote" not in run[1]:
-                merged[-1] = (merged[-1][0] + run[0], *run[1:])
+            if run.note is not None and not footnotes:
+                continue
+            last = merged[-1] if merged else None
+            if last and last.note is None and run.note is None and last[1:] == run[1:]:
+                merged[-1] = last._replace(text=last.text + run.text)
             else:
                 merged.append(run)
-        if all(not marks and url is None for _, marks, url in merged):
+        if all(not run.marks and run.url is None and run.note is None for run in merged):
             return
         base = paragraph.char_pr_id_ref
         char_prs: dict[frozenset[str], str | None] = {frozenset(): base}
@@ -237,15 +291,15 @@ class _Writer:
             return char_prs[marks]
 
         paragraph.clear_text()
-        for text, marks, url in merged:
-            if "footnote" in marks:
-                self.add_footnote(paragraph, int(text))
-            elif url is None:
-                paragraph.add_run(text, char_pr_id_ref=char_pr(marks))
+        for run in merged:
+            if run.note is not None:
+                self.add_footnote(paragraph, run.note)
+            elif run.url is None:
+                paragraph.add_run(run.text, char_pr_id_ref=char_pr(run.marks))
             else:
                 # Hancom's link look (blue, underlined) on top of the run's own marks.
-                link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(marks))
-                paragraph.add_hyperlink(url, text, char_pr_id_ref=link_pr)
+                link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(run.marks))
+                paragraph.add_hyperlink(run.url, run.text, char_pr_id_ref=link_pr)
 
     def add_footnote(self, paragraph, note_id: int) -> None:
         """A Hancom footnote at the end of *paragraph*; the definition's paragraphs become lines."""
@@ -253,7 +307,7 @@ class _Writer:
         for block in self.notes[note_id].children:
             if block.type == "paragraph":
                 if runs:
-                    runs.append(("\n", frozenset(), None))
+                    runs.append(Run("\n"))
                 runs += _runs(block.children[0].children)
         runs = _strip(runs)
         note = self.doc.notes.add_footnote(_plain(runs), paragraph)
@@ -289,22 +343,20 @@ class _Writer:
             self.write_runs(paragraph, self.caption, footnotes=False)
         self.caption = None
 
-    def take_caption(self, runs: list[Run], following: SyntaxTreeNode | str | None) -> bool:
-        """If *runs* is a "[표] ..." / "[그림] ..." line and *following* (a block, or "image")
-        is what it captions, keep it as the next caption and return True."""
-        match = _CAPTION.match(runs[0][0]) if runs and not runs[0][1] and runs[0][2] is None else None
+    def take_caption(self, runs: list[Run], following: str | None) -> bool:
+        """If *runs* is a "[표] ..." / "[그림] ..." line and *following* (the kind of what comes
+        next: a block type or "image") is what it captions, keep it as the next caption."""
+        first = runs[0]
+        match = _CAPTION.match(first.text) if first == Run(first.text) else None
         if match is None:
             return False
         kind = match.group(1)
-        if kind == "표":
-            fits = isinstance(following, SyntaxTreeNode) and following.type in ("table", "fence", "code_block")
-        else:
-            fits = following == "image" or (isinstance(following, SyntaxTreeNode) and _starts_with_image(following))
-        if not fits:
+        captioned = ("table", "fence", "code_block") if kind == "표" else ("image",)
+        if following not in captioned:
             return False
         self.numbers[kind] += 1
-        rest = [(runs[0][0][match.end() :], *runs[0][1:]), *runs[1:]]
-        self.caption = [(f"[{kind} {self.numbers[kind]}] ", frozenset(), None), *rest]
+        number = Run(f"[{kind} {self.numbers[kind]}] ")
+        self.caption = [number, first._replace(text=first.text[match.end() :]), *runs[1:]]
         return True
 
     # --- blocks -----------------------------------------------------------------------------
@@ -322,7 +374,7 @@ class _Writer:
                 runs = _runs(node.children[0].children)
                 self.write_runs(self.doc.add_heading(_plain(runs), level=int(node.tag[1])), runs)
             elif node.type == "paragraph":
-                self.paragraph(node, following, quote, content)
+                self.pieces(_pieces(node.children[0]), _block_kind(following), quote, content)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
                 self.code_block(node.content.split("\n")[:-1], lang, quote, content)
@@ -331,60 +383,31 @@ class _Writer:
             elif node.type == "hr":
                 self.rule(quote, content)
             elif node.type in ("bullet_list", "ordered_list"):
-                self.list(node, quote, indent, level + 1, numbering)
+                self.list_items(node, quote, indent, level + 1, numbering)
             elif node.type == "blockquote":
                 self.blocks(node.children, quote + 1, indent, level)
 
-    def paragraph(self, node: SyntaxTreeNode, following: SyntaxTreeNode | None, quote: int, indent: int) -> None:
-        """A paragraph's lines become text paragraphs, pictures, markers and captions."""
-        pieces: list[tuple] = []  # ("runs", runs) | ("image", node) | ("toc",) | ("page_break",)
-        runs: list[Run] = []
+    def pieces(self, pieces: list[_Piece], following: str | None, quote: int, indent: int) -> None:
+        """A paragraph's pieces become text paragraphs, pictures, captions, the TOC position and page breaks.
 
-        def flush() -> None:
-            if any(text.strip() or "footnote" in marks for text, marks, _ in runs):
-                pieces.append(("runs", _strip(runs)))
-            runs.clear()
-
-        lines: list[list[SyntaxTreeNode]] = [[]]
-        for child in node.children[0].children:
-            if child.type == "softbreak":
-                lines.append([])
-            else:
-                lines[-1].append(child)
-        for line in lines:
-            text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else None
-            marker = next((name for name, pattern in _MARKERS.items() if text and pattern.fullmatch(text)), None)
-            if marker:
-                flush()
-                pieces.append((marker,))
-                continue
-            if runs:
-                runs.append((" ", frozenset(), None))
-            for child in line:
-                if child.type == "image":
-                    flush()
-                    pieces.append(("image", child))
-                else:
-                    runs += _runs([child])
-        flush()
-
+        *following* is the kind of the block after the paragraph (see _block_kind).
+        """
         for k, piece in enumerate(pieces):
-            if piece[0] == "toc":
+            if piece.kind == "toc":
                 if self.toc_at is None:
                     self.toc_at = len(self.doc.paragraphs)
                     if self.toc_at in self.page_breaks:
                         self.page_breaks.remove(self.toc_at)
                         self.toc_page_break = True
-            elif piece[0] == "page_break":
+            elif piece.kind == "page_break":
                 self.page_breaks.append(len(self.doc.paragraphs))
-            elif piece[0] == "image":
-                self.picture(piece[1], quote, indent)
+            elif piece.kind == "image":
+                self.picture(piece.image, quote, indent)
             else:
                 # What a caption line would caption: the next piece of this paragraph, or the next block.
-                next_piece = pieces[k + 1][0] if k + 1 < len(pieces) else following
-                if self.take_caption(piece[1], next_piece):
-                    continue
-                self.text_paragraph(piece[1], quote, indent)
+                next_kind = pieces[k + 1].kind if k + 1 < len(pieces) else following
+                if not self.take_caption(piece.runs, next_kind):
+                    self.text_paragraph(piece.runs, quote, indent)
 
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
@@ -463,7 +486,7 @@ class _Writer:
         )
         self.place(paragraph, quote, indent, bar=False)
 
-    def list(self, node: SyntaxTreeNode, quote: int, indent: int, level: int, numbering: str | None) -> None:
+    def list_items(self, node: SyntaxTreeNode, quote: int, indent: int, level: int, numbering: str | None) -> None:
         """Each item's first paragraph gets the bullet or number; its other blocks follow, indented.
 
         A numbered list starts its own numbering, or numbers on within the *numbering* of the
@@ -474,11 +497,13 @@ class _Writer:
         start = int(node.attrs.get("start", 1))
         own: str | None = None  # this list's numbering id
         for k, item in enumerate(node.children):
-            blocks = list(item.children)
-            if blocks and blocks[0].type == "paragraph":
-                first = _strip(_runs(blocks.pop(0).children[0].children))
-            else:
-                first = []
+            item_blocks = list(item.children)
+            # The item text is the first text of its first paragraph; the rest of that paragraph
+            # (pictures, more text) follows it like the item's other blocks.
+            rest: list[_Piece] = []
+            if item_blocks and item_blocks[0].type == "paragraph":
+                rest = _pieces(item_blocks.pop(0).children[0])
+            first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
             paragraph = self.doc.add_paragraph(_plain(first), style=BODY_STYLE)
             self.write_runs(paragraph, first)
             index = len(self.doc.paragraphs) - 1
@@ -500,7 +525,9 @@ class _Writer:
                     )
                 own = own or str(styles.paragraph_property(paragraph.para_pr_id_ref).heading.id_ref)
             self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
-            self.blocks(blocks, quote, indent, level, own if node.type == "ordered_list" else None)
+            following = _block_kind(item_blocks[0] if item_blocks else None)
+            self.pieces(rest, following, quote, indent + list_level * LIST_INDENT)
+            self.blocks(item_blocks, quote, indent, level, own if node.type == "ordered_list" else None)
 
     # --- document ---------------------------------------------------------------------------
 
@@ -536,7 +563,7 @@ def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
     markdown = _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
     lines = markdown.splitlines()
     missing: list[tuple[int, Path]] = []
-    for node in _walk(SyntaxTreeNode(_PARSER.parse(markdown))):
+    for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
         if node.type != "inline" or node.map is None:
             continue
         for image in (n for n in _walk(node) if n.type == "image"):
@@ -564,7 +591,7 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None:
     """Convert *markdown*, whose image paths are relative to *base_dir*."""
     doc = HwpxDocument.open(template_path)
-    root = SyntaxTreeNode(_PARSER.parse(markdown))
+    root = SyntaxTreeNode(PARSER.parse(markdown))
     writer = _Writer(doc, base_dir, root)
     writer.blocks(root.children)
     writer.finish()

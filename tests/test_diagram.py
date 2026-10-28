@@ -97,3 +97,25 @@ def test_render_diagrams_replaces_blocks(tmp_path):
     assert lines[1].startswith("![](images/mermaid-") and lines[1].endswith(".png)")
     assert lines[3].startswith("![](images/plantuml-") and lines[3].endswith(".png)")
     assert len(list(out_dir.glob("*.png"))) == 2
+
+
+def test_find_blocks_in_list_items_and_quotes():
+    md = f"- 항목\n\n  ```mermaid\n  graph TD\n  ```\n\n> ```plantuml\n> {PLANTUML.splitlines()[0]}\n> ```\n\n- ```mermaid\n  never closed\n"
+    blocks = find_diagram_blocks(md)
+    assert [(b.lang, b.code, b.start, b.end, b.prefix) for b in blocks] == [
+        ("mermaid", "graph TD\n", 2, 4, "  "),
+        ("plantuml", "@startuml\n", 6, 8, "> "),
+    ]
+
+
+def test_render_diagrams_keeps_list_and_quote_prefix(tmp_path, monkeypatch):
+    from md2hwpx import diagram
+
+    monkeypatch.setitem(diagram._RENDERERS, "mermaid", lambda code, out: out.write_bytes(PNG_SIGNATURE))
+    md = "1. 단계\n\n   ```mermaid\n   graph TD\n   ```\n2. 다음\n\n> ```mermaid\n> graph LR\n> ```\n"
+
+    result = render_diagrams(md, tmp_path)
+
+    lines = result.split("\n")
+    assert lines[0] == "1. 단계" and lines[3] == "2. 다음"
+    assert lines[2].startswith("   ![](mermaid-") and lines[5].startswith("> ![](mermaid-")
