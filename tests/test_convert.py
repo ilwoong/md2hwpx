@@ -237,6 +237,43 @@ def test_convert_picture_sizes(tmp_path):
     assert margins == [{"left": "0", "right": "0", "top": "1400", "bottom": "1400"}] * len(images)
 
 
+def test_convert_picture_size_attributes(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png(100, 50))  # 7500 x 3750 at 96 DPI
+    attributes = [
+        "{width=50%}",  # of the body width
+        '{width="80mm"}',  # larger than the image: grows
+        "{height=40mm}",
+        "{width=30mm height=30mm}",  # both: as asked
+        "{width=200%}",  # wider than the body: scaled down
+        "{height=50%}",  # of the body height, then scaled down to the body width
+        "{width=300px .wide #a}",  # no such unit: its own size
+    ]
+    md = tmp_path / "sizes.md"
+    md.write_text("".join(f"![](a.png){a} 뒤\n\n" for a in attributes), encoding="utf-8")
+    out = tmp_path / "sizes.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    body_width = 59528 - 8504 * 2 - 1500
+
+    def mm(value):
+        return round(value * 7200 / 25.4)
+
+    sizes = [(ref.width, ref.height) for ref in doc.media.picture_references()]
+    assert sizes == [
+        (body_width // 2, body_width // 4),
+        (mm(80), round(mm(80) / 2)),
+        (mm(40) * 2, mm(40)),
+        (mm(30), mm(30)),
+        (body_width, body_width // 2),
+        (body_width, body_width // 2),
+        (7500, 3750),
+    ]
+    # The attribute block is not left as text.
+    assert [p.text for p in doc.paragraphs if "뒤" in p.text] == ["뒤"] * len(attributes)
+
+
 def test_convert_inline_code(tmp_path):
     md = tmp_path / "inline.md"
     md.write_text(

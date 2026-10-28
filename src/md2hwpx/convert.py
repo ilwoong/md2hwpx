@@ -32,6 +32,8 @@ _MARKERS = {"toc": re.compile(r"\[TOC\]", re.IGNORECASE), "page_break": re.compi
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
+# An image's width / height attribute: percent of the page body, or millimetres.
+_LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 BODY_STYLE = "본문"
@@ -48,6 +50,7 @@ RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic b
 TOC_TITLE = "차례"
 TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
+HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
 OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above and below: about one 10pt line
 CODE_FONT = "D2Coding"
@@ -93,17 +96,35 @@ def _image_pixels(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def _picture_size(image_path: Path, data: bytes, max_width: int, max_height: int) -> tuple[int, int] | None:
+def _length(value: str | None, whole: int) -> int | None:
+    """A width / height attribute ("50%" of *whole*, or "80mm") in HWPUNIT, or None if absent, zero or neither."""
+    match = _LENGTH.fullmatch(value or "")
+    if match is None:
+        return None
+    number = float(match[1])
+    length = round(whole * number / 100 if match[2] == "%" else number * HWPUNIT_PER_MM)
+    return length or None
+
+
+def _picture_size(
+    image_path: Path, data: bytes, max_width: int, max_height: int, width: int | None = None, height: int | None = None
+) -> tuple[int, int] | None:
     """Picture (width, height) in HWPUNIT within *max_width* x *max_height*, or None if the image size is unknown.
 
-    A diagram is as wide as *max_width*; any other image keeps its size at 96 DPI.
-    Either is scaled down, keeping its aspect ratio, to fit.
+    The *width* / *height* asked for is used, the other side following the aspect ratio. Without either,
+    a diagram is as wide as *max_width*; any other image keeps its size at 96 DPI.
+    Any of them is scaled down, keeping its aspect ratio, to fit.
     """
     pixels = _image_pixels(data)
     if pixels is None or 0 in pixels:
         return None
-    width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
-    height = width * pixels[1] / pixels[0]
+    ratio = pixels[1] / pixels[0]
+    if width is None and height is None:
+        width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
+    if width is None:
+        width = height / ratio
+    if height is None:
+        height = width * ratio
     scale = min(1.0, max_width / width, max_height / height)
     return round(width * scale), round(height * scale)
 
@@ -460,7 +481,14 @@ class _Writer:
         image_path = self.base_dir / unquote(node.attrs["src"])
         data = image_path.read_bytes()
         max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
-        width, height = _picture_size(image_path, data, self.body_width, max_height) or (None, None)
+        width, height = _picture_size(
+            image_path,
+            data,
+            self.body_width,
+            max_height,
+            _length(node.attrs.get("width"), self.body_width),
+            _length(node.attrs.get("height"), self.body_height),
+        ) or (None, None)
         picture = self.doc.add_picture(
             data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.body
         )
