@@ -51,6 +51,8 @@ _QUOTE = re.compile(r"^((?: {0,3}> ?)+)(.*)$")
 _NOTE_DEF = re.compile(r"^ {0,3}\[\^([^\]\s]+)\]:[ \t]*(.*)$")
 # Table of contents marker line.
 _TOC = re.compile(r"^ {0,3}\[TOC\][ \t]*$", re.IGNORECASE)
+# Page break line, as pandoc writes it.
+_PAGE_BREAK = re.compile(r"^ {0,3}\\(?:newpage|pagebreak)[ \t]*$")
 _DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 # (starts with ':', ends with ':') -> paragraph alignment; no colon keeps the default.
 _ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
@@ -73,6 +75,10 @@ CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
 CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
+
+
+class ConversionError(Exception):
+    """The converted document failed HWPX validation, so it was not saved."""
 
 
 def _body(doc: HwpxDocument) -> dict:
@@ -398,6 +404,21 @@ def _closing_fence(fence: str) -> re.Pattern[str]:
     return re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$")
 
 
+def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
+    """(line number, path) of each image line, outside code blocks, whose file is not in *base_dir*."""
+    missing: list[tuple[int, Path]] = []
+    close: re.Pattern[str] | None = None
+    for number, line in enumerate(markdown.splitlines(), start=1):
+        if close is not None:
+            if close.match(line):
+                close = None
+        elif fence := _FENCE.match(line):
+            close = _closing_fence(fence.group(1))
+        elif (image := _IMAGE.match(line)) and not (base_dir / image.group(1)).is_file():
+            missing.append((number, base_dir / image.group(1)))
+    return missing
+
+
 def _take_footnotes(lines: list[str]) -> tuple[list[str], dict[str, str]]:
     """Split *lines* into the lines without footnote definitions, and the definitions by id.
 
@@ -430,7 +451,8 @@ def _ends_list(lines: list[str], i: int) -> bool:
     line = lines[i]
     return bool(
         _HEADING.match(line) or _FENCE.match(line) or _IMAGE.match(line) or _CAPTION.match(line)
-        or _RULE.match(line) or _QUOTE.match(line) or _TOC.match(line) or _is_table_start(lines, i)
+        or _RULE.match(line) or _QUOTE.match(line) or _TOC.match(line) or _PAGE_BREAK.match(line)
+        or _is_table_start(lines, i)
     )
 
 
@@ -513,6 +535,8 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
     paragraph: list[str] = []
     caption: str | None = None
     toc_at: int | None = None  # paragraph index of the first [TOC] marker
+    toc_page_break = False  # a page break right before the [TOC] marker
+    page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
     numbers = {"표": 0, "그림": 0}
 
     def flush() -> None:
@@ -571,6 +595,12 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
             flush()
             if toc_at is None:
                 toc_at = len(doc.paragraphs)
+                if toc_at in page_breaks:
+                    page_breaks.remove(toc_at)
+                    toc_page_break = True
+        elif _PAGE_BREAK.match(line):
+            flush()
+            page_breaks.append(len(doc.paragraphs))
         elif _RULE.match(line):
             flush()
             _add_rule(doc)
@@ -592,10 +622,24 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
         i += 1
     flush()
 
+    # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
+    paragraphs = doc.paragraphs
+    for index in page_breaks:
+        if index < len(paragraphs):
+            paragraphs[index].element.set("pageBreak", "1")
+
     headings = [p for p, level, _ in outline_heading_paragraphs(doc) if level <= TOC_LEVEL]
     if toc_at is not None and headings:
         # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
         ensure_body_styles_not_collected(doc)
         # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
         add_native_toc(doc, at_index=toc_at, title=TOC_TITLE, level=TOC_LEVEL, headings=headings, dirty=True)
+        if toc_page_break:
+            doc.paragraphs[toc_at].element.set("pageBreak", "1")
+
+    report = doc.validate()
+    if not report.ok:
+        raise ConversionError(
+            "변환한 문서가 HWPX 검증에 실패해 저장하지 않았습니다:\n" + "\n".join(str(issue) for issue in report.errors)
+        )
     doc.save_to_path(out_path)

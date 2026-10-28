@@ -10,7 +10,7 @@ from pathlib import Path
 
 from hwpx.errors import HwpxError
 
-from md2hwpx.convert import convert_markdown, read_markdown
+from md2hwpx.convert import ConversionError, convert_markdown, missing_images, read_markdown
 from md2hwpx.diagram import DiagramError, render_diagrams
 
 
@@ -19,15 +19,14 @@ def _natural_key(path: Path) -> list:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
 
 
-def _read_input(path: Path) -> str:
-    """The Markdown of a file, or of every .md file directly in a folder, joined in name order."""
+def _input_files(path: Path) -> list[Path]:
+    """The Markdown file, or every .md file directly in the folder, in name order."""
     if not path.is_dir():
-        return read_markdown(path)
+        return [path]
     files = sorted((p for p in path.glob("*.md") if p.is_file()), key=_natural_key)
     if not files:
         raise FileNotFoundError(f"no .md files in folder: {path}")
-    # A blank line between files keeps the last block of one file from running into the next.
-    return "\n\n".join(read_markdown(f) for f in files)
+    return files
 
 
 def _output_path(input_path: Path, output: Path | None) -> Path:
@@ -65,13 +64,25 @@ def main(argv: list[str] | None = None) -> int:
     base_dir = args.input if args.input.is_dir() else args.input.parent
 
     try:
-        markdown = _read_input(args.input)
+        files = _input_files(args.input)
+        # Report every missing image with its file and line before converting anything.
+        missing = [
+            f"{f}:{line}: 이미지 파일이 없습니다: {image}"
+            for f in files
+            for line, image in missing_images(f.read_text(encoding="utf-8"), f.parent)
+        ]
+        if missing:
+            for message in missing:
+                print(f"md2hwpx: {message}", file=sys.stderr)
+            return 1
+        # A blank line between files keeps the last block of one file from running into the next.
+        markdown = "\n\n".join(read_markdown(f) for f in files)
         output = _output_path(args.input, args.output)
         # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
         with tempfile.TemporaryDirectory() as image_dir:
             markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
             convert_markdown(markdown, base_dir, args.template, output)
-    except (OSError, DiagramError, HwpxError) as error:
+    except (OSError, DiagramError, HwpxError, ConversionError) as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
     print(output)

@@ -2,6 +2,7 @@ import struct
 import zlib
 from pathlib import Path
 
+import pytest
 from hwpx import HwpxDocument
 
 from md2hwpx.convert import convert
@@ -523,3 +524,37 @@ def test_convert_toc_without_headings_is_skipped(tmp_path):
     convert(md, TEMPLATE, out)
 
     assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["본문"]
+
+
+def test_convert_page_breaks(tmp_path):
+    md = tmp_path / "breaks.md"
+    md.write_text(
+        "\\newpage\n\n첫 쪽\n\n\\newpage\n\n# 둘째 쪽\n\n\\pagebreak\n[TOC]\n\\newpage\n\n본문\n\n\\newpage\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "breaks.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    starts = [p.text for p in paragraphs if p.element.get("pageBreak") == "1"]
+    # The break before [TOC] lands on the TOC's title paragraph, the one after it on "본문";
+    # the last one has nothing after it.
+    assert starts == ["첫 쪽", "둘째 쪽", "차례", "본문"]
+    assert [p.text for p in paragraphs][-1] == "본문"
+
+
+def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
+    from hwpx.tools.validator import ValidationIssue, ValidationReport
+
+    from md2hwpx.convert import ConversionError
+
+    issue = ValidationIssue(part_name="Contents/section0.xml", message="broken", line=3)
+    monkeypatch.setattr(HwpxDocument, "validate", lambda self: ValidationReport(("Contents/section0.xml",), (issue,)))
+    md = tmp_path / "doc.md"
+    md.write_text("본문\n", encoding="utf-8")
+    out = tmp_path / "doc.hwpx"
+
+    with pytest.raises(ConversionError, match="Contents/section0.xml:3: broken"):
+        convert(md, TEMPLATE, out)
+    assert not out.exists()

@@ -68,9 +68,11 @@ def test_cli_folder_input(tmp_path, monkeypatch):
     folder = tmp_path / "chapters"
     folder.mkdir()
     (folder / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IHDR" + (1).to_bytes(4, "big") * 2)
-    (folder / "10-end.md").write_text("---\ntitle: 끝\n---\n# 끝\n", encoding="utf-8")  # front matter per file
-    (folder / "2-body.md").write_text("[표] 둘째\n| a |\n|---|\n| 1 |", encoding="utf-8")  # no final newline
-    (folder / "1-intro.md").write_text("# 소개\n\n[표] 첫째\n| b |\n|---|\n| 2 |\n\n![](a.png)\n", encoding="utf-8")
+    (folder / "10-end.md").write_text("---\ntitle: 끝\n---\n# 끝\n", encoding="utf-8")  # every file has front matter
+    (folder / "2-body.md").write_text("---\nk: v\n---\n[표] 둘째\n| a |\n|---|\n| 1 |", encoding="utf-8")  # no final newline
+    (folder / "1-intro.md").write_text(
+        "---\ntitle: 소개\n---\n# 소개\n\n[표] 첫째\n| b |\n|---|\n| 2 |\n\n![](a.png)\n", encoding="utf-8"
+    )
     (folder / "notes.txt").write_text("무시\n", encoding="utf-8")
     (folder / "sub").mkdir()
     (folder / "sub" / "0-skip.md").write_text("# 하위 폴더\n", encoding="utf-8")
@@ -120,3 +122,19 @@ def test_cli_renders_diagrams(tmp_path, monkeypatch):
     doc = HwpxDocument.open(tmp_path / "doc.hwpx")
     assert len(doc.media.picture_references()) == 1
     assert sorted(p.name for p in tmp_path.iterdir()) == ["doc.hwpx", "doc.md"]  # no images left behind
+
+
+def test_cli_reports_missing_images_with_location(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "book"
+    folder.mkdir()
+    (folder / "1.md").write_text("# 하나\n\n```\n![](in-code.png)\n```\n", encoding="utf-8")
+    (folder / "2.md").write_text("---\nk: v\n---\n![](a.png)\n\n![](b.png)\n", encoding="utf-8")
+
+    assert main([str(folder), "-t", str(TEMPLATE)]) == 1
+
+    assert capsys.readouterr().err.splitlines() == [
+        f"md2hwpx: {folder / '2.md'}:4: 이미지 파일이 없습니다: {folder / 'a.png'}",
+        f"md2hwpx: {folder / '2.md'}:6: 이미지 파일이 없습니다: {folder / 'b.png'}",
+    ]
+    assert not (tmp_path / "book.hwpx").exists()

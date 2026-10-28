@@ -7,7 +7,7 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 
 ## 범위
 
-- 포함: 헤딩, 문단, 강제 줄바꿈, 이미지, 펜스 코드블록, GFM 표, 표·그림 캡션, 글머리표·번호 목록, 인용문, 수평선, 각주, 차례,
+- 포함: 헤딩, 문단, 강제 줄바꿈, 이미지, 펜스 코드블록, GFM 표, 표·그림 캡션, 글머리표·번호 목록, 인용문, 수평선, 쪽 나누기, 각주, 차례,
   인라인 서식(코드, 굵게, 기울임, 취소선, 링크, 백슬래시 이스케이프).
 - 제외: Setext 헤딩(밑줄 `---` 는 수평선이 된다), HTML, 문장 안의 이미지, 참조식 링크.
 - 다이어그램 코드블록은 변환 전에 [diagram-rendering.md](diagram-rendering.md) 의
@@ -179,6 +179,13 @@ Markdown 을 한 줄씩 읽으며 아래 순서로 판단한다.
   스타일을 `본문` 으로 바꾼다 (문단 모양은 그대로).
 - 헤딩이 하나도 없으면 차례를 넣지 않는다.
 
+### 쪽 나누기
+
+- `\newpage` 또는 `\pagebreak` 만 있는 줄 (pandoc 관례). Markdown 표준 문법은 없다.
+- 그 뒤에 오는 첫 문단(헤딩, 문단, 표·그림을 담는 문단, 목록 항목 등)에 "쪽 나눔"(`pageBreak="1"`)을 켠다.
+- 바로 뒤가 `[TOC]` 이면 차례 제목 문단에서 쪽을 나눈다.
+- 뒤에 아무 문단도 없으면 무시한다.
+
 ### 문단
 
 - 위에 해당하지 않는 비어 있지 않은 줄은 문단에 모은다.
@@ -237,8 +244,17 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
   `convert` 는 `read_markdown` 으로 `md_path` 를 읽어 `md_path` 의 폴더를 기준으로 `convert_markdown` 을 부른다.
 - `read_markdown` 은 파일을 UTF-8 로 읽고 front matter 를 제거한다.
   `convert_markdown` 은 front matter 를 제거하지 않으므로, 파일 내용을 넘길 때는 `read_markdown` 으로 읽은 문자열을 넘긴다.
+- 저장하기 전에 python-hwpx `doc.validate()` (header·section XML 스키마 검증)를 실행한다.
+  오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
+  경고(warning)는 저장을 막지 않는다.
 - 템플릿에 필요한 스타일이 없으면 python-hwpx 의 `HwpxLookupError` 가 발생한다.
 - 이미지 파일이 없으면 `FileNotFoundError` 가 발생한다.
+
+```python
+def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
+```
+
+- 펜스 코드블록 밖의 이미지 줄 중 파일이 없는 것의 (1부터 센 줄 번호, 경로) 목록을 돌려준다.
 
 ## 명령줄 (`md2hwpx.cli`)
 
@@ -265,7 +281,10 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
-- 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`)는
+- 변환 전에 입력 파일마다 `missing_images` 로 이미지 파일을 확인한다. 없는 이미지가 있으면 모두
+  `md2hwpx: <입력 파일>:<줄>: 이미지 파일이 없습니다: <경로>` 로 stderr 에 쓰고 종료 코드 1 을 돌려준다.
+  줄 번호는 front matter 를 포함한 원본 파일 기준이다.
+- 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError` 는
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
 
 ## 검증 기준
@@ -288,5 +307,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 강제 줄바꿈 | 공백 두 칸·`\`, 서식이 줄바꿈을 넘는 경우, 목록 항목·인용문 안 |
 | 각주 | 참조 위치, 들여쓴 이어지는 줄, 서식 기호 제거, 정의 없는 참조는 글자 유지, 표 셀, 코드블록 안 정의 유지 |
 | 차례 | 첫 `[TOC]` 자리에 한 개, 헤딩 항목, 3수준, 셀 문단 `본문` 전환, 헤딩 없으면 생략 |
-| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외, `.` 입력 이름, 없는 입력·템플릿·이미지·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
+| 쪽 나누기 | `\newpage`·`\pagebreak`, 문서 맨 앞, `[TOC]` 앞(차례 제목)·뒤, 끝의 쪽 나누기 무시 |
+| 저장 전 검증 | 검증 오류 시 `ConversionError` 와 파일 미생성 |
+| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외·파일마다 front matter 제거, 없는 이미지의 파일:줄 목록(코드블록 안 제외), `.` 입력 이름, 없는 입력·템플릿·이미지·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
 | 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md -o samples/` 로 변환해 한/글로 확인 |
