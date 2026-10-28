@@ -191,6 +191,7 @@ name = "md2hwpx"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "pygments" },
     { name = "python-hwpx" },
 ]
 
@@ -200,7 +201,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "python-hwpx", specifier = ">=6.10.0" }]
+requires-dist = [
+    { name = "pygments", specifier = ">=2.21.0" },
+    { name = "python-hwpx", specifier = ">=6.10.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]
