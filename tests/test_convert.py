@@ -124,6 +124,9 @@ def test_convert_table(tmp_path):
     body = [table.cell(1, c) for c in range(4)]
     assert all(bold(cell) and fill(cell) == "#D9D9D9" for cell in header)
     assert not any(bold(cell) or fill(cell) for cell in body)
+    # The header row repeats on each page the table runs on to.
+    assert table.element.get("repeatHeader") == "1"
+    assert [cell.element.get("header") for cell in header + body] == ["1"] * 4 + ["0"] * 4
     assert [align(cell) for cell in body[:3]] == ["LEFT", "CENTER", "RIGHT"]
     assert doc.paragraphs[-1].text == "뒤 문단"
 

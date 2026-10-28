@@ -463,6 +463,8 @@ class _Writer:
         cells = [[_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows]
         aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
         table = self.add_table(len(cells), len(cells[0]), quote, indent)
+        # The header row's cells ("header") come again at the top of each page the table runs on to.
+        table.element.set("repeatHeader", "1")
         table.set_column_widths(
             [max(MIN_COLUMN_WEIGHT, *(_display_width(_plain(row[c])) for row in cells)) for c in range(len(cells[0]))]
         )
@@ -475,6 +477,7 @@ class _Writer:
                 if aligns[c]:
                     paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
                 if r == 0:
+                    cell.element.set("header", "1")
                     paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
                     table.set_cell_shading(r, c, HEADER_FILL)
                 self.write_runs(paragraph, runs)
