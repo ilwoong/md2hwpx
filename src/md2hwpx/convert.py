@@ -20,6 +20,8 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
 # "[표] ..." / "[그림] ..." right before a table or code block / image (blank lines allowed) is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\s*\[(표|그림)\]\s*(.*?)\s*$")
+# Inline code span: a backtick run closed by a run of the same length.
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 _DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 # (starts with ':', ends with ':') -> paragraph alignment; no colon keeps the default.
 _ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
@@ -44,12 +46,32 @@ def _body_width(doc: HwpxDocument) -> int:
     return size.width - page.left - page.right - page.gutter - int(margin.left) - int(margin.right)
 
 
+def _write_inline(doc: HwpxDocument, paragraph, text: str) -> None:
+    """Rewrite *paragraph* (holding *text* in one run) so code spans become D2Coding runs."""
+    parts = _CODE_SPAN.split(text)  # [plain, ticks, code, plain, ticks, code, ..., plain]
+    if len(parts) == 1:
+        return
+    base = paragraph.char_pr_id_ref
+    code_pr = doc.styles.ensure_run(font=CODE_FONT, base_char_pr_id=base)
+    paragraph.clear_text()
+    for k in range(0, len(parts), 3):
+        if parts[k]:
+            paragraph.add_run(parts[k], char_pr_id_ref=base)
+        if k + 2 < len(parts):
+            code = parts[k + 2]
+            # CommonMark: one space on both sides of the content is stripped.
+            if len(code) > 2 and code[0] == code[-1] == " " and code.strip():
+                code = code[1:-1]
+            paragraph.add_run(code, char_pr_id_ref=code_pr)
+
+
 def _set_caption(doc: HwpxDocument, obj, text: str, side: str) -> None:
     style = doc.styles.resolve(CAPTION_STYLE)
     caption = obj.set_caption(text, side=side, char_pr_id_ref=style.char_pr_id_ref)
     for paragraph in caption.paragraphs:
         paragraph.style_id_ref = style.id
         paragraph.para_pr_id_ref = style.para_pr_id_ref
+        _write_inline(doc, paragraph, text)
 
 
 def _cells(line: str) -> list[str]:
@@ -100,6 +122,7 @@ def _add_table(doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None
                     bold=True, base_char_pr_id=paragraph.char_pr_id_ref
                 )
                 table.set_cell_shading(r, c, HEADER_FILL)
+            _write_inline(doc, paragraph, text)
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -160,7 +183,8 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 
     def flush() -> None:
         if paragraph:
-            doc.add_paragraph(" ".join(paragraph), style=BODY_STYLE)
+            text = " ".join(paragraph)
+            _write_inline(doc, doc.add_paragraph(text, style=BODY_STYLE), text)
             paragraph.clear()
 
     i = 0
@@ -190,7 +214,7 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
             continue
         elif heading := _HEADING.match(line):
             flush()
-            doc.add_heading(heading.group(2), level=len(heading.group(1)))
+            _write_inline(doc, doc.add_heading(heading.group(2), level=len(heading.group(1))), heading.group(2))
         elif image := _IMAGE.match(line):
             flush()
             image_path = md_path.parent / image.group(1)

@@ -170,3 +170,41 @@ def test_convert_diagram_images_fill_body_width(tmp_path):
     # template: A4 width 59528, page margins 8504 each, 본문 left margin 1500
     widths = [ref.width for ref in doc.media.picture_references()]
     assert widths == [59528 - 8504 * 2 - 1500, 59528 - 8504 * 2 - 1500, 14400]
+
+
+def test_convert_inline_code(tmp_path):
+    md = tmp_path / "inline.md"
+    md.write_text(
+        "# `convert` 함수\n\n"
+        "`python-hwpx` 로 열고 ``a `b` c`` 를 쓴다. 닫히지 않은 ` 는 그대로.\n\n"
+        "[표] `md2hwpx` 표\n\n| `헤더` | 값 |\n|---|---|\n| `셀` | 1 |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "inline.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+
+    def runs(paragraph):
+        return [
+            (run.text, doc.styles.font_face(run.element.get("charPrIDRef")) == "D2Coding")
+            for run in paragraph.runs
+        ]
+
+    heading, body = doc.paragraphs[1:3]
+    assert runs(heading) == [("convert", True), (" 함수", False)]
+    assert runs(body) == [
+        ("python-hwpx", True),
+        (" 로 열고 ", False),
+        ("a `b` c", True),
+        (" 를 쓴다. 닫히지 않은 ` 는 그대로.", False),
+    ]
+    table = doc.tables.all[0]
+    assert runs(table.caption.paragraphs[0]) == [("[표 1] ", False), ("md2hwpx", True), (" 표", False)]
+    header_run = table.cell(0, 0).paragraphs[0].runs[0]
+    assert runs(table.cell(0, 0).paragraphs[0]) == [("헤더", True)]
+    assert "bold" in doc.styles.char_property(header_run.element.get("charPrIDRef")).child_attributes
+    assert runs(table.cell(1, 0).paragraphs[0]) == [("셀", True)]
+    # Heading keeps its style and outline level.
+    assert int(heading.style_id_ref) == doc.styles.resolve("개요 1").id
