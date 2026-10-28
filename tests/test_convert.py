@@ -47,7 +47,7 @@ def test_convert(tmp_path):
 
 def test_convert_code_block(tmp_path):
     md = tmp_path / "code.md"
-    md.write_text("```python\ndef f():\n    return 1\n```\n", encoding="utf-8")
+    md.write_text('```python\ndef f():\n    """doc\n    string"""\n\n    return 1\n```\n', encoding="utf-8")
     out = tmp_path / "code.hwpx"
 
     convert(md, TEMPLATE, out)
@@ -56,12 +56,33 @@ def test_convert_code_block(tmp_path):
     table = doc.tables.all[0]
     assert (table.row_count, table.column_count) == (1, 1)
     paragraphs = table.cell(0, 0).paragraphs
-    assert [p.text for p in paragraphs] == ["def f():", "    return 1"]
+    assert [p.text for p in paragraphs] == ["def f():", '    """doc', '    string"""', "", "    return 1"]
+    colors = {}
     for p in paragraphs:
-        run = doc.styles.char_property(p.char_pr_id_ref)
-        assert run.attributes["height"] == "900"
-        assert doc.styles.font_face(p.char_pr_id_ref, "HANGUL") == "D2Coding"
         assert doc.styles.paragraph_property(p.para_pr_id_ref).line_spacing.value == 140
+        for run in p.runs:
+            char_pr_id = run.element.get("charPrIDRef")
+            assert doc.styles.char_property(char_pr_id).attributes["height"] == "900"
+            assert doc.styles.font_face(char_pr_id, "HANGUL") == "D2Coding"
+            colors[run.text] = doc.styles.char_property(char_pr_id)
+    # Pygments "default" style: keyword green bold, function name blue, string red italic.
+    assert colors["def"].attributes["textColor"] == "#008000" and "bold" in colors["def"].child_attributes
+    assert colors["f"].attributes["textColor"] == "#0000FF"
+    assert colors['    string"""'].attributes["textColor"] == "#BA2121"
+    assert "italic" in colors['    string"""'].child_attributes
+
+
+def test_convert_code_block_without_language(tmp_path):
+    md = tmp_path / "plain.md"
+    md.write_text("```\ndef f():\n```\n\n```nosuchlang\nx\n```\n", encoding="utf-8")
+    out = tmp_path / "plain.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    runs = [run for table in doc.tables.all for p in table.cell(0, 0).paragraphs for run in p.runs]
+    assert [run.text for run in runs] == ["def f():", "x"]
+    assert all(doc.styles.char_property(run.element.get("charPrIDRef")).attributes["textColor"] == "#000000" for run in runs)
 
 
 def test_convert_table(tmp_path):

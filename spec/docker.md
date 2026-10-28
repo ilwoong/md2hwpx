@@ -29,6 +29,7 @@
 | D2Coding | 네이버 GitHub 릴리스 VER1.4.0 | Regular/Bold TTF 와 `OFL.txt` 를 `/usr/share/fonts/d2coding` 에 설치. Alpine 패키지 없음 |
 | Python 의존성 | `uv sync --frozen --no-install-project` → `/opt/venv` | uv 는 빌드 시에만 마운트하고 이미지에 남기지 않는다 |
 | HWPX 라이브러리 | PyPI `python-hwpx` (`pyproject.toml` 의존성) | 순수 Python. 의존성 `lxml` 은 musl 휠이 있어 Alpine 에서 컴파일 없이 설치된다 |
+| 구문 강조 | PyPI `pygments` (`pyproject.toml` 의존성) | 순수 Python |
 
 버전은 `ARG PLANTUML_VERSION`, `ARG MERMAID_CLI_VERSION`, `ARG D2CODING_VERSION` / `ARG D2CODING_DATE` 로 바꿀 수 있다.
 D2Coding 은 시스템 폰트로만 등록한다. 다이어그램에서 쓰려면 mermaid 는 `fontFamily`, plantuml 은 `skinparam defaultFontName` 으로 지정한다.

@@ -6,10 +6,13 @@ import re
 from pathlib import Path
 
 from hwpx import HwpxDocument
+from pygments.lexers import TextLexer, get_lexer_by_name
+from pygments.styles import get_style_by_name
+from pygments.util import ClassNotFound
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 _IMAGE = re.compile(r"^\s*!\[[^\]]*\]\(([^)\s]+)\)\s*$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
 # "[표] ..." / "[그림] ..." right before a table or code block / image (blank lines allowed) is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\s*\[(표|그림)\]\s*(.*?)\s*$")
@@ -22,6 +25,7 @@ HEADER_FILL = "#D9D9D9"
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
+CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
 
 
 def _body(doc: HwpxDocument) -> dict:
@@ -87,16 +91,50 @@ def _add_table(doc: HwpxDocument, rows: list[list[str]], aligns: list[str | None
                 table.set_cell_shading(r, c, HEADER_FILL)
 
 
-def _add_code_block(doc: HwpxDocument, code: list[str], caption: str | None) -> None:
+def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
+    """Split *code* into per-line (text, Pygments token style) runs."""
+    try:
+        lexer = get_lexer_by_name(lang, stripnl=False, ensurenl=False)
+    except ClassNotFound:
+        lexer = TextLexer(stripnl=False, ensurenl=False)
+    style = get_style_by_name(CODE_HIGHLIGHT_STYLE)
+    lines: list[list[tuple[str, dict]]] = [[]]
+    for token, value in lexer.get_tokens("\n".join(code)):
+        for k, part in enumerate(value.split("\n")):
+            if k:
+                lines.append([])
+            if part:
+                lines[-1].append((part, style.style_for_token(token)))
+    return lines
+
+
+def _add_code_block(doc: HwpxDocument, code: list[str], lang: str, caption: str | None) -> None:
     table = doc.add_table(1, 1, **_body(doc))
     if caption is not None:
         _set_caption(doc, table, caption, "TOP")
     cell = table.cell(0, 0)
     cell.set_text("\n".join(code), split_paragraphs=True)
-    for paragraph in cell.paragraphs:
-        paragraph.char_pr_id_ref = doc.styles.ensure_run(
-            font=CODE_FONT, size=CODE_SIZE, base_char_pr_id=paragraph.char_pr_id_ref
-        )
+    char_prs: dict[tuple, str] = {}
+
+    def char_pr(base: str | None, color: str | None, bold: bool, italic: bool) -> str:
+        key = (base, color, bold, italic)
+        if key not in char_prs:
+            char_prs[key] = doc.styles.ensure_run(
+                font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}",
+                bold=bold, italic=italic, base_char_pr_id=base,
+            )
+        return char_prs[key]
+
+    for paragraph, runs in zip(cell.paragraphs, _highlight(code, lang)):
+        base = paragraph.char_pr_id_ref
+        paragraph.clear_text()
+        if not runs:
+            paragraph.add_run("", char_pr_id_ref=char_pr(base, None, False, False))
+        for text, token_style in runs:
+            paragraph.add_run(
+                text,
+                char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
+            )
         paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
             base_para_pr_id=paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING
         )
@@ -125,7 +163,7 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
             while i < len(lines) and not close.match(lines[i]):
                 code.append(lines[i])
                 i += 1
-            _add_code_block(doc, code, caption)
+            _add_code_block(doc, code, fence.group(2), caption)
             caption = None
         elif _is_table_start(lines, i):
             flush()
