@@ -373,5 +373,76 @@ def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
     convert(md, TEMPLATE, tmp_path / "doc.hwpx")
     convert(unclosed, TEMPLATE, tmp_path / "unclosed.hwpx")
 
-    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문", "--- title: x ---"]
-    assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["--- title: x"]
+    # The "---" lines are then thematic breaks (empty paragraphs), not removed front matter.
+    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문", "", "title: x", ""]
+    assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["", "title: x"]
+
+
+
+def test_convert_thematic_break(tmp_path):
+    md = tmp_path / "rule.md"
+    md.write_text("앞\n\n---\n\n***\n- - -\n___\n\n뒤\n\n- 항목\n---\n", encoding="utf-8")
+    out = tmp_path / "rule.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    paragraphs = doc.paragraphs[1:]
+    assert [p.text for p in paragraphs] == ["앞", "", "", "", "", "뒤", "항목", ""]
+    for p in [paragraphs[i] for i in (1, 2, 3, 4, 7)]:
+        border = doc.styles.paragraph_property(p.para_pr_id_ref).border
+        info = doc.styles.border_fill_info(border.border_fill_id_ref)
+        assert (info.bottom.type, info.top.type, info.left.type) == ("SOLID", "NONE", "NONE")
+    assert doc.styles.paragraph_property(paragraphs[6].para_pr_id_ref).heading.type == "BULLET"
+
+
+def test_convert_block_quote(tmp_path):
+    md = tmp_path / "quote.md"
+    md.write_text(
+        "> 첫 줄\n> **둘째** 줄\n>\n> 새 문단\n>> 중첩\n\n문단\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "quote.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    body = doc.styles.resolve("본문")
+
+    def info(p):
+        pp = doc.styles.paragraph_property(p.para_pr_id_ref)
+        bar = doc.styles.border_fill_info(pp.border.border_fill_id_ref)
+        return p.text, int(pp.margin.left), bar.left.type, pp.border.connect
+
+    paragraphs = doc.paragraphs[1:]
+    assert [info(p) for p in paragraphs[:3]] == [
+        ("첫 줄 둘째 줄", 1500 + 1000, "SOLID", True),
+        ("새 문단", 1500 + 1000, "SOLID", True),
+        ("중첩", 1500 + 2000, "SOLID", True),
+    ]
+    assert all(int(p.style_id_ref) == body.id for p in paragraphs)
+    bold = [r.text for r in paragraphs[0].runs if "bold" in doc.styles.char_property(r.element.get("charPrIDRef")).child_attributes]
+    assert bold == ["둘째"]
+    assert info(paragraphs[3])[:2] == ("문단", 1500)
+
+
+def test_convert_hard_line_breaks(tmp_path):
+    md = tmp_path / "breaks.md"
+    md.write_text(
+        "공백 두 칸  \n백슬래시\\\n**굵게  \n이어짐** 끝\n\n- 항목  \n  둘째 줄\n\n> 인용\\\n> 둘째\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "breaks.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+
+    def lines(p):
+        # hp:lineBreak inside hp:t marks a line break; text() reads it as "\n".
+        return sum(1 for _ in p.element.iter(f"{hp}lineBreak")) + 1, p.text.replace("\n", "|")
+
+    assert lines(paragraphs[0]) == (4, "공백 두 칸|백슬래시|굵게|이어짐 끝")
+    assert lines(paragraphs[1]) == (2, "항목|둘째 줄")
+    assert lines(paragraphs[2]) == (2, "인용|둘째")

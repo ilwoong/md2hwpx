@@ -36,10 +36,15 @@ _INLINE = re.compile(
     r"|(?<!\w)__(?P<bold_>\S(?:.*?\S)?)__(?!\w)"
     r"|~~(?P<strike>\S(?:.*?\S)?)~~"
     r"|\*(?P<italic>[^\s*](?:.*?[^\s*])?)\*"
-    r"|(?<!\w)_(?P<italic_>[^\s_](?:.*?[^\s_])?)_(?!\w)"
+    r"|(?<!\w)_(?P<italic_>[^\s_](?:.*?[^\s_])?)_(?!\w)",
+    re.DOTALL,  # markup may span a hard line break
 )
 # List item: indent, marker ("-", "*", "+" or "1." / "1)"), at least one space, content.
 _LIST_ITEM = re.compile(r"^( *)([-*+]|(\d{1,9})[.)])[ \t]+(\S.*)$")
+# Thematic break: three or more "-", "*" or "_" (spaces allowed between them).
+_RULE = re.compile(r"^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$")
+# Block quote line: one or more ">" markers (depth), each with an optional space, then content.
+_QUOTE = re.compile(r"^((?: {0,3}> ?)+)(.*)$")
 _DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 # (starts with ':', ends with ':') -> paragraph alignment; no colon keeps the default.
 _ALIGN = {(True, False): "LEFT", (False, True): "RIGHT", (True, True): "CENTER"}
@@ -50,6 +55,10 @@ HEADER_FILL = "#D9D9D9"
 MIN_COLUMN_WEIGHT = 4
 LIST_MAX_LEVEL = 3  # deeper items are kept at this level
 LIST_INDENT = 1000  # HWPUNIT added to the left margin per list level, as the template's 개요 styles step
+QUOTE_INDENT = 1000  # HWPUNIT added to the left margin per quote depth
+QUOTE_BAR = {"border_color": "#A6A6A6", "border_width": "0.7 mm"}  # left bar of a quote
+QUOTE_BAR_GAP = 850  # HWPUNIT between the quote bar and the text
+RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic break
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
 CODE_FONT = "D2Coding"
@@ -300,27 +309,86 @@ def _add_code_block(doc: HwpxDocument, code: list[str], lang: str, caption: str 
         )
 
 
+def _join_lines(lines: list[str]) -> str:
+    """Join the lines of a paragraph with spaces, or with a line break after a line that ends
+    in two spaces or a backslash (a CommonMark hard line break)."""
+    text = ""
+    for line in lines[:-1]:
+        if line.endswith("\\"):
+            text += line[:-1].strip() + "\n"
+        else:
+            text += line.strip() + ("\n" if line.endswith("  ") else " ")
+    return text + lines[-1].strip()
+
+
+def _body_left(doc: HwpxDocument) -> int:
+    return int(doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin.left)
+
+
+def _add_rule(doc: HwpxDocument) -> None:
+    """A thematic break: an empty 본문 paragraph with a bottom border."""
+    paragraph = doc.add_paragraph("", style=BODY_STYLE)
+    line = doc.styles.ensure_border_fill(active_borders=["BOTTOM"], **RULE_LINE)
+    paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
+        base_para_pr_id=paragraph.para_pr_id_ref, border={"borderFillIDRef": line}
+    )
+
+
+def _add_quote(doc: HwpxDocument, lines: list[str], i: int) -> int:
+    """Add the block quote starting at line *i* and return the index of the first line after it.
+
+    Each paragraph of the quote becomes a 본문 paragraph indented by its depth, with a bar on the left.
+    """
+    paragraphs: list[tuple[int, list[str]]] = []  # (depth, lines)
+    open_paragraph = False
+    while i < len(lines) and (quote := _QUOTE.match(lines[i])):
+        depth, content = quote.group(1).count(">"), quote.group(2)
+        if not content.strip():
+            open_paragraph = False
+        elif open_paragraph and paragraphs[-1][0] == depth:
+            paragraphs[-1][1].append(content)
+        else:
+            paragraphs.append((depth, [content]))
+            open_paragraph = True
+        i += 1
+
+    bar = doc.styles.ensure_border_fill(active_borders=["LEFT"], **QUOTE_BAR)
+    for depth, quote_lines in paragraphs:
+        text = _join_lines(quote_lines)
+        paragraph = doc.add_paragraph(text, style=BODY_STYLE)
+        _write_inline(doc, paragraph, text)
+        paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
+            base_para_pr_id=paragraph.para_pr_id_ref,
+            margins={"left": _body_left(doc) + depth * QUOTE_INDENT},
+            # connect: one bar along consecutive quote paragraphs
+            border={"borderFillIDRef": bar, "offsetLeft": QUOTE_BAR_GAP, "connect": "1"},
+        )
+    return i
+
+
 def _ends_list(lines: list[str], i: int) -> bool:
     line = lines[i]
     return bool(
         _HEADING.match(line) or _FENCE.match(line) or _IMAGE.match(line) or _CAPTION.match(line)
-        or _is_table_start(lines, i)
+        or _RULE.match(line) or _QUOTE.match(line) or _is_table_start(lines, i)
     )
 
 
 def _add_list(doc: HwpxDocument, lines: list[str], i: int) -> int:
     """Add the list starting at line *i* and return the index of the first line after it."""
-    items: list[list] = []  # [level, number (None for a bullet), text]
+    items: list[list] = []  # [level, number (None for a bullet), lines]
     stack: list[int] = []  # content columns of the open items
     while i < len(lines):
         line = lines[i].expandtabs(4)
+        if _RULE.match(line):
+            break
         if item := _LIST_ITEM.match(line):
             indent = len(item.group(1))
             while stack and indent < stack[-1]:
                 stack.pop()
             stack.append(item.start(4))
             number = int(item.group(3)) if item.group(3) else None
-            items.append([min(len(stack), LIST_MAX_LEVEL), number, item.group(4).strip()])
+            items.append([min(len(stack), LIST_MAX_LEVEL), number, [item.group(4)]])
         elif not line.strip():
             # A blank line ends the list unless another item follows it.
             j = i + 1
@@ -333,11 +401,12 @@ def _add_list(doc: HwpxDocument, lines: list[str], i: int) -> int:
         elif _ends_list(lines, i):
             break
         else:
-            items[-1][2] += " " + line.strip()  # continuation line of the item
+            items[-1][2].append(line)  # continuation line of the item
         i += 1
 
-    body_left = int(doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin.left)
-    for n, (level, number, text) in enumerate(items):
+    body_left = _body_left(doc)
+    for n, (level, number, item_lines) in enumerate(items):
+        text = _join_lines(item_lines)
         paragraph = doc.add_paragraph(text, style=BODY_STYLE)
         _write_inline(doc, paragraph, text)
         index = len(doc.paragraphs) - 1
@@ -387,7 +456,7 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
 
     def flush() -> None:
         if paragraph:
-            text = " ".join(paragraph)
+            text = _join_lines(paragraph)
             _write_inline(doc, doc.add_paragraph(text, style=BODY_STYLE), text)
             paragraph.clear()
 
@@ -437,6 +506,13 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
             caption = f"[{kind} {numbers[kind]}] {match.group(2)}"
             i = target
             continue
+        elif _RULE.match(line):
+            flush()
+            _add_rule(doc)
+        elif _QUOTE.match(line):
+            flush()
+            i = _add_quote(doc, lines, i)
+            continue
         elif (item := _LIST_ITEM.match(line.expandtabs(4))) and not (
             # As in CommonMark, only a list starting at 1 can interrupt a paragraph.
             paragraph and item.group(3) and int(item.group(3)) != 1
@@ -445,7 +521,7 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
             i = _add_list(doc, lines, i)
             continue
         elif line.strip():
-            paragraph.append(line.strip())
+            paragraph.append(line)
         else:
             flush()
         i += 1
