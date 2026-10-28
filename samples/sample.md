@@ -72,6 +72,7 @@ flowchart TD
 ## 지원하는 Markdown 문법
 
 현재 지원하는 블록과 변환 결과는 다음과 같습니다.
+표, 코드블록, 그림의 위아래에는 한 줄 정도의 여백이 들어가고, 표와 코드블록은 쪽을 넘으면 다음 쪽으로 이어집니다.
 문장 안에서는 `인라인 코드`, **굵게**, *기울임*, ~~취소선~~, ***굵은 기울임*** 을 쓸 수 있습니다.
 링크는 [python-hwpx 저장소](https://github.com/airmang/python-hwpx) 처럼 한/글 하이퍼링크가 되고, `file_name` 같은 밑줄 단어나 \*별표\* 같은 이스케이프는 글자 그대로 남습니다.
 줄 끝에 공백 두 칸이나 백슬래시를 두면  
@@ -85,9 +86,9 @@ flowchart TD
 | 헤딩 1~6단계 | 개요 문단 | 개요 1 ~ 개요 6 |
 | 일반 문단 | 문단 (연속된 줄은 공백으로 연결) | 본문 |
 | 이미지 | 그림 개체 | 본문 |
-| 표 | 표 개체 (머리 행 굵게, 회색 배경) | 본문 |
+| 표 | 표 개체 (머리 행 굵게, 회색 배경, 쪽마다 머리 행 반복) | 본문 |
 | 코드블록 | 1x1 표 (D2Coding, 구문 강조) | 본문 |
-| 캡션 줄 | 표·그림 개체의 캡션 | 표그림제목 |
+| 캡션 줄, 그림의 대체 텍스트 | 표·그림 개체의 캡션 | 표그림제목 |
 | 목록 | 글머리표·번호 문단 (3수준까지) | 본문 |
 | `인라인 코드` | D2Coding 글꼴 글자 조각 | 감싼 문단의 스타일 |
 | **굵게**, *기울임*, ~~취소선~~ | 서식이 적용된 글자 조각 | 감싼 문단의 스타일 |
@@ -112,6 +113,7 @@ flowchart TD
 표나 코드블록 바로 앞에 [표] 로 시작하는 줄을, 그림 바로 앞에 [그림] 으로 시작하는 줄을 쓰면 캡션이 됩니다.
 캡션에는 문서 순서대로 번호가 붙고, 표 캡션은 표 위에, 그림 캡션은 그림 아래에 들어갑니다.
 캡션 줄과 개체 사이에는 빈 줄이 있어도 됩니다.
+그림 앞에 [그림] 줄이 없으면 `![제목](그림.png)` 의 대체 텍스트가 캡션 제목이 되고, 대체 텍스트가 비어 있으면 캡션을 달지 않습니다.
 
 #### 번호 매기기
 
@@ -197,6 +199,18 @@ flowchart TD
 
 ![샘플 그림](images/picture.png)
 
+### 그림 크기 지정
+
+그림 바로 뒤에 `{width=50%}` 처럼 크기를 쓰면 그 크기로 넣습니다 (pandoc 표기).
+단위는 `%` 와 `mm` 이며, 폭의 `%` 는 본문 폭, 높이의 `%` 는 본문 높이 기준입니다.
+폭이나 높이 하나만 쓰면 다른 쪽은 원본 비율을 따르고, 둘 다 쓰면 쓴 그대로 넣습니다.
+
+아래 두 그림은 앞에 [그림] 줄이 없으므로 대체 텍스트가 캡션이 됩니다.
+
+![본문 폭의 50% 로 줄인 그림](images/picture.png){width=50%}
+
+![높이 30mm 로 맞춘 그림](images/picture.png){height=30mm}
+
 ## 사용 방법
 
 ### Python 에서 호출하기
@@ -253,3 +267,54 @@ md2hwpx/
 ├── samples/        변환 테스트용 샘플
 └── template.hwpx   변환에 사용하는 템플릿
 ```
+
+펜스 뒤에는 Pygments 의 언어 이름이나 별칭을 씁니다. 자주 쓰는 언어는 다음과 같습니다.
+이 표는 한 쪽보다 길어서 다음 쪽으로 이어지며, 이어지는 쪽에서도 머리 행이 다시 나옵니다.
+
+[표] 펜스 뒤에 쓸 수 있는 언어 이름 (일부)
+
+| 언어 | 이름과 별칭 | 파일 이름 |
+|---|---|---|
+| Python | `python`, `py` | `*.py`, `*.pyw` |
+| JavaScript | `javascript`, `js` | `*.js`, `*.jsm` |
+| TypeScript | `typescript`, `ts` | `*.ts` |
+| Java | `java` | `*.java` |
+| Kotlin | `kotlin` | `*.kt`, `*.kts` |
+| C | `c` | `*.c`, `*.h` |
+| C++ | `cpp`, `c++` | `*.cpp`, `*.hpp` |
+| C# | `csharp`, `c#` | `*.cs` |
+| Go | `go`, `golang` | `*.go` |
+| Rust | `rust`, `rs` | `*.rs`, `*.rs.in` |
+| Swift | `swift` | `*.swift` |
+| Ruby | `ruby`, `rb` | `*.rb`, `*.rbw` |
+| PHP | `php`, `php3` | `*.php`, `*.php[345]` |
+| Perl | `perl`, `pl` | `*.pl`, `*.pm` |
+| Lua | `lua` | `*.lua`, `*.wlua` |
+| Scala | `scala` | `*.scala` |
+| Haskell | `haskell`, `hs` | `*.hs` |
+| Elixir | `elixir`, `ex` | `*.ex`, `*.eex` |
+| Erlang | `erlang` | `*.erl`, `*.hrl` |
+| Clojure | `clojure`, `clj` | `*.clj`, `*.cljc` |
+| Dart | `dart` | `*.dart` |
+| Julia | `julia`, `jl` | `*.jl` |
+| Matlab | `matlab` | `*.m` |
+| Fortran | `fortran`, `f90` | `*.f03`, `*.f90` |
+| SQL | `sql` | `*.sql` |
+| Bash | `bash`, `sh` | `*.sh`, `*.ksh` |
+| PowerShell | `powershell`, `pwsh` | `*.ps1`, `*.psm1` |
+| Batchfile | `batch`, `bat` | `*.bat`, `*.cmd` |
+| HTML | `html` | `*.html`, `*.htm` |
+| CSS | `css` | `*.css` |
+| SCSS | `scss` | `*.scss` |
+| XML | `xml` | `*.xml`, `*.xsl` |
+| JSON | `json`, `json-object` | `*.json`, `*.jsonl` |
+| YAML | `yaml`, `yml` | `*.yaml`, `*.yml` |
+| TOML | `toml` | `*.toml`, `Pipfile` |
+| INI | `ini`, `cfg` | `*.ini`, `*.cfg` |
+| Markdown | `markdown`, `md` | `*.md`, `*.markdown` |
+| Docker | `docker`, `dockerfile` | `Dockerfile`, `*.docker` |
+| Makefile | `make`, `makefile` | `*.mak`, `*.mk` |
+| CMake | `cmake` | `*.cmake`, `CMakeLists.txt` |
+| Diff | `diff`, `udiff` | `*.diff`, `*.patch` |
+| VimL | `vim` | `*.vim`, `.vimrc` |
+| TeX | `tex`, `latex` | `*.tex`, `*.aux` |
