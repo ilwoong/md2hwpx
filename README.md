@@ -40,13 +40,21 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 ```sh
 # Docker (다이어그램 렌더링 도구 포함)
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
-    python -m md2hwpx docs/guide.md -o docs/guide.hwpx -t template.hwpx
+    python -m md2hwpx docs/guide.md -o docs/ -t template.hwpx
 
 # 로컬 (uv sync 후)
-uv run md2hwpx docs/guide.md
+uv run md2hwpx docs/guide.md          # ./guide.hwpx
+uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 합쳐 ./chapters.hwpx
 ```
 
-- `-o`, `--output`: 저장할 HWPX 파일. 생략하면 입력 파일 이름에 `.hwpx` 를 붙인다.
+- 인자 없이 실행하면 도움말을 보여 준다.
+- 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
+  폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
+  하위 폴더는 읽지 않는다.
+- `-o`, `--output`: 저장할 HWPX 파일 또는 폴더.
+  - 폴더면 그 폴더에 `입력 이름.hwpx` 로 저장한다.
+  - 생략하면 현재 작업 폴더에 `입력 이름.hwpx` 로 저장한다.
+  - 같은 이름의 파일이 있으면 덮어쓰지 않고 `이름-1.hwpx`, `이름-2.hwpx` ... 로 저장한다.
 - `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`.
 
 다이어그램은 임시 폴더에 렌더링해 HWPX 에 넣고 지우므로, 입력 폴더에 이미지 파일이 남지 않습니다.
