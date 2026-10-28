@@ -702,3 +702,21 @@ def test_convert_pictures_in_list_items(tmp_path):
         ("", "NONE", 1500 + 1000),  # ... and the picture follows
     ]
     assert len(doc.media.picture_references()) == 2
+
+
+def test_convert_lists_after_headings(tmp_path):
+    md = tmp_path / "headed.md"
+    md.write_text("## 절\n\n- 하나\n  - 둘\n\n### 소절\n\n1. 번호\n", encoding="utf-8")
+    out = tmp_path / "headed.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    # A heading's level is not a list level: the lists still start at level 1.
+    assert [_paragraph_info(doc, p) for p in doc.paragraphs[1:]] == [
+        ("절", "OUTLINE", 1000 * 2),
+        ("하나", "BULLET", 1500),
+        ("둘", "BULLET", 1500 + 1000),
+        ("소절", "OUTLINE", 1000 * 3),
+        ("번호", "NUMBER", 1500),
+    ]

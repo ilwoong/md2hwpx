@@ -10,6 +10,7 @@ from typing import NamedTuple
 from urllib.parse import unquote
 
 from hwpx import HwpxDocument
+from hwpx.oxml import Style
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
 from markdown_it.tree import SyntaxTreeNode
@@ -29,6 +30,7 @@ _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 # Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
 _MARKERS = {"toc": re.compile(r"\[TOC\]", re.IGNORECASE), "page_break": re.compile(r"\\(?:newpage|pagebreak)")}
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
+_HP_P = "{http://www.hancom.co.kr/hwpml/2011/paragraph}p"
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 BODY_STYLE = "본문"
@@ -72,28 +74,6 @@ class ConversionError(Exception):
     """The converted document failed HWPX validation, so it was not saved."""
 
 
-def _body(doc: HwpxDocument) -> dict:
-    # add_table / add_picture take only the style id from style=, so pass its paragraph shape too.
-    return {"style": BODY_STYLE, "para_pr_id_ref": doc.styles.resolve(BODY_STYLE).para_pr_id_ref}
-
-
-def _body_left(doc: HwpxDocument) -> int:
-    return int(doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin.left)
-
-
-def _body_width(doc: HwpxDocument) -> int:
-    """Width a 본문 paragraph can hold: the page text width minus the style's side margins."""
-    size, page = doc.page.size(), doc.page.margins()
-    margin = doc.styles.paragraph_property(doc.styles.resolve(BODY_STYLE).para_pr_id_ref).margin
-    return size.width - page.left - page.right - page.gutter - int(margin.left) - int(margin.right)
-
-
-def _body_height(doc: HwpxDocument) -> int:
-    """Height of the page body: the page height minus the top, bottom, header and footer margins."""
-    size, page = doc.page.size(), doc.page.margins()
-    return size.height - page.top - page.bottom - page.header - page.footer
-
-
 def _image_pixels(data: bytes) -> tuple[int, int] | None:
     """(width, height) in pixels of a PNG, GIF or JPEG image, or None."""
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
@@ -111,17 +91,15 @@ def _image_pixels(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def _picture_size(doc: HwpxDocument, image_path: Path, data: bytes, captioned: bool) -> tuple[int, int] | None:
-    """Picture (width, height) in HWPUNIT that fits the page body, or None if the image size is unknown.
+def _picture_size(image_path: Path, data: bytes, max_width: int, max_height: int) -> tuple[int, int] | None:
+    """Picture (width, height) in HWPUNIT within *max_width* x *max_height*, or None if the image size is unknown.
 
-    A diagram is as wide as the body; any other image keeps its size at 96 DPI.
-    Either is scaled down, keeping its aspect ratio, to fit the body width and height.
+    A diagram is as wide as *max_width*; any other image keeps its size at 96 DPI.
+    Either is scaled down, keeping its aspect ratio, to fit.
     """
     pixels = _image_pixels(data)
     if pixels is None or 0 in pixels:
         return None
-    max_width = _body_width(doc)
-    max_height = _body_height(doc) - (CAPTION_RESERVE if captioned else 0)
     width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
     height = width * pixels[1] / pixels[0]
     scale = min(1.0, max_width / width, max_height / height)
@@ -246,7 +224,25 @@ class _Writer:
     def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode):
         self.doc = doc
         self.base_dir = base_dir
-        self.body_left = _body_left(doc)
+        # Styles are resolved once: python-hwpx looks a style name up by walking all of header.xml,
+        # which grows with every character and paragraph shape the conversion adds.
+        self.body_style = doc.styles.resolve(BODY_STYLE)
+        self.caption_style = doc.styles.resolve(CAPTION_STYLE)
+        self.heading_styles: dict[int, Style] = {}
+        # add_table / add_picture take only the style id from style=, so pass its paragraph shape too.
+        self.body = {"style": self.body_style, "para_pr_id_ref": self.body_style.para_pr_id_ref}
+        # The page body a 본문 paragraph can fill.
+        margin = doc.styles.paragraph_property(self.body_style.para_pr_id_ref).margin
+        size, page = doc.page.size(), doc.page.margins()
+        self.body_left = int(margin.left)
+        self.body_width = size.width - page.left - page.right - page.gutter - int(margin.left) - int(margin.right)
+        self.body_height = size.height - page.top - page.bottom - page.header - page.footer
+        # python-hwpx compares each requested shape with every one in the document, and lists all
+        # paragraphs to find one by index; with hundreds of pages that adds up, so remember results.
+        self._formats: dict[tuple, str] = {}
+        self._list_headings: dict[tuple, dict] = {}  # (bullet level) / (numbering, level) -> hh:heading
+        self._section = doc.sections[-1]  # where new paragraphs go
+        self._paragraphs_before = len(doc.paragraphs) - len(self._section.element.findall(_HP_P))
         # Footnote definitions by id, from the block the footnote plugin puts at the end.
         self.notes = {
             note.meta["id"]: note for block in root.children if block.type == "footnote_block" for note in block.children
@@ -256,6 +252,35 @@ class _Writer:
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_page_break = False  # a page break right before the [TOC] marker
         self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
+
+    # --- shapes -----------------------------------------------------------------------------
+
+    def _ensure(self, kind: str, **request) -> str:
+        key = (kind, repr(sorted(request.items())))
+        if key not in self._formats:
+            ensure = {
+                "para": self.doc.styles.ensure_paragraph_format,
+                "char": self.doc.styles.ensure_run,
+                "border": self.doc.styles.ensure_border_fill,
+            }[kind]
+            self._formats[key] = ensure(**request)
+        return self._formats[key]
+
+    def para_format(self, base: str | None, **changes) -> str:
+        """The paragraph shape *base* with *changes* (doc.styles.ensure_paragraph_format), remembered."""
+        return self._ensure("para", base_para_pr_id=base, **changes)
+
+    def char_format(self, base: str | None, **changes) -> str:
+        """The character shape *base* with *changes* (doc.styles.ensure_run), remembered."""
+        return self._ensure("char", base_char_pr_id=base, **changes)
+
+    def border_fill(self, **request) -> str:
+        """doc.styles.ensure_border_fill, remembered."""
+        return self._ensure("border", **request)
+
+    def paragraph_count(self) -> int:
+        """len(doc.paragraphs), counted in the section XML instead of wrapping every paragraph."""
+        return self._paragraphs_before + len(self._section.element.findall(_HP_P))
 
     # --- runs -------------------------------------------------------------------------------
 
@@ -281,12 +306,12 @@ class _Writer:
         def char_pr(marks: frozenset[str]) -> str | None:
             if marks not in char_prs:
                 # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
-                char_prs[marks] = self.doc.styles.ensure_run(
+                char_prs[marks] = self.char_format(
+                    base,
                     bold=True if "bold" in marks else None,
                     italic=True if "italic" in marks else None,
                     strike=True if "strike" in marks else None,
                     font=CODE_FONT if "code" in marks else None,
-                    base_char_pr_id=base,
                 )
             return char_prs[marks]
 
@@ -314,7 +339,7 @@ class _Writer:
         self.write_runs(note.body_paragraph, runs, footnotes=False)
 
     def text_paragraph(self, runs: list[Run], quote: int, indent: int):
-        paragraph = self.doc.add_paragraph(_plain(runs), style=BODY_STYLE)
+        paragraph = self.doc.add_paragraph(_plain(runs), style=self.body_style)
         self.write_runs(paragraph, runs)
         self.place(paragraph, quote, indent)
         return paragraph
@@ -325,17 +350,15 @@ class _Writer:
             return
         layout: dict = {"margins": {"left": self.body_left + quote * QUOTE_INDENT + indent}}
         if quote and bar:
-            line = self.doc.styles.ensure_border_fill(active_borders=["LEFT"], **QUOTE_BAR)
+            line = self.border_fill(active_borders=["LEFT"], **QUOTE_BAR)
             # connect: one bar along consecutive quote paragraphs
             layout["border"] = {"borderFillIDRef": line, "offsetLeft": QUOTE_BAR_GAP, "connect": "1"}
-        paragraph.para_pr_id_ref = self.doc.styles.ensure_paragraph_format(
-            base_para_pr_id=paragraph.para_pr_id_ref, **layout
-        )
+        paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, **layout)
 
     def set_caption(self, obj, side: str) -> None:
         if self.caption is None:
             return
-        style = self.doc.styles.resolve(CAPTION_STYLE)
+        style = self.caption_style
         caption = obj.set_caption(_plain(self.caption), side=side, char_pr_id_ref=style.char_pr_id_ref)
         for paragraph in caption.paragraphs:
             paragraph.style_id_ref = style.id
@@ -372,7 +395,11 @@ class _Writer:
             following = nodes[k + 1] if k + 1 < len(nodes) else None
             if node.type == "heading":
                 runs = _runs(node.children[0].children)
-                self.write_runs(self.doc.add_heading(_plain(runs), level=int(node.tag[1])), runs)
+                depth = int(node.tag[1])
+                if depth not in self.heading_styles:
+                    self.heading_styles[depth] = self.doc.styles.resolve(f"개요 {depth}")
+                heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
+                self.write_runs(heading, runs)
             elif node.type == "paragraph":
                 self.pieces(_pieces(node.children[0]), _block_kind(following), quote, content)
             elif node.type in ("fence", "code_block"):
@@ -395,12 +422,12 @@ class _Writer:
         for k, piece in enumerate(pieces):
             if piece.kind == "toc":
                 if self.toc_at is None:
-                    self.toc_at = len(self.doc.paragraphs)
+                    self.toc_at = self.paragraph_count()
                     if self.toc_at in self.page_breaks:
                         self.page_breaks.remove(self.toc_at)
                         self.toc_page_break = True
             elif piece.kind == "page_break":
-                self.page_breaks.append(len(self.doc.paragraphs))
+                self.page_breaks.append(self.paragraph_count())
             elif piece.kind == "image":
                 self.picture(piece.image, quote, indent)
             else:
@@ -412,9 +439,10 @@ class _Writer:
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
         data = image_path.read_bytes()
-        width, height = _picture_size(self.doc, image_path, data, self.caption is not None) or (None, None)
+        max_height = self.body_height - (CAPTION_RESERVE if self.caption is not None else 0)
+        width, height = _picture_size(image_path, data, self.body_width, max_height) or (None, None)
         picture = self.doc.add_picture(
-            data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **_body(self.doc)
+            data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.body
         )
         self.place(picture.paragraph, quote, indent)
         self.set_caption(picture, "BOTTOM")
@@ -423,7 +451,7 @@ class _Writer:
         rows = [tr for section in node.children for tr in section.children]
         cells = [[_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows]
         aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
-        table = self.doc.add_table(len(cells), len(cells[0]), **_body(self.doc))
+        table = self.doc.add_table(len(cells), len(cells[0]), **self.body)
         self.place(table.paragraph, quote, indent)
         table.set_column_widths(
             [max(MIN_COLUMN_WEIGHT, *(_display_width(_plain(row[c])) for row in cells)) for c in range(len(cells[0]))]
@@ -435,33 +463,24 @@ class _Writer:
                 cell.text = _plain(runs)
                 paragraph = cell.paragraphs[0]
                 if aligns[c]:
-                    paragraph.para_pr_id_ref = self.doc.styles.ensure_paragraph_format(
-                        base_para_pr_id=paragraph.para_pr_id_ref, alignment=aligns[c]
-                    )
+                    paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
                 if r == 0:
-                    paragraph.char_pr_id_ref = self.doc.styles.ensure_run(
-                        bold=True, base_char_pr_id=paragraph.char_pr_id_ref
-                    )
+                    paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
                     table.set_cell_shading(r, c, HEADER_FILL)
                 self.write_runs(paragraph, runs)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
         doc = self.doc
-        table = doc.add_table(1, 1, **_body(doc))
+        table = doc.add_table(1, 1, **self.body)
         self.place(table.paragraph, quote, indent)
         self.set_caption(table, "TOP")
         cell = table.cell(0, 0)
         cell.set_text("\n".join(code), split_paragraphs=True)
-        char_prs: dict[tuple, str] = {}
 
         def char_pr(base: str | None, color: str | None, bold: bool, italic: bool) -> str:
-            key = (base, color, bold, italic)
-            if key not in char_prs:
-                char_prs[key] = doc.styles.ensure_run(
-                    font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}",
-                    bold=bold, italic=italic, base_char_pr_id=base,
-                )
-            return char_prs[key]
+            return self.char_format(
+                base, font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}", bold=bold, italic=italic
+            )
 
         for paragraph, runs in zip(cell.paragraphs, _highlight(code, lang)):
             base = paragraph.char_pr_id_ref
@@ -473,17 +492,13 @@ class _Writer:
                     text,
                     char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
                 )
-            paragraph.para_pr_id_ref = doc.styles.ensure_paragraph_format(
-                base_para_pr_id=paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING
-            )
+            paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING)
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""
-        paragraph = self.doc.add_paragraph("", style=BODY_STYLE)
-        line = self.doc.styles.ensure_border_fill(active_borders=["BOTTOM"], **RULE_LINE)
-        paragraph.para_pr_id_ref = self.doc.styles.ensure_paragraph_format(
-            base_para_pr_id=paragraph.para_pr_id_ref, border={"borderFillIDRef": line}
-        )
+        paragraph = self.doc.add_paragraph("", style=self.body_style)
+        line = self.border_fill(active_borders=["BOTTOM"], **RULE_LINE)
+        paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, border={"borderFillIDRef": line})
         self.place(paragraph, quote, indent, bar=False)
 
     def list_items(self, node: SyntaxTreeNode, quote: int, indent: int, level: int, numbering: str | None) -> None:
@@ -492,7 +507,6 @@ class _Writer:
         A numbered list starts its own numbering, or numbers on within the *numbering* of the
         numbered item holding it (Hancom numbers sub-levels within one definition).
         """
-        styles = self.doc.styles
         list_level = min(level, LIST_MAX_LEVEL)
         start = int(node.attrs.get("start", 1))
         own: str | None = None  # this list's numbering id
@@ -504,30 +518,47 @@ class _Writer:
             if item_blocks and item_blocks[0].type == "paragraph":
                 rest = _pieces(item_blocks.pop(0).children[0])
             first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
-            paragraph = self.doc.add_paragraph(_plain(first), style=BODY_STYLE)
+            paragraph = self.doc.add_paragraph(_plain(first), style=self.body_style)
             self.write_runs(paragraph, first)
-            index = len(self.doc.paragraphs) - 1
             if node.type == "bullet_list":
-                styles.apply_list_format(paragraph_index=index, kind="bullet", level=list_level)
+                self.list_format(paragraph, "bullet", list_level)
             else:
-                wanted = own if k else numbering
-                styles.apply_list_format(
-                    paragraph_index=index, kind="number", level=list_level, continue_list=wanted is not None,
-                    start=None if wanted is not None or start == 1 else start,
-                )
-                heading = styles.paragraph_property(paragraph.para_pr_id_ref).heading
-                if wanted is not None and str(heading.id_ref) != wanted:
-                    # continue_list goes on with the last numbered paragraph, which may sit in a
-                    # nested list: point the item back at its own list's numbering.
-                    paragraph.para_pr_id_ref = styles.ensure_paragraph_format(
-                        base_para_pr_id=paragraph.para_pr_id_ref,
-                        heading={"type": "NUMBER", "idRef": wanted, "level": list_level - 1},
-                    )
-                own = own or str(styles.paragraph_property(paragraph.para_pr_id_ref).heading.id_ref)
+                own = self.list_format(paragraph, "number", list_level, own if k else numbering, start)
             self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
             following = _block_kind(item_blocks[0] if item_blocks else None)
             self.pieces(rest, following, quote, indent + list_level * LIST_INDENT)
             self.blocks(item_blocks, quote, indent, level, own if node.type == "ordered_list" else None)
+
+    def list_format(self, paragraph, kind: str, level: int, numbering: str | None = None, start: int = 1) -> str:
+        """Give *paragraph*, the last one, a bullet or a number at *level* and return the numbering id.
+
+        A number goes on in *numbering*, or starts a new numbering from *start* if it is None.
+        apply_list_format lists every paragraph, so once a bullet level, or a level of a numbering,
+        is set up, later items get the same heading directly.
+        """
+        if kind == "bullet" or numbering is not None:
+            heading = self._list_headings.get(("bullet", level) if kind == "bullet" else (numbering, level))
+            if heading is not None:
+                paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, heading=heading)
+                return heading["idRef"]
+        styles = self.doc.styles
+        styles.apply_list_format(
+            paragraph_index=self.paragraph_count() - 1, kind=kind, level=level,
+            continue_list=numbering is not None, start=None if numbering is not None or start == 1 else start,
+        )
+        heading = styles.paragraph_property(paragraph.para_pr_id_ref).heading
+        if numbering is not None and str(heading.id_ref) != numbering:
+            # continue_list goes on with the last numbered paragraph, which may sit in a
+            # nested list: point the item back at its own list's numbering.
+            paragraph.para_pr_id_ref = self.para_format(
+                paragraph.para_pr_id_ref, heading={"type": "NUMBER", "idRef": numbering, "level": level - 1}
+            )
+            heading = styles.paragraph_property(paragraph.para_pr_id_ref).heading
+        id_ref = str(heading.id_ref)
+        self._list_headings[("bullet", level) if kind == "bullet" else (id_ref, level)] = {
+            "type": heading.type, "idRef": id_ref, "level": heading.level,
+        }
+        return id_ref
 
     # --- document ---------------------------------------------------------------------------
 
