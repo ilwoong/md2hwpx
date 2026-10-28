@@ -7,6 +7,7 @@ import unicodedata
 from pathlib import Path
 
 from hwpx import HwpxDocument
+from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
@@ -21,8 +22,20 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)")
 # "[표] ..." / "[그림] ..." right before a table or code block / image (blank lines allowed) is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\s*\[(표|그림)\]\s*(.*?)\s*$")
-# Inline code span: a backtick run closed by a run of the same length.
-_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# Inline markup, leftmost match first: backslash escape, code span (a backtick run closed by
+# one of the same length), link, bold italic, bold, strikethrough, italic. Emphasis content may not start
+# or end with a space, and "_" only works at word boundaries so snake_case stays as it is.
+_INLINE = re.compile(
+    r"\\(?P<escape>[!-/:-@\[-`{-~])"
+    r"|(?<!`)(?P<ticks>`+)(?!`)(?P<code>.+?)(?<!`)(?P=ticks)(?!`)"
+    r"|\[(?P<link>[^\]]+)\]\((?P<url>[^)\s]+)\)"
+    r"|\*\*\*(?P<bold_italic>\S(?:.*?\S)?)\*\*\*"
+    r"|\*\*(?P<bold>\S(?:.*?\S)?)\*\*"
+    r"|(?<!\w)__(?P<bold_>\S(?:.*?\S)?)__(?!\w)"
+    r"|~~(?P<strike>\S(?:.*?\S)?)~~"
+    r"|\*(?P<italic>[^\s*](?:.*?[^\s*])?)\*"
+    r"|(?<!\w)_(?P<italic_>[^\s_](?:.*?[^\s_])?)_(?!\w)"
+)
 # List item: indent, marker ("-", "*", "+" or "1." / "1)"), at least one space, content.
 _LIST_ITEM = re.compile(r"^( *)([-*+]|(\d{1,9})[.)])[ \t]+(\S.*)$")
 _DELIMITER = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
@@ -53,23 +66,77 @@ def _body_width(doc: HwpxDocument) -> int:
     return size.width - page.left - page.right - page.gutter - int(margin.left) - int(margin.right)
 
 
-def _write_inline(doc: HwpxDocument, paragraph, text: str) -> None:
-    """Rewrite *paragraph* (holding *text* in one run) so code spans become D2Coding runs."""
-    parts = _CODE_SPAN.split(text)  # [plain, ticks, code, plain, ticks, code, ..., plain]
-    if len(parts) == 1:
-        return
-    base = paragraph.char_pr_id_ref
-    code_pr = doc.styles.ensure_run(font=CODE_FONT, base_char_pr_id=base)
-    paragraph.clear_text()
-    for k in range(0, len(parts), 3):
-        if parts[k]:
-            paragraph.add_run(parts[k], char_pr_id_ref=base)
-        if k + 2 < len(parts):
-            code = parts[k + 2]
+_EMPHASIS = {
+    "bold_italic": frozenset({"bold", "italic"}),
+    "bold": frozenset({"bold"}),
+    "bold_": frozenset({"bold"}),
+    "strike": frozenset({"strike"}),
+    "italic": frozenset({"italic"}),
+    "italic_": frozenset({"italic"}),
+}
+
+
+def _inline_runs(
+    text: str, marks: frozenset[str] = frozenset(), url: str | None = None
+) -> list[tuple[str, frozenset[str], str | None]]:
+    """Split *text* into (text, marks, link url) runs; marks are bold, italic, strike, code."""
+    runs: list[tuple[str, frozenset[str], str | None]] = []
+    pos = 0
+    for m in _INLINE.finditer(text):
+        if m.start() > pos:
+            runs.append((text[pos : m.start()], marks, url))
+        if m["escape"] is not None:
+            runs.append((m["escape"], marks, url))
+        elif m["code"] is not None:
+            code = m["code"]
             # CommonMark: one space on both sides of the content is stripped.
             if len(code) > 2 and code[0] == code[-1] == " " and code.strip():
                 code = code[1:-1]
-            paragraph.add_run(code, char_pr_id_ref=code_pr)
+            runs.append((code, marks | {"code"}, url))
+        elif m["link"] is not None:
+            runs += _inline_runs(m["link"], marks, m["url"])
+        else:
+            name = next(n for n in _EMPHASIS if m[n] is not None)
+            runs += _inline_runs(m[name], marks | _EMPHASIS[name], url)
+        pos = m.end()
+    if pos < len(text):
+        runs.append((text[pos:], marks, url))
+    return runs
+
+
+def _write_inline(doc: HwpxDocument, paragraph, text: str) -> None:
+    """Rewrite *paragraph* (holding *text* in one run) with runs for the inline markup in *text*."""
+    runs: list[tuple[str, frozenset[str], str | None]] = []
+    for run in _inline_runs(text):
+        if runs and runs[-1][1:] == run[1:]:
+            runs[-1] = (runs[-1][0] + run[0], *run[1:])  # e.g. text around an escape
+        else:
+            runs.append(run)
+    if runs == [(text, frozenset(), None)] or not runs:
+        return
+    base = paragraph.char_pr_id_ref
+    char_prs: dict[frozenset[str], str | None] = {frozenset(): base}
+
+    def char_pr(marks: frozenset[str]) -> str | None:
+        if marks not in char_prs:
+            # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
+            char_prs[marks] = doc.styles.ensure_run(
+                bold=True if "bold" in marks else None,
+                italic=True if "italic" in marks else None,
+                strike=True if "strike" in marks else None,
+                font=CODE_FONT if "code" in marks else None,
+                base_char_pr_id=base,
+            )
+        return char_prs[marks]
+
+    paragraph.clear_text()
+    for run_text, marks, url in runs:
+        if url is None:
+            paragraph.add_run(run_text, char_pr_id_ref=char_pr(marks))
+        else:
+            # Hancom's link look (blue, underlined) on top of the run's own marks.
+            link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(marks))
+            paragraph.add_hyperlink(url, run_text, char_pr_id_ref=link_pr)
 
 
 def _set_caption(doc: HwpxDocument, obj, text: str, side: str) -> None:
@@ -112,7 +179,7 @@ def _captioned(lines: list[str], i: int, kind: str) -> int | None:
 
 
 def _display_width(text: str) -> int:
-    text = _CODE_SPAN.sub(lambda m: m.group(2), text)
+    text = "".join(run_text for run_text, _, _ in _inline_runs(text))
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
 
 

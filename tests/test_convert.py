@@ -273,3 +273,46 @@ def test_convert_lists(tmp_path):
     header = doc.oxml.headers[0].element
     first_list = header.find(f".//{hh}numbering[@id='{numbering[5]}']")
     assert first_list.find(f"{hh}paraHead[@level='1']").get("start") == "3"
+
+
+def test_convert_inline_formatting(tmp_path):
+    md = tmp_path / "format.md"
+    md.write_text(
+        "**굵게** *기울임* ~~취소~~ __굵게2__ _기울임2_ **a *b* c** ***둘다***\n\n"
+        "file_name_x 와 \\*리터럴\\* 와 닫히지 않은 ** 그대로\n\n"
+        "[링크 **굵게**](https://example.com) 끝\n\n"
+        "| **머리** | 값 |\n|---|---|\n| *셀* | 1 |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "format.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+
+    def marks(run):
+        char_pr = doc.styles.char_property(run.element.get("charPrIDRef"))
+        found = {name for name in ("bold", "italic") if name in char_pr.child_attributes}
+        if char_pr.child_attributes["strikeout"]["shape"] != "NONE":
+            found.add("strike")
+        if char_pr.attributes["textColor"] == "#0000FF" and char_pr.child_attributes["underline"]["type"] != "NONE":
+            found.add("link")
+        return run.text, found
+
+    def texts(paragraph):
+        return [marks(run) for run in paragraph.runs if run.text]
+
+    first, second, third = doc.paragraphs[1:4]
+    assert texts(first) == [
+        ("굵게", {"bold"}), (" ", set()), ("기울임", {"italic"}), (" ", set()), ("취소", {"strike"}),
+        (" ", set()), ("굵게2", {"bold"}), (" ", set()), ("기울임2", {"italic"}), (" ", set()),
+        ("a ", {"bold"}), ("b", {"bold", "italic"}), (" c", {"bold"}), (" ", set()), ("둘다", {"bold", "italic"}),
+    ]
+    assert texts(second) == [("file_name_x 와 *리터럴* 와 닫히지 않은 ** 그대로", set())]
+    assert texts(third) == [("링크 ", {"link"}), ("굵게", {"bold", "link"}), (" 끝", set())]
+    # One hyperlink field per run of the link text, all to the same URL.
+    assert [link["url"] for link in third.hyperlinks] == ["https://example.com"] * 2
+
+    table = doc.tables.all[0]
+    assert texts(table.cell(0, 0).paragraphs[0]) == [("머리", {"bold"})]
+    assert texts(table.cell(1, 0).paragraphs[0]) == [("셀", {"italic"})]
