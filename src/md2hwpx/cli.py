@@ -29,6 +29,15 @@ def _input_files(path: Path) -> list[Path]:
     return files
 
 
+def _missing_image_messages(files: list[Path]) -> list[str]:
+    """A "file:line: ..." message for each image that the Markdown *files* name but is not there."""
+    return [
+        f"{f}:{line}: 이미지 파일이 없습니다: {image}"
+        for f in files
+        for line, image in missing_images(f.read_text(encoding="utf-8"), f.parent)
+    ]
+
+
 def _output_path(input_path: Path, output: Path | None) -> Path:
     """Where to save: "<input name>.hwpx" in *output* if it is a folder (or the current folder
     if it is omitted), else *output*; numbered "-1", "-2", ... so no existing file is overwritten."""
@@ -65,13 +74,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         files = _input_files(args.input)
-        # Report every missing image with its file and line before converting anything.
-        missing = [
-            f"{f}:{line}: 이미지 파일이 없습니다: {image}"
-            for f in files
-            for line, image in missing_images(f.read_text(encoding="utf-8"), f.parent)
-        ]
-        if missing:
+        # Report every missing image before converting anything.
+        if missing := _missing_image_messages(files):
             for message in missing:
                 print(f"md2hwpx: {message}", file=sys.stderr)
             return 1
