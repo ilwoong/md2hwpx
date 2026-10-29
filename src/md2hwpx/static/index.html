@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>md2hwpx</title>
+<style>
+  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, -apple-system, "Malgun Gothic", sans-serif; }
+  main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 24px; color: var(--muted); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  .tabs label { padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); }
+  .tabs input { display: none; }
+  .tabs input:checked + span { color: var(--fg); font-weight: 600; }
+  .tabs label:has(input:checked) { border-bottom-color: var(--accent); }
+  fieldset { border: 0; padding: 0; margin: 0 0 16px; }
+  .field { margin-bottom: 14px; }
+  .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
+  .field small { display: block; color: var(--muted); }
+  input[type=text], input[type=url] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+  input[type=file] { width: 100%; padding: 10px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
+  details { margin: 8px 0 20px; }
+  summary { cursor: pointer; color: var(--muted); }
+  details .field { margin-top: 12px; }
+  button { padding: 10px 20px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: progress; }
+  #status { margin-top: 16px; white-space: pre-wrap; }
+  #status.error { color: var(--error); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>md2hwpx</h1>
+  <p class="lead">Markdown 문서를 한/글 HWPX 파일로 변환합니다.</p>
+
+  <form id="form">
+    <div class="tabs" role="radiogroup">
+      <label><input type="radio" name="source" value="files" checked><span>파일</span></label>
+      <label><input type="radio" name="source" value="zip"><span>zip</span></label>
+      <label><input type="radio" name="source" value="git"><span>git 저장소</span></label>
+    </div>
+
+    <fieldset data-source="files">
+      <label class="field"><span>Markdown 과 이미지 파일</span>
+        <input type="file" name="files" multiple accept=".md,image/*">
+        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다.</small>
+      </label>
+    </fieldset>
+
+    <fieldset data-source="zip" hidden>
+      <label class="field"><span>zip 파일</span>
+        <input type="file" name="archive" accept=".zip">
+        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다.</small>
+      </label>
+    </fieldset>
+
+    <fieldset data-source="git" hidden>
+      <label class="field"><span>저장소 주소</span>
+        <input type="url" name="repo" placeholder="https://github.com/user/repo.git">
+        <small>https 로 받을 수 있는 공개 저장소만 됩니다.</small>
+      </label>
+      <label class="field"><span>브랜치 또는 태그 (선택)</span>
+        <input type="text" name="ref" placeholder="기본 브랜치">
+      </label>
+    </fieldset>
+
+    <div class="field" id="path-field" hidden>
+      <label><span>변환할 경로 (선택)</span>
+        <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
+      </label>
+      <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
+    </div>
+
+    <details>
+      <summary>템플릿 바꾸기</summary>
+      <label class="field"><span>템플릿 HWPX (선택)</span>
+        <input type="file" name="template" accept=".hwpx">
+        <small>개요 1~6, 본문, 바탕글, 표그림 제목 스타일이 있어야 합니다. 비우면 기본 템플릿을 씁니다.</small>
+      </label>
+    </details>
+
+    <button type="submit">변환하고 내려받기</button>
+    <div id="status" role="status"></div>
+  </form>
+</main>
+<script>
+  const form = document.getElementById("form");
+  const status = document.getElementById("status");
+  const button = form.querySelector("button");
+
+  function showSource() {
+    const source = form.source.value;
+    for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.dataset.source !== source;
+    document.getElementById("path-field").hidden = source === "files";
+  }
+  for (const radio of form.source) radio.addEventListener("change", showSource);
+  showSource();
+
+  function filename(response) {
+    const header = response.headers.get("Content-Disposition") || "";
+    const match = header.match(/filename\*=UTF-8''([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : "document.hwpx";
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const source = form.source.value;
+    const data = new FormData();
+    data.append("source", source);
+    if (source === "files") for (const file of form.files.files) data.append("files", file);
+    if (source === "zip" && form.archive.files[0]) data.append("archive", form.archive.files[0]);
+    if (source === "git") { data.append("repo", form.repo.value); data.append("ref", form.ref.value); }
+    if (source !== "files") data.append("path", form.path.value);
+    if (form.template.files[0]) data.append("template", form.template.files[0]);
+
+    button.disabled = true;
+    status.className = "";
+    status.textContent = "변환하는 중입니다…";
+    try {
+      const response = await fetch("convert", { method: "POST", body: data });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        const detail = typeof body.detail === "string" ? body.detail : `변환하지 못했습니다 (HTTP ${response.status}).`;
+        throw new Error(detail);
+      }
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename(response);
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 60000);  // after the download has started
+      status.textContent = `${link.download} 을 내려받았습니다.`;
+    } catch (error) {
+      status.className = "error";
+      status.textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

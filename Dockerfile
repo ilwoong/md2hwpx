@@ -1,4 +1,5 @@
-FROM alpine:3.22
+# tools: 다이어그램 도구와 Python 의존성. web 과 dev 가 이 위에 만들어진다.
+FROM alpine:3.22 AS tools
 
 ARG PLANTUML_VERSION=1.2026.9
 ARG MERMAID_CLI_VERSION=11.4.2
@@ -49,3 +50,19 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/work/src \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /work
+
+# web: 코드와 템플릿을 넣은 웹 서비스. docker build --target web -t md2hwpx-web .
+FROM tools AS web
+RUN apk add --no-cache git
+COPY template.hwpx /app/
+COPY src /app/src
+# SANDBOX: 업로드한 PlantUML 이 !include 로 서버 파일이나 URL 을 읽지 못하게 한다.
+ENV PYTHONPATH=/app/src \
+    PLANTUML_SECURITY_PROFILE=SANDBOX
+WORKDIR /app
+USER nobody
+EXPOSE 8000
+CMD ["uvicorn", "md2hwpx.web:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# dev (기본): 코드는 실행 시 /work 에 마운트한다. docker build -t md2hwpx .
+FROM tools AS dev

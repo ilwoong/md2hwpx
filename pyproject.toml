@@ -16,7 +16,19 @@ dependencies = [
 md2hwpx = "md2hwpx.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8",
+]
+web = [
+    "fastapi>=0.162.0",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.54.0",
+]
+
+[tool.uv]
+# The web service's dependencies come with the rest, so its tests run and the Docker image has them.
+default-groups = ["dev", "web"]
 
 [build-system]
 requires = ["hatchling"]

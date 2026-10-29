@@ -1,0 +1,10 @@
+# 웹 서비스: docker compose up -d --build 후 http://localhost:8000
+services:
+  web:
+    build:
+      context: .
+      target: web
+    image: md2hwpx-web
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
