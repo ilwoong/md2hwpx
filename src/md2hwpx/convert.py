@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import unquote
 
 from hwpx import HwpxDocument
+from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.oxml import Style
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
@@ -28,7 +28,12 @@ _DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 # Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
-_MARKERS = {"toc": re.compile(r"\[TOC\]", re.IGNORECASE), "page_break": re.compile(r"\\(?:newpage|pagebreak)")}
+_MARKERS = {
+    "toc": re.compile(r"\[TOC\]", re.IGNORECASE),
+    "page_break": re.compile(r"\\(?:newpage|pagebreak)"),
+    # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
+    "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
+}
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
@@ -37,10 +42,11 @@ _LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 BODY_STYLE = "본문"
-CAPTION_STYLE = "표그림제목"
+PLAIN_STYLE = "바탕글"
+CAPTION_STYLE = "표그림 제목"
 HEADER_FILL = "#D9D9D9"
-# A column is weighted by its longest cell (Hangul counts double), but never below this.
-MIN_COLUMN_WEIGHT = 4
+TABLE_BORDER = {"border_color": "#000000", "border_width": "0.12 mm"}  # the template's table border
+TABLE_SIDES = ["LEFT", "RIGHT", "TOP", "BOTTOM"]
 LIST_MAX_LEVEL = 3  # deeper items are kept at this level
 LIST_INDENT = 1000  # HWPUNIT added to the left margin per list level, as the template's 개요 styles step
 QUOTE_INDENT = 1000  # HWPUNIT added to the left margin per quote depth
@@ -52,11 +58,35 @@ TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
+# A picture is laid out as a character in its paragraph, so it follows that paragraph's alignment: one
+# narrower than the body is centred rather than left at the margin.
+PICTURE_REDUCED_ALIGN = "CENTER"
+# Table cell padding, as Hancom's own new tables have it: 1.8 mm left and right, 0.5 mm above and below.
+CELL_MARGIN_LR = 510  # HWPUNIT (1.8 mm)
+CELL_MARGIN_TB = 141  # HWPUNIT (0.5 mm)
 OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above and below: about one 10pt line
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
+# One line of code as Hancom draws it: 9pt at 140% spacing, 1260 HWPUNIT.
+CODE_LINE_HEIGHT = CODE_SIZE * 100 * CODE_LINE_SPACING // 100
 CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
+# A blank page's wording: 11pt, in the body font, one line at 160% spacing.
+BLANK_PAGE_FONT_SIZE = 11  # pt
+BLANK_PAGE_LINE_SPACING = 160  # %
+BLANK_PAGE_MARGIN = {"left": 5660, "right": 5660, "top": 1415, "bottom": 1415}  # 20 mm sides, 5 mm above and below
+
+
+def _line_metrics(doc: HwpxDocument, style: Style) -> tuple[int, int]:
+    """(size in pt, one line's height in HWPUNIT) of *style*.
+
+    Read from the template rather than written here: a table's rows are sized from it, so the template's
+    own size and line spacing have to drive that, or a change to them would leave the rows wrong.
+    """
+    size = int(doc.styles.char_property(style.char_pr_id_ref).attributes["height"]) // 100
+    spacing = doc.styles.paragraph_property(style.para_pr_id_ref).line_spacing.value
+    return size, size * 100 * spacing // 100
+
 
 class Run(NamedTuple):
     """Inline text with one look, or a footnote reference (*note*, with no text)."""
@@ -68,11 +98,12 @@ class Run(NamedTuple):
 
 
 class _Piece(NamedTuple):
-    """Part of a paragraph: text "runs", an "image", or a "toc" / "page_break" marker line."""
+    """Part of a paragraph: text "runs", an "image", or a "toc" / "page_break" / "blank_page" marker line."""
 
     kind: str
     runs: list[Run] | None = None
     image: SyntaxTreeNode | None = None
+    text: str = ""  # a blank page's wording (see _MARKERS)
 
 
 class ConversionError(Exception):
@@ -173,8 +204,59 @@ def _strip(runs: list[Run]) -> list[Run]:
     return runs
 
 
-def _display_width(text: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+def _text_width(text: str, size: int) -> int:
+    """*text* on one line at *size* pt, in HWPUNIT."""
+    return round(estimate_text_width(text, size))
+
+
+def _blank_page_width(text: str, size: int) -> int:
+    """The wording's width for a blank page, in HWPUNIT.
+
+    A character the size of the font itself (1pt = 100 HWPUNIT), a space and other narrow ones half of
+    that, and one more character of room. A table sized to the text exactly wraps its last character as
+    soon as the face draws a hair wider than the count, which is how a one-line wording came out as two;
+    the spare character absorbs it.
+    """
+    full = size * 100
+    width = sum(full if ord(char) > 0x2000 else full // 2 for char in text)
+    return max(width, full) + full
+
+
+def _column_widths(cells: list[list[list[Run]]], total: int, size: int) -> list[int]:
+    """The width of each column, in HWPUNIT, adding up to *total*.
+
+    A column is first as wide as its longest cell's text at *size* pt plus the cell padding, so that text
+    stays on one line; with room to spare the extra goes to the columns that asked for more. Only when the
+    text does not fit does a column come down, and then never below its longest word, which could not wrap
+    anyway.
+    """
+    columns = len(cells[0])
+    one_line: list[int] = []  # the widest cell of the column, and the width it wants
+    longest_word: list[int] = []  # its longest unbreakable word: the narrowest the column can be
+    for c in range(columns):
+        texts = [_plain(row[c]) for row in cells]
+        one_line.append(max(_text_width(text, size) for text in texts) + CELL_MARGIN_LR * 2)
+        words = [word for text in texts for word in text.split()]
+        longest_word.append(max((_text_width(word, size) for word in words), default=0) + CELL_MARGIN_LR * 2)
+
+    if sum(one_line) <= total:
+        return _share(total, one_line)
+    if sum(longest_word) <= total:
+        # Room for every word, not for every line: what the wrap costs comes off the columns in proportion
+        # to it, so the narrow ones keep their words whole.
+        wrapped = [one - word for one, word in zip(one_line, longest_word)]
+        return [word + share for word, share in zip(longest_word, _share(total - sum(longest_word), wrapped))]
+    # Even the words do not fit: share the width out by how much each column wants.
+    return _share(total, longest_word)
+
+
+def _share(total: int, weights: list[int]) -> list[int]:
+    """*total* split in proportion to *weights*, the parts adding up to exactly *total*."""
+    if not any(weights):
+        weights = [1] * len(weights)
+    total_weight = sum(weights)
+    parts = [round(total * weight / total_weight) for weight in weights[:-1]]
+    return [*parts, total - sum(parts)]
 
 
 def _space_above_below(obj) -> None:
@@ -182,6 +264,35 @@ def _space_above_below(obj) -> None:
     margin = obj.element.find(f"{_HP}outMargin")
     margin.set("top", str(OBJECT_SPACING))
     margin.set("bottom", str(OBJECT_SPACING))
+
+
+def _cell_height(cell, doc, line_height: int) -> int:
+    """The height *cell* needs for its text at *line_height* a line, in HWPUNIT: at least one line.
+
+    Count the lines with Hancom's own breaking rules (resolve_slot_metrics + measure), not by characters:
+    a run of '-' is half as wide again as a letter, and a cell of a narrow column wraps where a wide one
+    does not.
+    """
+    slot = resolve_slot_metrics(cell, doc)
+    lines = sum(measure(paragraph.text, slot).lines for paragraph in cell.paragraphs)
+    return max(lines, 1) * line_height + CELL_MARGIN_TB * 2
+
+
+def _fit_rows(table, doc, line_height: int) -> None:
+    """Declare each row of *table* as tall as its tallest cell's text, and the table as their sum.
+
+    A cell declares its own height, and Hancom lays the text out inside it: when the declaration is
+    shorter than the text, the table takes more room on the page than it says it will, which pushes the
+    block after it to the next page and leaves the space it should have filled empty.
+    """
+    total = 0
+    for r in range(table.row_count):
+        cells = [table.cell(r, c) for c in range(table.column_count)]
+        height = max(_cell_height(cell, doc, line_height) for cell in cells)
+        for cell in cells:
+            cell.set_size(height=height)
+        total += height
+    table.element.find(f"{_HP}sz").set("height", str(total))
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -192,13 +303,19 @@ def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
         lexer = TextLexer(stripnl=False, ensurenl=False)
     style = get_style_by_name(CODE_HIGHLIGHT_STYLE)
     lines: list[list[tuple[str, dict]]] = [[]]
-    for token, value in lexer.get_tokens("\n".join(code)):
+    # The shell session lexers split their input by lines ending in "\n", so a final line without one
+    # (as code blocks have) is left unhighlighted. The trailing newline's own empty line is dropped below.
+    for token, value in lexer.get_tokens("\n".join(code) + "\n"):
+        # A style has no entry for every token the lexers make (Generic.Prompt.VirtualEnv, say):
+        # take the nearest parent it does have, as Pygments' own formatters do.
+        while token.parent is not None and not style.styles_token(token):
+            token = token.parent
         for k, part in enumerate(value.split("\n")):
             if k:
                 lines.append([])
             if part:
                 lines[-1].append((part, style.style_for_token(token)))
-    return lines
+    return lines[:-1]
 
 
 def _block_kind(node: SyntaxTreeNode | None) -> str | None:
@@ -231,10 +348,12 @@ def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
             lines[-1].append(child)
     for line in lines:
         text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
-        marker = next((name for name, pattern in _MARKERS.items() if pattern.fullmatch(text)), None)
-        if marker:
+        found = next(((name, m) for name, pattern in _MARKERS.items() if (m := pattern.fullmatch(text))), None)
+        if found:
             flush()
-            pieces.append(_Piece(marker))
+            marker, match = found
+            # Only the blank page marker carries a wording, in its one group.
+            pieces.append(_Piece(marker, text=match.group(1).strip() if match.groups() else ""))
             continue
         if runs:
             runs.append(Run(" "))  # the line break between two lines of text
@@ -257,10 +376,16 @@ class _Writer:
         # Styles are resolved once: python-hwpx looks a style name up by walking all of header.xml,
         # which grows with every character and paragraph shape the conversion adds.
         self.body_style = doc.styles.resolve(BODY_STYLE)
+        self.plain_style = doc.styles.resolve(PLAIN_STYLE)
         self.caption_style = doc.styles.resolve(CAPTION_STYLE)
         self.heading_styles: dict[int, Style] = {}
         # add_table / add_picture take only the style id from style=, so pass its paragraph shape too.
         self.body = {"style": self.body_style, "para_pr_id_ref": self.body_style.para_pr_id_ref}
+        # A picture is laid out as a character in its paragraph, so it takes the plain 바탕글 style:
+        # 본문 indents its first line, which would push the picture in from the left.
+        self.picture_body = {"style": self.plain_style, "para_pr_id_ref": self.plain_style.para_pr_id_ref}
+        # The template's 바탕글 size and line height: a table's columns and rows are sized from them.
+        self.plain_size, self.plain_line_height = _line_metrics(doc, self.plain_style)
         # The page body a 본문 paragraph can fill.
         margin = doc.styles.paragraph_property(self.body_style.para_pr_id_ref).margin
         size, page = doc.page.size(), doc.page.margins()
@@ -278,10 +403,15 @@ class _Writer:
             note.meta["id"]: note for block in root.children if block.type == "footnote_block" for note in block.children
         }
         self.caption: list[Run] | None = None  # for the next table, code block or picture
-        self.numbers = {"표": 0, "그림": 0}
+        # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
+        self.chapter = 0  # the level 1 heading being written, 0 before the first one
+        self.numbers = {"표": 0, "그림": 0}  # within that chapter
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_page_break = False  # a page break right before the [TOC] marker
         self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
+        # Paragraphs already there when the conversion starts (see new_page).
+        self._first_content = self.paragraph_count()
+        self._h2_seen = 0  # level 2 headings in the chapter being written (see heading)
 
     # --- shapes -----------------------------------------------------------------------------
 
@@ -311,6 +441,14 @@ class _Writer:
     def paragraph_count(self) -> int:
         """len(doc.paragraphs), counted in the section XML instead of wrapping every paragraph."""
         return self._paragraphs_before + len(self._section.element.findall(_HP_P))
+
+    def new_page(self) -> None:
+        """Start a new page at the next paragraph, unless nothing is written yet: the first page is new.
+
+        The [TOC] marker counts as written, though its paragraphs go in only in finish().
+        """
+        if self.paragraph_count() > self._first_content or self.toc_at is not None:
+            self.page_breaks.append(self.paragraph_count())
 
     # --- runs -------------------------------------------------------------------------------
 
@@ -368,6 +506,25 @@ class _Writer:
         note = self.doc.notes.add_footnote(_plain(runs), paragraph)
         self.write_runs(note.body_paragraph, runs, footnotes=False)
 
+    def plain(self, paragraph, size: int | None = None, with_runs: bool = True) -> None:
+        """Put *paragraph* on 바탕글 (휴먼명조), the style table cells and pictures are set in.
+
+        The 본문 style indents its first line, which would shift a cell's text in from its left edge and
+        push a picture in from the left. *size* overrides the style's own size, for the blank page's
+        wording. *with_runs* brings the runs already in *paragraph* along, for a paragraph whose text came
+        from set_text; a paragraph holding a table instead keeps its own.
+        """
+        paragraph.style_id_ref = self.plain_style.id
+        paragraph.para_pr_id_ref = self.plain_style.para_pr_id_ref
+        if not with_runs:
+            return
+        paragraph.char_pr_id_ref = (
+            self.plain_style.char_pr_id_ref if size is None
+            else self.char_format(self.plain_style.char_pr_id_ref, size=size)
+        )
+        for run in paragraph.runs:
+            run.char_pr_id_ref = paragraph.char_pr_id_ref
+
     def text_paragraph(self, runs: list[Run], quote: int, indent: int):
         paragraph = self.doc.add_paragraph(_plain(runs), style=self.body_style)
         self.write_runs(paragraph, runs)
@@ -411,9 +568,11 @@ class _Writer:
         return True
 
     def number_caption(self, kind: str, title: list[Run]) -> None:
-        """Keep "[표 N] *title*" / "[그림 N] *title*" as the next caption, N counting each kind."""
+        """Keep "[표 2-1] *title*" / "[그림 2-1] *title*" as the next caption: the number is the chapter
+        (the level 1 heading it is under) and, after it, the object's own count within that chapter."""
         self.numbers[kind] += 1
-        self.caption = [Run(f"[{kind} {self.numbers[kind]}] "), *title]
+        number = f"{self.chapter}-{self.numbers[kind]}" if self.chapter else str(self.numbers[kind])
+        self.caption = [Run(f"[{kind} {number}] "), *title]
 
     def add_table(self, rows: int, columns: int, quote: int, indent: int):
         """A new table (a code block is one too) that runs on to the next pages, placed like a paragraph."""
@@ -423,10 +582,41 @@ class _Writer:
         table.set_treat_as_char(False)
         table.element.find(f"{_HP}pos").set("horzRelTo", "PARA")
         _space_above_below(table)
+        # Cell padding: a cell without hasMargin uses the table's inMargin, whatever the template has there.
+        # The height each row needs for its text is set by the caller, once the text is in (see _fit_rows).
+        padding = table.element.find(f"{_HP}inMargin")
+        for side, value in (("left", CELL_MARGIN_LR), ("right", CELL_MARGIN_LR),
+                            ("top", CELL_MARGIN_TB), ("bottom", CELL_MARGIN_TB)):
+            padding.set(side, str(value))
         self.place(table.paragraph, quote, indent)
         return table
 
     # --- blocks -----------------------------------------------------------------------------
+
+    def heading(self, node: SyntaxTreeNode) -> None:
+        """Write a heading, with the page break and caption number reset its level asks for."""
+        runs = _runs(node.children[0].children)
+        depth = int(node.tag[1])
+        if depth not in self.heading_styles:
+            self.heading_styles[depth] = self.doc.styles.resolve(f"개요 {depth}")
+        if depth > 1:
+            # An empty 본문 paragraph before a sub-heading: the template's 개요 styles carry no
+            # space above, so the gap from what came before is that paragraph's own line.
+            self.doc.add_paragraph(style=self.body_style)
+        if depth == 1:
+            self._h2_seen = 0  # the next level 2 heading is a chapter's first
+            # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
+            self.chapter += 1
+            self.numbers = {"표": 0, "그림": 0}
+            self.new_page()  # a chapter opens a page
+        elif depth == 2:
+            self._h2_seen += 1
+            # Within a chapter the first level 2 heading stays on the chapter's page; the ones after it,
+            # and those before any chapter, start a page of their own.
+            if self._h2_seen > 1:
+                self.page_breaks.append(self.paragraph_count())
+        heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
+        self.write_runs(heading, runs)
 
     def blocks(self, nodes: list[SyntaxTreeNode], quote: int = 0, indent: int = 0, level: int = 0,
                numbering: str | None = None) -> None:
@@ -438,12 +628,7 @@ class _Writer:
         for k, node in enumerate(nodes):
             following = nodes[k + 1] if k + 1 < len(nodes) else None
             if node.type == "heading":
-                runs = _runs(node.children[0].children)
-                depth = int(node.tag[1])
-                if depth not in self.heading_styles:
-                    self.heading_styles[depth] = self.doc.styles.resolve(f"개요 {depth}")
-                heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
-                self.write_runs(heading, runs)
+                self.heading(node)
             elif node.type == "paragraph":
                 self.pieces(_pieces(node.children[0]), _block_kind(following), quote, content)
             elif node.type in ("fence", "code_block"):
@@ -472,6 +657,8 @@ class _Writer:
                         self.toc_page_break = True
             elif piece.kind == "page_break":
                 self.page_breaks.append(self.paragraph_count())
+            elif piece.kind == "blank_page":
+                self.blank_page(piece.text)
             elif piece.kind == "image":
                 self.picture(piece.image, quote, indent)
             else:
@@ -497,11 +684,56 @@ class _Writer:
             _length(node.attrs.get("height"), self.body_height),
         ) or (None, None)
         picture = self.doc.add_picture(
-            data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.body
+            data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.picture_body
         )
         _space_above_below(picture)
         self.place(picture.paragraph, quote, indent)
+        # A picture narrower than the body sits at the left margin and leaves a gap at the right; centred,
+        # the gap is shared. The picture is laid out as a character, so the paragraph's own alignment is
+        # what moves it. A picture that fills the body has nothing to centre, and keeps its style.
+        if width is not None and width < self.body_width - indent:
+            picture.paragraph.para_pr_id_ref = self.para_format(
+                picture.paragraph.para_pr_id_ref, alignment=PICTURE_REDUCED_ALIGN
+            )
         self.set_caption(picture, "BOTTOM")
+
+    def blank_page(self, text: str) -> None:
+        """A page kept as margin: a 1x1 table just big enough for *text*, centred on its own page.
+
+        The table is not laid out as a character — that would follow the text flow and ignore the centring —
+        and carries numberingType NONE so Hancom's table of contents leaves it out. The next block starts on
+        the page after it, so the page break goes on the next paragraph (see the piece after this one).
+        """
+        line = BLANK_PAGE_FONT_SIZE * 100 * BLANK_PAGE_LINE_SPACING // 100  # the font at 160% line spacing
+        margin = BLANK_PAGE_MARGIN
+        width = _blank_page_width(text, BLANK_PAGE_FONT_SIZE) + margin["left"] + margin["right"]
+        height = line + margin["top"] + margin["bottom"]
+        self.new_page()  # on a page of its own: the table's paragraph comes next
+        table = self.doc.add_table(1, 1)
+        size = table.element.find(f"{_HP}sz")
+        size.set("width", str(width))
+        size.set("height", str(height))
+        cell = table.cell(0, 0)
+        cell.set_size(width=width, height=height)
+        cell.set_margins(**margin)
+        cell.text = text
+        paragraph = cell.paragraphs[0]
+        # 바탕글 (휴먼명조), at the blank page's own size: set_size and _blank_page_width above are measured
+        # at it, so the box holds the wording on one line.
+        self.plain(paragraph, size=BLANK_PAGE_FONT_SIZE)
+        table.element.set("numberingType", "NONE")
+        # Centred on the page: an inline table would follow the paragraph's flow instead.
+        position = table.element.find(f"{_HP}pos")
+        position.set("treatAsChar", "0")
+        position.set("vertRelTo", "PAGE")
+        position.set("vertAlign", "CENTER")
+        position.set("horzRelTo", "PAGE")
+        position.set("horzAlign", "CENTER")
+        _space_above_below(table)
+        self.plain(table.paragraph, with_runs=False)  # holds the table, not text: its run is the table's own
+        # The next block — a piece of this paragraph or the following one — starts on the page after it.
+        # A break with nothing after it is dropped in finish().
+        self.page_breaks.append(self.paragraph_count())
 
     def table(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         rows = [tr for section in node.children for tr in section.children]
@@ -510,22 +742,29 @@ class _Writer:
         table = self.add_table(len(cells), len(cells[0]), quote, indent)
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
-        table.set_column_widths(
-            [max(MIN_COLUMN_WEIGHT, *(_display_width(_plain(row[c])) for row in cells)) for c in range(len(cells[0]))]
-        )
+        table.set_column_widths(_column_widths(cells, self.body_width, self.plain_size))
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
             for c, runs in enumerate(row):
                 cell = table.cell(r, c)
                 cell.text = _plain(runs)
                 paragraph = cell.paragraphs[0]
+                # 바탕글 (휴먼명조): a table's text is not body text, and the 본문 style's first-line
+                # indent would shift every cell in from its left edge.
+                self.plain(paragraph)
                 if aligns[c]:
                     paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
                 if r == 0:
                     cell.element.set("header", "1")
                     paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
-                    table.set_cell_shading(r, c, HEADER_FILL)
+                    # Shaded, keeping the table's own border: set_cell_shading looks a border fill up by
+                    # fill colour alone, and the template's #D9D9D9 one has no borders at all.
+                    cell.element.set(
+                        "borderFillIDRef",
+                        self.border_fill(fill_color=HEADER_FILL, active_borders=TABLE_SIDES, **TABLE_BORDER),
+                    )
                 self.write_runs(paragraph, runs)
+        _fit_rows(table, self.doc, self.plain_line_height)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
         table = self.add_table(1, 1, quote, indent)
@@ -549,6 +788,8 @@ class _Writer:
                     char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
                 )
             paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING)
+        # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
+        _fit_rows(table, self.doc, CODE_LINE_HEIGHT)
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""

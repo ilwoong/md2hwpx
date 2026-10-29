@@ -4,11 +4,27 @@ from pathlib import Path
 
 import pytest
 from hwpx import HwpxDocument
+from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
 
 from md2hwpx.convert import convert
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
+
+
+def _page_body() -> tuple[int, int, int, int]:
+    """The template's 본문 left margin, body width, body height and text width (as convert.py computes them)."""
+    template = HwpxDocument.open(TEMPLATE)
+    style = template.styles.resolve("본문")
+    margin = template.styles.paragraph_property(style.para_pr_id_ref).margin
+    size, page = template.page.size(), template.page.margins()
+    text_width = size.width - page.left - page.right - page.gutter
+    body_width = text_width - int(margin.left) - int(margin.right)
+    body_height = size.height - page.top - page.bottom - page.header - page.footer
+    return int(margin.left), body_width, body_height, text_width
+
+
+BODY_LEFT, BODY_WIDTH, BODY_HEIGHT, TEXT_WIDTH = _page_body()
 
 
 def _png(width: int = 1, height: int = 1) -> bytes:
@@ -46,12 +62,24 @@ def test_convert(tmp_path):
     assert texts == [
         ("제목", "개요 1"),
         ("첫 줄 둘째 줄", "본문"),
+        ("", "본문"),  # before the sub-heading, not before the level 1 one
         ("소제목", "개요 2"),
-        ("", "본문"),  # picture
+        ("", "바탕글"),  # picture: laid out as a character, so no 본문 first-line indent
         ("", "본문"),  # code block table anchor
     ]
-    # Each paragraph uses its style's own paragraph shape, not the previous heading's.
-    assert all(int(p.para_pr_id_ref) == styles[int(p.style_id_ref)].para_pr_id_ref for p in paragraphs)
+    # Each paragraph uses its style's own paragraph shape, not the previous heading's. A heading is the
+    # exception: add_heading makes an OUTLINE shape of its own, at the level of the 개요 style it is given.
+    # A picture narrower than the body is the other: it gets the plain style's shape aligned to centre.
+    for p in paragraphs:
+        style = styles[int(p.style_id_ref)]
+        if style.name.startswith("개요 "):
+            own = doc.styles.paragraph_property(p.para_pr_id_ref).heading
+            assert (own.type, own.level) == ("OUTLINE", int(style.name.split()[1]) - 1)
+        elif style.name == "바탕글":
+            own = doc.styles.paragraph_property(p.para_pr_id_ref)
+            assert own.align.horizontal == "CENTER"
+        else:
+            assert int(p.para_pr_id_ref) == style.para_pr_id_ref
     assert len(doc.media.picture_references()) == 1
 
 
@@ -98,6 +126,35 @@ def test_convert_code_block_without_language(tmp_path):
     assert all(doc.styles.char_property(run.element.get("charPrIDRef")).attributes["textColor"] == "#000000" for run in runs)
 
 
+def test_convert_console_code_block(tmp_path):
+    # A console fence: the shell session lexers read "(gdb) " as a virtualenv prompt, a token the style
+    # has no entry for, and leave the last line without a "\n" unhighlighted.
+    md = tmp_path / "console.md"
+    md.write_text(
+        "```console\nASR-9010:/disk0:/var/tmp$ pidin | grep locald\n221309   1 locald_DSC\n(gdb) x/4xi 0x42371e4\n(gdb) c\n```\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "console.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    paragraphs = doc.tables.all[0].cell(0, 0).paragraphs
+    assert [p.text for p in paragraphs] == [
+        "ASR-9010:/disk0:/var/tmp$ pidin | grep locald",
+        "221309   1 locald_DSC",
+        "(gdb) x/4xi 0x42371e4",
+        "(gdb) c",
+    ]
+    # The prompt takes the color of its Generic.Prompt parent; the last line is highlighted too.
+    colors = []
+    for p in paragraphs:
+        for run in p.runs:
+            if run.text in ("(gdb)", "(gdb) c"):
+                colors.append(doc.styles.char_property(run.element.get("charPrIDRef")).attributes["textColor"])
+    assert colors[:2] == ["#000080"] * 2
+
+
 def test_convert_table(tmp_path):
     md = tmp_path / "table.md"
     md.write_text(
@@ -127,6 +184,13 @@ def test_convert_table(tmp_path):
     body = [table.cell(1, c) for c in range(4)]
     assert all(bold(cell) and fill(cell) == "#D9D9D9" for cell in header)
     assert not any(bold(cell) or fill(cell) for cell in body)
+
+    def borders(cell):
+        info = doc.styles.border_fill_info(cell.element.get("borderFillIDRef"))
+        return info.left.type, info.right.type, info.top.type, info.bottom.type
+
+    # The shading keeps the table's border: a fill matched on colour alone would drop all four sides.
+    assert all(borders(cell) == ("SOLID",) * 4 for cell in header + body)
     # A line of space above and below, none at the sides.
     margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
     assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
@@ -134,6 +198,23 @@ def test_convert_table(tmp_path):
     assert table.element.get("repeatHeader") == "1"
     assert [cell.element.get("header") for cell in header + body] == ["1"] * 4 + ["0"] * 4
     assert [align(cell) for cell in body[:3]] == ["LEFT", "CENTER", "RIGHT"]
+    # 바탕글 with 휴먼명조, so the 본문 first-line indent does not push the text in from the left edge.
+    plain = doc.styles.resolve("바탕글")
+    for cell in header + body:
+        paragraph = cell.paragraphs[0]
+        assert int(paragraph.style_id_ref) == plain.id
+        assert int(doc.styles.paragraph_property(paragraph.para_pr_id_ref).margin.intent) == 0
+        assert doc.styles.font_face(paragraph.char_pr_id_ref, "HANGUL") == "휴먼명조"
+    # Cell padding, as Hancom's own tables have it: 1.8 mm at the sides, 0.5 mm above and below. The cells
+    # leave hasMargin off, so Hancom takes the table's inMargin.
+    padding = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}inMargin").attrib
+    assert padding == {"left": "510", "right": "510", "top": "141", "bottom": "141"}
+    for cell in header + body:
+        assert cell.element.get("hasMargin") != "1"
+        # The stored row height holds the padding plus one line of text (1800), or the padding would have
+        # no room to show in.
+        assert cell.height == 2082
+    assert table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}sz").get("height") == str(2082 * 3)
     assert doc.paragraphs[-1].text == "뒤 문단"
 
 
@@ -156,6 +237,27 @@ def test_convert_tables_flow_across_pages(tmp_path):
     assert not [f for f in lint_layout(out.read_bytes()).findings if f.code == "TABLE_TALLER_THAN_PAGE"]
 
 
+def test_convert_caption_numbers_restart_in_each_chapter(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png())
+    md = tmp_path / "chapters.md"
+    md.write_text(
+        "# 1장\n\n[표] 첫 표\n| a |\n|---|\n| 1 |\n\n[그림] 첫 그림\n![](a.png)\n\n"
+        "## 1.1\n\n[표] 둘째 표\n| b |\n|---|\n| 2 |\n\n"
+        "# 2장\n\n[표] 장2 표1\n| c |\n|---|\n| 3 |\n\n[그림] 장2 그림1\n![](a.png)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "chapters.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    # The number is the chapter (level 1 heading) and the object's own count within it.
+    assert [t.caption.text for t in doc.tables.all] == ["[표 1-1] 첫 표", "[표 1-2] 둘째 표", "[표 2-1] 장2 표1"]
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pictures = ["".join(pic.find(f"{hp}caption").itertext()) for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
+    assert pictures == ["[그림 1-1] 첫 그림", "[그림 2-1] 장2 그림1"]
+
+
 def test_convert_captions(tmp_path):
     (tmp_path / "a.png").write_bytes(_png())
     md = tmp_path / "cap.md"
@@ -173,6 +275,7 @@ def test_convert_captions(tmp_path):
 
     doc = HwpxDocument.open(out)
     caption = doc.tables.all[0].caption
+    # No level 1 heading here, so nothing is in a chapter and the numbers stay plain.
     assert (caption.side, caption.text) == ("TOP", "[표 1] 표 캡션")
     assert doc.tables.all[1].caption.text == "[표 2] 둘째 표"
     code_caption = doc.tables.all[2].caption
@@ -184,7 +287,7 @@ def test_convert_captions(tmp_path):
     assert "".join(pic_caption.itertext()) == "[그림 1] 그림 캡션"
     assert [p.text for p in doc.paragraphs if p.text] == ["[표] 표가 뒤따르지 않음", "문단"]
 
-    style = doc.styles.resolve("표그림제목")
+    style = doc.styles.resolve("표그림 제목")
     caption_paragraphs = [p for t in doc.tables.all for p in t.caption.paragraphs]
     for p in caption_paragraphs:
         assert (int(p.style_id_ref), int(p.para_pr_id_ref), int(p.char_pr_id_ref)) == (
@@ -249,18 +352,15 @@ def test_convert_picture_sizes(tmp_path):
 
     convert(md, TEMPLATE, out)
 
-    # template: A4 59528 x 84188, margins left/right 8504, top 5668, bottom/header/footer 4252,
-    # 본문 left margin 1500
-    body_width = 59528 - 8504 * 2 - 1500
     # less a line of space above and below the picture
-    body_height = 84188 - 5668 - 4252 * 3 - 1400 * 2
+    body_height = BODY_HEIGHT - 2 * 1400
     doc = HwpxDocument.open(out)
     sizes = [(ref.width, ref.height) for ref in doc.media.picture_references()]
     assert sizes == [
-        (body_width, body_width // 2),
+        (BODY_WIDTH, BODY_WIDTH // 2),
         (round(body_height / 10), body_height),
         (200 * 75, 100 * 75),
-        (body_width, round(body_width / 4)),
+        (BODY_WIDTH, round(BODY_WIDTH / 4)),
         (round((body_height - 2500) / 20), body_height - 2500),
         (400 * 75, 300 * 75),
         (300 * 75, 150 * 75),
@@ -288,23 +388,51 @@ def test_convert_picture_size_attributes(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    body_width = 59528 - 8504 * 2 - 1500
 
     def mm(value):
         return round(value * 7200 / 25.4)
 
     sizes = [(ref.width, ref.height) for ref in doc.media.picture_references()]
     assert sizes == [
-        (body_width // 2, body_width // 4),
+        (BODY_WIDTH // 2, round(BODY_WIDTH / 4)),
         (mm(80), round(mm(80) / 2)),
         (mm(40) * 2, mm(40)),
         (mm(30), mm(30)),
-        (body_width, body_width // 2),
-        (body_width, body_width // 2),
+        (BODY_WIDTH, BODY_WIDTH // 2),
+        (BODY_WIDTH, BODY_WIDTH // 2),
         (7500, 3750),
     ]
     # The attribute block is not left as text.
     assert [p.text for p in doc.paragraphs if "뒤" in p.text] == ["뒤"] * len(attributes)
+
+
+def test_convert_reduced_picture_is_centred(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png(100, 50))
+    (tmp_path / "wide.png").write_bytes(_png(4000, 1000))
+    md = tmp_path / "centre.md"
+    md.write_text(
+        "![](a.png){width=50%}\n\n"  # narrower than the body: centred
+        "![](wide.png)\n\n"  # fills the body: nothing to centre
+        "> ![](a.png){width=50%}\n",  # inside a quote, still narrower than what is left
+        encoding="utf-8",
+    )
+    out = tmp_path / "centre.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    alignments = []
+    for paragraph in doc.paragraphs:
+        if list(paragraph.element.iter(f"{hp}pic")):
+            alignments.append(doc.styles.paragraph_property(paragraph.para_pr_id_ref).align.horizontal)
+    assert alignments == ["CENTER", "JUSTIFY", "CENTER"]
+    # The pictures' own size is not touched by the alignment.
+    assert [ref.width for ref in doc.media.picture_references()] == [
+        BODY_WIDTH // 2,
+        BODY_WIDTH,
+        BODY_WIDTH // 2,
+    ]
 
 
 def test_convert_inline_code(tmp_path):
@@ -336,7 +464,7 @@ def test_convert_inline_code(tmp_path):
         (" 를 쓴다. 닫히지 않은 ` 는 그대로.", False),
     ]
     table = doc.tables.all[0]
-    assert runs(table.caption.paragraphs[0]) == [("[표 1] ", False), ("md2hwpx", True), (" 표", False)]
+    assert runs(table.caption.paragraphs[0]) == [("[표 1-1] ", False), ("md2hwpx", True), (" 표", False)]
     header_run = table.cell(0, 0).paragraphs[0].runs[0]
     assert runs(table.cell(0, 0).paragraphs[0]) == [("헤더", True)]
     assert "bold" in doc.styles.char_property(header_run.element.get("charPrIDRef")).child_attributes
@@ -358,11 +486,52 @@ def test_convert_table_column_widths(tmp_path):
 
     table = HwpxDocument.open(out).tables.all[0]
     widths = [table.cell(0, c).width for c in range(3)]
-    # Weights: "번호" 4, the description 49 (21 Hangul x 2 + 7 spaces), "abcdefgh" 8 (backticks not counted).
-    assert sum(widths) == 59528 - 8504 * 2
+    # Every column carries its longest cell's text and its own padding, so no cell has to wrap: a width of
+    # 1 unit per character would have been too narrow for the short columns, whose padding is 1020 of it.
+    assert sum(widths) == TEXT_WIDTH
     assert widths[0] < widths[2] < widths[1]
-    assert abs(widths[1] / widths[0] - 49 / 4) < 0.01
+    for column, text in enumerate(("번호", "code")):
+        assert widths[column] - 1020 >= round(estimate_text_width(text, 10))
     assert [table.cell(1, c).width for c in range(3)] == widths
+
+
+def test_convert_table_row_heights(tmp_path):
+    md = tmp_path / "rows.md"
+    # A cell taller than one line, and a code block of several lines: each must declare the height it
+    # needs, or the table takes more room on the page than it says and pushes the next block away.
+    md.write_text(
+        "| 짧음 | 긴 설명 |\n|---|---|\n"
+        "| a | 이 셀은 좁은 열이라 여러 줄로 접히는 아주 긴 문장을 담고 있습니다. 계속 이어집니다. |\n\n"
+        "```py\n" + "".join(f"x{i} = {i}\n" for i in range(12)) + "```\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "rows.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    table = doc.tables.all[0]
+    # The two cells of the row share the row's height, which holds the taller one's wrapped lines.
+    assert table.cell(0, 0).height == table.cell(0, 1).height
+    wrapped = table.cell(1, 1)
+    lines = measure(wrapped.text, resolve_slot_metrics(wrapped, doc)).lines
+    assert lines > 1
+    assert wrapped.height >= lines * 1800 + 141 * 2
+    assert table.cell(1, 0).height == wrapped.height  # the short cell takes its row's height too
+    assert table.element.find(f"{hp}sz").get("height") == str(
+        table.cell(0, 0).height + table.cell(1, 0).height
+    )
+
+    # The code block is 12 lines at 1260 each (9pt at 140%), not the one line of a bare table.
+    code = doc.tables.all[1].cell(0, 0)
+    assert len(code.paragraphs) == 12
+    assert code.height == 12 * 1260 + 141 * 2
+    assert doc.tables.all[1].element.find(f"{hp}sz").get("height") == str(code.height)
+    # One line of code is one code line high, not one line of the cells' 바탕글.
+    md.write_text("```\none\n```\n", encoding="utf-8")
+    convert(md, TEMPLATE, out)
+    assert HwpxDocument.open(out).tables.all[0].cell(0, 0).height == 1260 + 141 * 2
 
 
 def test_convert_lists(tmp_path):
@@ -387,17 +556,17 @@ def test_convert_lists(tmp_path):
 
     paragraphs = doc.paragraphs[1:]
     assert [info(p) for p in paragraphs] == [
-        ("첫째 code 이어지는 줄", "BULLET", 1, 1500),
-        ("둘째", "BULLET", 1, 1500),
-        ("하위", "BULLET", 2, 2500),
-        ("하위의 하위", "BULLET", 3, 3500),
-        ("4단계", "BULLET", 3, 3500),  # deeper than 3 stays at level 3
-        ("셋부터", "NUMBER", 1, 1500),
-        ("넷", "NUMBER", 1, 1500),
-        ("하위 번호", "NUMBER", 2, 2500),
-        ("다섯", "NUMBER", 1, 1500),
-        ("문단 2. 문단에 이어짐", "NONE", 1, 1500),  # only "1." can interrupt a paragraph
-        ("새 목록", "NUMBER", 1, 1500),
+        ("첫째 code 이어지는 줄", "BULLET", 1, BODY_LEFT),
+        ("둘째", "BULLET", 1, BODY_LEFT),
+        ("하위", "BULLET", 2, BODY_LEFT + 1000),
+        ("하위의 하위", "BULLET", 3, BODY_LEFT + 2000),
+        ("4단계", "BULLET", 3, BODY_LEFT + 2000),  # deeper than 3 stays at level 3
+        ("셋부터", "NUMBER", 1, BODY_LEFT),
+        ("넷", "NUMBER", 1, BODY_LEFT),
+        ("하위 번호", "NUMBER", 2, BODY_LEFT + 1000),
+        ("다섯", "NUMBER", 1, BODY_LEFT),
+        ("문단 2. 문단에 이어짐", "NONE", 1, BODY_LEFT),  # only "1." can interrupt a paragraph
+        ("새 목록", "NUMBER", 1, BODY_LEFT),
     ]
     assert all(int(p.style_id_ref) == body.id for p in paragraphs)
     numbering = [doc.styles.paragraph_property(p.para_pr_id_ref).heading.id_ref for p in paragraphs]
@@ -481,8 +650,8 @@ def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
     # Not removed as front matter: after a blank line "---" is a thematic break (an empty paragraph),
     # right under a line it underlines a level 2 heading (CommonMark setext heading).
     doc = HwpxDocument.open(tmp_path / "doc.hwpx")
-    assert [p.text for p in doc.paragraphs[1:]] == ["본문", "", "title: x"]
-    assert int(doc.paragraphs[3].style_id_ref) == doc.styles.resolve("개요 2").id
+    assert [p.text for p in doc.paragraphs[1:]] == ["본문", "", "", "title: x"]
+    assert int(doc.paragraphs[4].style_id_ref) == doc.styles.resolve("개요 2").id
     assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["", "title: x"]
 
 
@@ -524,14 +693,14 @@ def test_convert_block_quote(tmp_path):
 
     paragraphs = doc.paragraphs[1:]
     assert [info(p) for p in paragraphs[:3]] == [
-        ("첫 줄 둘째 줄", 1500 + 1000, "SOLID", True),
-        ("새 문단", 1500 + 1000, "SOLID", True),
-        ("중첩", 1500 + 2000, "SOLID", True),
+        ("첫 줄 둘째 줄", BODY_LEFT + 1000, "SOLID", True),
+        ("새 문단", BODY_LEFT + 1000, "SOLID", True),
+        ("중첩", BODY_LEFT + 2000, "SOLID", True),
     ]
     assert all(int(p.style_id_ref) == body.id for p in paragraphs)
     bold = [r.text for r in paragraphs[0].runs if "bold" in doc.styles.char_property(r.element.get("charPrIDRef")).child_attributes]
     assert bold == ["둘째"]
-    assert info(paragraphs[3])[:2] == ("문단", 1500)
+    assert info(paragraphs[3])[:2] == ("문단", BODY_LEFT)
 
 
 def test_convert_hard_line_breaks(tmp_path):
@@ -597,6 +766,49 @@ def test_convert_footnotes(tmp_path):
     assert not any("[^b]:" in p.text for p in doc.paragraphs)
 
 
+def test_convert_blank_page(tmp_path):
+    md = tmp_path / "blank.md"
+    md.write_text("본문\n\n[여백면] 이 면은 여백으로 사용됨\n\n이어지는 본문\n\n[여백면]\n\n끝\n", encoding="utf-8")
+    out = tmp_path / "blank.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    blank = doc.tables.all[0]
+    # A 1x1 table just big enough for the wording, centred on a page of its own — and not in the TOC.
+    assert blank.cell(0, 0).text == "이 면은 여백으로 사용됨"
+    position = blank.element.find(f"{hp}pos")
+    assert (position.get("treatAsChar"), position.get("vertRelTo"), position.get("vertAlign")) == ("0", "PAGE", "CENTER")
+    assert (position.get("horzRelTo"), position.get("horzAlign")) == ("PAGE", "CENTER")
+    assert blank.element.get("numberingType") == "NONE"
+    assert blank.cell(0, 0).margins.to_dict() == {"left": 5660, "right": 5660, "top": 1415, "bottom": 1415}
+    width = int(blank.element.find(f"{hp}sz").get("width"))
+    assert width >= 5660 * 2 + round(estimate_text_width("이 면은 여백으로 사용됨", 11))
+    # The wording is set in 바탕글 (휴먼명조) at the blank page's 11pt, and stays on one line: the table is
+    # sized to the count plus a spare character, so the last character cannot tip over to a second line.
+    run = blank.cell(0, 0).paragraphs[0].runs[0]
+    assert doc.styles.char_property(run.element.get("charPrIDRef")).attributes["height"] == "1100"
+    assert doc.styles.font_face(run.element.get("charPrIDRef"), "HANGUL") == "휴먼명조"
+    assert measure(blank.cell(0, 0).text, resolve_slot_metrics(blank.cell(0, 0), doc)).lines == 1
+    # An empty marker still gives a page, and the block after each blank page starts the next page.
+    assert doc.tables.all[1].cell(0, 0).text == ""
+    starts = [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"]
+    assert starts == ["", "이어지는 본문", "", "끝"]
+
+
+def test_convert_blank_page_first(tmp_path):
+    md = tmp_path / "blank.md"
+    md.write_text("[여백면] 첫 면\n\n본문\n", encoding="utf-8")
+    out = tmp_path / "blank.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    # The blank page is the document's first page: no break before it, only after.
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    assert [p.text for p in paragraphs if p.element.get("pageBreak") == "1"] == ["본문"]
+
+
 def test_convert_table_of_contents(tmp_path):
     md = tmp_path / "toc.md"
     md.write_text(
@@ -612,7 +824,8 @@ def test_convert_table_of_contents(tmp_path):
     texts = [p.text for p in doc.paragraphs[1:]]
     # The TOC field sits where the first marker was; the second marker adds nothing.
     assert texts[:6] == ["문서", "차례", "1. 문서\t1", "2. 소개\t1", "3. 사용법\t1", "4. 세부\t1"]
-    assert texts[6:] == ["", "소개", "본문", "", "사용법", "세부", "4수준"]  # level 4 is not listed
+    # level 4 is not listed in the TOC; level 1 headings get no empty paragraph before them.
+    assert texts[6:] == ["", "", "소개", "본문", "", "", "사용법", "", "세부", "", "4수준"]
     begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
     assert len(begins) == 1
     command = "".join(begins[0].itertext())
@@ -631,6 +844,54 @@ def test_convert_toc_without_headings_is_skipped(tmp_path):
     convert(md, TEMPLATE, out)
 
     assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["본문"]
+
+
+def test_convert_level_1_heading_starts_a_new_page(tmp_path):
+    md = tmp_path / "chapters.md"
+    md.write_text(
+        "# 첫 장\n\n본문\n\n## 절\n\n### 소절\n\n# 둘째 장\n\n본문\n\n# 셋째 장\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "chapters.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    # Only the level 1 headings that are not the first thing in the document start a page.
+    assert [p.text for p in paragraphs if p.element.get("pageBreak") == "1"] == ["둘째 장", "셋째 장"]
+    assert paragraphs[0].text == "첫 장" and paragraphs[0].element.get("pageBreak") != "1"
+
+
+def test_convert_level_1_heading_after_toc_starts_a_new_page(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("[TOC]\n\n# 첫 장\n\n본문\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    # The TOC is the document's first page, so the first chapter opens the next one.
+    assert [p.text for p in paragraphs if p.element.get("pageBreak") == "1"] == ["첫 장"]
+
+
+def test_convert_level_2_heading_page_breaks(tmp_path):
+    md = tmp_path / "sections.md"
+    md.write_text(
+        "# 첫 장\n\n본문\n\n## 첫째 절\n\na\n\n## 둘째 절\n\nb\n\n### 소절\n\n# 둘째 장\n\n본문\n\n## 첫 절\n\nc\n\n## 둘째 절\n\nd\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "sections.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    styles = {st.id: st.name for st in doc.styles.values()}
+    starts = [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"]
+    # The first level 2 heading of each chapter stays put; the ones after it open a page.
+    assert starts == ["둘째 절", "둘째 장", "둘째 절"]
+    assert [p.text for p in doc.paragraphs[1:] if styles[int(p.style_id_ref)] == "개요 2"] == [
+        "첫째 절", "둘째 절", "첫 절", "둘째 절"
+    ]
 
 
 def test_convert_page_breaks(tmp_path):
@@ -686,13 +947,13 @@ def test_convert_blocks_inside_list_items(tmp_path):
     doc = HwpxDocument.open(out)
     paragraphs = doc.paragraphs[1:]
     assert [_paragraph_info(doc, p) for p in paragraphs] == [
-        ("첫 항목", "NUMBER", 1500),
-        ("둘째 문단", "NONE", 1500 + 1000),  # the item's other blocks sit one level in
-        ("", "NONE", 1500 + 1000),  # code block anchor
-        ("", "NONE", 1500 + 1000),  # table anchor
-        ("항목 안 인용", "NONE", 1500 + 1000 + 1000),  # quote inside the item
-        ("둘째 항목", "NUMBER", 1500),
-        ("인용 안 목록", "BULLET", 1500 + 1000),
+        ("첫 항목", "NUMBER", BODY_LEFT),
+        ("둘째 문단", "NONE", BODY_LEFT + 1000),  # the item's other blocks sit one level in
+        ("", "NONE", BODY_LEFT + 1000),  # code block anchor
+        ("", "NONE", BODY_LEFT + 1000),  # table anchor
+        ("항목 안 인용", "NONE", BODY_LEFT + 1000 + 1000),  # quote inside the item
+        ("둘째 항목", "NUMBER", BODY_LEFT),
+        ("인용 안 목록", "BULLET", BODY_LEFT + 1000),
     ]
     assert [t.cell(0, 0).text for t in doc.tables.all] == ["x = 1", "a"]
     quote_bar = doc.styles.paragraph_property(paragraphs[4].para_pr_id_ref).border
@@ -732,15 +993,16 @@ def test_convert_commonmark_blocks(tmp_path):
     paragraphs = doc.paragraphs[1:]
     assert [(p.text, styles[int(p.style_id_ref)]) for p in paragraphs] == [
         ("제목 하나", "개요 1"),
+        ("", "본문"),  # before the level 2 setext heading
         ("제목 둘", "개요 2"),
         ("문단", "본문"),
         ("", "본문"),  # thematic break after a blank line
         ("", "본문"),  # indented code block anchor
         ("참조 링크 와", "본문"),
-        ("", "본문"),  # the referenced picture
+        ("", "바탕글"),  # the referenced picture
     ]
     assert doc.tables.all[0].cell(0, 0).text == "들여쓴 코드"
-    assert [link["url"] for link in paragraphs[5].hyperlinks] == ["https://example.com"]
+    assert [link["url"] for link in paragraphs[6].hyperlinks] == ["https://example.com"]
     assert len(doc.media.picture_references()) == 1
 
 
@@ -800,10 +1062,10 @@ def test_convert_pictures_in_list_items(tmp_path):
 
     doc = HwpxDocument.open(out)
     assert [_paragraph_info(doc, p) for p in doc.paragraphs[1:]] == [
-        ("단계", "NUMBER", 1500),
-        ("", "NONE", 1500 + 1000),  # picture under the item
-        ("", "NUMBER", 1500),  # an item holding only a picture keeps its number ...
-        ("", "NONE", 1500 + 1000),  # ... and the picture follows
+        ("단계", "NUMBER", BODY_LEFT),
+        ("", "NONE", BODY_LEFT + 1000),  # picture under the item
+        ("", "NUMBER", BODY_LEFT),  # an item holding only a picture keeps its number ...
+        ("", "NONE", BODY_LEFT + 1000),  # ... and the picture follows
     ]
     assert len(doc.media.picture_references()) == 2
 
@@ -816,11 +1078,19 @@ def test_convert_lists_after_headings(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    # A heading's level is not a list level: the lists still start at level 1.
+
+    def heading_left(level: int) -> int:
+        style = doc.styles.resolve(f"개요 {level}")
+        return int(doc.styles.paragraph_property(style.para_pr_id_ref).margin.left)
+
+    # A heading keeps its 개요 style's own indent; its level is not a list level: the lists still start at level 1.
+    # The empty 본문 paragraph goes before a sub-heading only, so the leading "## 절" gets none.
     assert [_paragraph_info(doc, p) for p in doc.paragraphs[1:]] == [
-        ("절", "OUTLINE", 1000 * 2),
-        ("하나", "BULLET", 1500),
-        ("둘", "BULLET", 1500 + 1000),
-        ("소절", "OUTLINE", 1000 * 3),
-        ("번호", "NUMBER", 1500),
+        ("", "NONE", BODY_LEFT),  # before the level 2 heading
+        ("절", "OUTLINE", heading_left(2)),
+        ("하나", "BULLET", BODY_LEFT),
+        ("둘", "BULLET", BODY_LEFT + 1000),
+        ("", "NONE", BODY_LEFT),  # before the level 3 heading
+        ("소절", "OUTLINE", heading_left(3)),
+        ("번호", "NUMBER", BODY_LEFT),
     ]

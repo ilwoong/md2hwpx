@@ -82,7 +82,7 @@ def test_cli_folder_input(tmp_path, monkeypatch):
 
     doc = HwpxDocument.open(tmp_path / "chapters.hwpx")
     assert [p.text for p in doc.paragraphs[1:] if p.text] == ["소개", "끝"]
-    assert [t.caption.text for t in doc.tables.all] == ["[표 1] 첫째", "[표 2] 둘째"]
+    assert [t.caption.text for t in doc.tables.all] == ["[표 1-1] 첫째", "[표 1-2] 둘째"]
     assert len(doc.media.picture_references()) == 1
 
 
