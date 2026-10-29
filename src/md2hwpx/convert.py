@@ -885,26 +885,28 @@ def _walk(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
         yield from _walk(child)
 
 
-def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
-    """(line number, path) of each image, outside code blocks, whose file is not in *base_dir*."""
+def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
+    """(line number, path) of each image outside code blocks, its path taken from *base_dir*."""
     # Front matter becomes blank lines, so line numbers still count it.
     markdown = _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
     lines = markdown.splitlines()
-    missing: list[tuple[int, Path]] = []
+    images: list[tuple[int, Path]] = []
     for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
         if node.type != "inline" or node.map is None:
             continue
         for image in (n for n in _walk(node) if n.type == "image"):
             src = image.attrs["src"]
-            path = base_dir / unquote(src)
-            if path.is_file():
-                continue
             # The line of the paragraph that names the image.
             start, end = node.map
             raw = next((s for s in (src, unquote(src)) if any(s in line for line in lines[start:end])), None)
             number = next((i + 1 for i in range(start, end) if raw and raw in lines[i]), start + 1)
-            missing.append((number, path))
-    return missing
+            images.append((number, base_dir / unquote(src)))
+    return images
+
+
+def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
+    """(line number, path) of each image, outside code blocks, whose file is not in *base_dir*."""
+    return [(number, path) for number, path in image_paths(markdown, base_dir) if not path.is_file()]
 
 
 def read_markdown(md_path: Path) -> str:
