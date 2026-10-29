@@ -334,10 +334,12 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
 - 이미지 파일이 없으면 `FileNotFoundError` 가 발생한다.
 
 ```python
+def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
 def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
 ```
 
-- 코드블록 밖의 이미지(인라인·참조식 포함) 중 파일이 없는 것의 (1부터 센 줄 번호, 경로) 목록을 돌려준다.
+- `image_paths` 는 코드블록 밖의 이미지(인라인·참조식 포함) 모두의 (1부터 센 줄 번호, `base_dir` 기준 경로) 목록을,
+  `missing_images` 는 그 가운데 파일이 없는 것의 목록을 돌려준다.
   줄 번호는 이미지 경로가 적힌 문단 안의 줄이며, 참조식이라 경로가 문단에 없으면 문단 첫 줄이다.
   front matter 가 있어도 원본 줄 번호로 센다.
 
@@ -364,6 +366,8 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
   - 그 경로에 파일이 있으면 덮어쓰지 않고, 확장자 앞에 `-1`, `-2` ... 를 붙여 처음으로 비어 있는 경로에 저장한다.
 - `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를 쓴다.
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
+  이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
+  없는 이미지는 `MissingImagesError` 로 알리고, 그 `missing` 에 (입력 파일, 줄, 이미지 경로) 목록을 담는다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
 - 변환 전에 입력 파일마다 `missing_images` 로 이미지 파일을 확인한다. 없는 이미지가 있으면 모두

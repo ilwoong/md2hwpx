@@ -2,3 +2,6 @@
 !pyproject.toml
 !uv.lock
 !docker/
+!src/
+!template.hwpx
+**/__pycache__

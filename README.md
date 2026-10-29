@@ -86,6 +86,19 @@ convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".
 이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
 파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
 
+### 웹 서비스
+
+브라우저에서 Markdown 을 올려 HWPX 를 내려받습니다. 다이어그램 도구를 담은 Docker 이미지로 실행합니다.
+
+```sh
+docker compose up -d --build    # http://localhost:8000
+```
+
+- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `https://` git 저장소 주소(브랜치·태그 선택).
+  zip·git 은 변환할 md 파일이나 폴더의 경로를 지정할 수 있습니다.
+- 템플릿 HWPX 를 함께 올리면 그 템플릿으로 변환합니다.
+- 인증 기능이 없으니 외부에 공개할 때는 앞단에서 접근을 제한하세요. 자세한 내용은 [웹 서비스 스펙](spec/web-service.md).
+
 ## 로컬 개발
 
 컨테이너 없이 개발할 때는 [uv](https://docs.astral.sh/uv/) 를 사용합니다.
@@ -105,7 +118,8 @@ tests/          pytest 테스트
 spec/           구현 스펙 문서
 samples/        변환 테스트용 샘플 Markdown (결과 HWPX 는 커밋하지 않음)
 docker/         Docker 이미지용 실행 스크립트와 설정
-Dockerfile      실행용 Alpine 이미지
+Dockerfile      실행용 Alpine 이미지 (dev: 코드 마운트, web: 웹 서비스)
+compose.yaml    웹 서비스 실행
 template.hwpx   변환에 사용하는 템플릿 HWPX
 md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
 ```
@@ -117,6 +131,7 @@ md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
 - [다이어그램 코드블록 → PNG 변환](spec/diagram-rendering.md)
 - [실행용 Docker 이미지](spec/docker.md)
 - [Markdown → HWPX 변환](spec/markdown-conversion.md)
+- [웹 서비스](spec/web-service.md)
 
 ## 라이선스
 

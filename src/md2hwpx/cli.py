@@ -29,13 +29,38 @@ def _input_files(path: Path) -> list[Path]:
     return files
 
 
-def _missing_image_messages(files: list[Path]) -> list[str]:
-    """A "file:line: ..." message for each image that the Markdown *files* name but is not there."""
-    return [
-        f"{f}:{line}: 이미지 파일이 없습니다: {image}"
+class MissingImagesError(Exception):
+    """Images the Markdown files name but are not there, as (file, line, image) in *missing*."""
+
+    def __init__(self, missing: list[tuple[Path, int, Path]]):
+        super().__init__("\n".join(_missing_image_message(*m) for m in missing))
+        self.missing = missing
+
+
+def _missing_image_message(file: Path, line: int, image: Path) -> str:
+    return f"{file}:{line}: 이미지 파일이 없습니다: {image}"
+
+
+def convert_input(input_path: Path, template: Path, output: Path) -> None:
+    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*.
+
+    Every missing image is reported (MissingImagesError) before anything is converted.
+    """
+    base_dir = input_path if input_path.is_dir() else input_path.parent
+    files = _input_files(input_path)
+    missing = [
+        (f, line, image)
         for f in files
         for line, image in missing_images(f.read_text(encoding="utf-8"), f.parent)
     ]
+    if missing:
+        raise MissingImagesError(missing)
+    # A blank line between files keeps the last block of one file from running into the next.
+    markdown = "\n\n".join(read_markdown(f) for f in files)
+    # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
+    with tempfile.TemporaryDirectory() as image_dir:
+        markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
+        convert_markdown(markdown, base_dir, template, output)
 
 
 def _output_path(input_path: Path, output: Path | None) -> Path:
@@ -70,22 +95,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     args = parser.parse_args(argv)
-    base_dir = args.input if args.input.is_dir() else args.input.parent
 
     try:
-        files = _input_files(args.input)
-        # Report every missing image before converting anything.
-        if missing := _missing_image_messages(files):
-            for message in missing:
-                print(f"md2hwpx: {message}", file=sys.stderr)
-            return 1
-        # A blank line between files keeps the last block of one file from running into the next.
-        markdown = "\n\n".join(read_markdown(f) for f in files)
         output = _output_path(args.input, args.output)
-        # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
-        with tempfile.TemporaryDirectory() as image_dir:
-            markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
-            convert_markdown(markdown, base_dir, args.template, output)
+        convert_input(args.input, args.template, output)
+    except MissingImagesError as error:
+        for missing in error.missing:
+            print(f"md2hwpx: {_missing_image_message(*missing)}", file=sys.stderr)
+        return 1
     except (OSError, DiagramError, HwpxError, ConversionError) as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
