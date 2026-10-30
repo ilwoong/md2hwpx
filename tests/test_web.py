@@ -11,8 +11,8 @@ from fastapi.testclient import TestClient
 from hwpx import HwpxDocument
 
 from md2hwpx import web
+from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 
-TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 client = TestClient(web.app)
 
 

@@ -48,7 +48,7 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 
 # 위 스크립트가 실행하는 명령 (저장소 루트에서)
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
-    python -m md2hwpx docs/guide.md -o docs/ -t template.hwpx
+    python -m md2hwpx docs/guide.md -o docs/
 
 # 로컬 (uv sync 후)
 uv run md2hwpx docs/guide.md          # ./guide.hwpx
@@ -56,7 +56,6 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
 ```
 
 - `md2hwpx.sh` 는 현재 폴더를 컨테이너에 마운트하므로 입력·출력·템플릿은 현재 폴더 안에 있어야 한다.
-  `-t` 를 생략하고 현재 폴더에 `template.hwpx` 가 없으면 이 저장소의 `template.hwpx` 를 쓴다.
 - 인자 없이 실행하면 도움말을 보여 준다.
 - 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
   폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
@@ -65,7 +64,8 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
   - 폴더면 그 폴더에 `입력 이름.hwpx` 로 저장한다.
   - 생략하면 현재 작업 폴더에 `입력 이름.hwpx` 로 저장한다.
   - 같은 이름의 파일이 있으면 덮어쓰지 않고 `이름-1.hwpx`, `이름-2.hwpx` ... 로 저장한다.
-- `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`.
+- `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`, 그것도 없으면 내장 템플릿
+  (`src/md2hwpx/template.hwpx`)을 쓴다.
 
 다이어그램은 임시 폴더에 렌더링해 HWPX 에 넣고 지우므로, 입력 폴더에 이미지 파일이 남지 않습니다.
 성공하면 저장한 파일 경로를 출력하고, 실패하면 오류를 stderr 에 출력하고 종료 코드 1 로 끝납니다.
@@ -74,17 +74,18 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
 
 ```python
 from pathlib import Path
-from md2hwpx.convert import convert_markdown, read_markdown
+from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, read_markdown
 from md2hwpx.diagram import render_diagrams
 
 doc = Path("docs/guide.md")
 markdown = render_diagrams(read_markdown(doc), out_dir=doc.parent / "images", link_base=doc.parent)
-convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".hwpx"))
+convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"))
 ```
 
 다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장되고,
 반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
 이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
+`DEFAULT_TEMPLATE` 은 내장 템플릿입니다. 다른 템플릿은 그 경로를 넘깁니다.
 파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
 
 ### 웹 서비스
@@ -193,14 +194,13 @@ uv run pytest -q
 ## 프로젝트 구조
 
 ```
-src/md2hwpx/    소스 코드
+src/md2hwpx/    소스 코드와 내장 템플릿(template.hwpx)
 tests/          pytest 테스트
 spec/           구현 스펙 문서
 samples/        변환 테스트용 샘플 Markdown (결과 HWPX 는 커밋하지 않음)
 docker/         Docker 이미지용 실행 스크립트와 설정
 Dockerfile      실행용 Alpine 이미지 (dev: 코드 마운트, web: 웹 서비스)
 compose.yaml    웹 서비스 실행
-template.hwpx   변환에 사용하는 템플릿 HWPX
 md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
 build-images.sh 개발용·웹 서비스 이미지를 latest·날짜 태그로 빌드하는 스크립트
 ```

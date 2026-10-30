@@ -55,7 +55,6 @@ WORKDIR /work
 # web: 코드와 템플릿을 넣은 웹 서비스. docker build --target web -t md2hwpx-web .
 FROM tools AS web
 RUN apk add --no-cache git
-COPY template.hwpx /app/
 COPY src /app/src
 # SANDBOX: 업로드한 PlantUML 이 !include 로 서버 파일이나 URL 을 읽지 못하게 한다.
 ENV PYTHONPATH=/app/src \
