@@ -5,6 +5,7 @@ import pytest
 from hwpx import HwpxDocument
 
 from md2hwpx.cli import main
+from test_convert import _text
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 needs_mmdc = pytest.mark.skipif(shutil.which("mmdc") is None, reason="mmdc not installed")
@@ -82,7 +83,7 @@ def test_cli_folder_input(tmp_path, monkeypatch):
 
     doc = HwpxDocument.open(tmp_path / "chapters.hwpx")
     assert [p.text for p in doc.paragraphs[1:] if p.text] == ["소개", "끝"]
-    assert [t.caption.text for t in doc.tables.all] == ["[표 1-1] 첫째", "[표 1-2] 둘째"]
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1-1] 첫째", "[표 1-2] 둘째"]
     assert len(doc.media.picture_references()) == 1
 
 
