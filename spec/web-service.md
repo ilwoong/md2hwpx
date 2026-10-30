@@ -92,6 +92,12 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 - 서버마다 세 값과 `MD2HWPX_BASE_URL` 이 모두 있어야 그 서버의 로그인이 켜진다. 하나도 없으면 지금처럼 로그인 없이 동작한다.
 - 콜백 주소(애플리케이션의 Redirect URI): `<MD2HWPX_BASE_URL>/oauth/gitlab/callback`, `<MD2HWPX_BASE_URL>/oauth/gitea/callback`.
+- 주소 조건 (설정 절차와 증상별 원인은 README "GitLab·Gitea 로그인 설정"):
+  - `MD2HWPX_BASE_URL` 은 사용자가 접속하는 주소와 글자 그대로 같아야 한다. 다르면 서버가 Redirect URI 를 거부하거나,
+    세션 쿠키가 콜백으로 이어지지 않아 `state` 확인에 실패한다.
+  - `MD2HWPX_GITLAB_URL`·`MD2HWPX_GITEA_URL` 은 브라우저(로그인 화면)와 컨테이너(토큰 요청, clone) 양쪽에서 접속되어야 한다.
+    컨테이너 안의 `localhost` 는 웹 서비스 자신이다.
+  - 저장소 주소가 이 서버 주소로 시작해야 토큰을 붙이므로, 같은 서버라도 IP 와 도메인을 섞어 쓰면 로그인하지 않은 것처럼 받는다.
 - 흐름 (authorization code):
   1. 페이지의 git 탭이 `GET /auth` 로 서버 목록과 로그인 여부를 보여 준다.
   2. `GET /login/{gitlab|gitea}` → 서버의 로그인·승인 화면 (GitLab `/oauth/authorize`, Gitea `/login/oauth/authorize`).
