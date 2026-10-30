@@ -27,6 +27,14 @@ def _page_body() -> tuple[int, int, int, int]:
 BODY_LEFT, BODY_WIDTH, BODY_HEIGHT, TEXT_WIDTH = _page_body()
 
 
+def _text(element) -> str:
+    """The text in *element* as Hancom shows it: a running number (hp:autoNum) as its cached value."""
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    return "".join(
+        e.get("num") if e.tag == f"{hp}autoNum" else "".join(e.itertext()) for e in element.iter(f"{hp}t", f"{hp}autoNum")
+    )
+
+
 def _png(width: int = 1, height: int = 1) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
@@ -252,9 +260,9 @@ def test_convert_caption_numbers_restart_in_each_chapter(tmp_path):
 
     doc = HwpxDocument.open(out)
     # The number is the chapter (level 1 heading) and the object's own count within it.
-    assert [t.caption.text for t in doc.tables.all] == ["[표 1-1] 첫 표", "[표 1-2] 둘째 표", "[표 2-1] 장2 표1"]
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1-1] 첫 표", "[표 1-2] 둘째 표", "[표 2-1] 장2 표1"]
     hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pictures = ["".join(pic.find(f"{hp}caption").itertext()) for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
+    pictures = [_text(pic.find(f"{hp}caption")) for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
     assert pictures == ["[그림 1-1] 첫 그림", "[그림 2-1] 장2 그림1"]
 
 
@@ -276,15 +284,15 @@ def test_convert_captions(tmp_path):
     doc = HwpxDocument.open(out)
     caption = doc.tables.all[0].caption
     # No level 1 heading here, so nothing is in a chapter and the numbers stay plain.
-    assert (caption.side, caption.text) == ("TOP", "[표 1] 표 캡션")
-    assert doc.tables.all[1].caption.text == "[표 2] 둘째 표"
+    assert (caption.side, _text(caption.element)) == ("TOP", "[표 1] 표 캡션")
+    assert _text(doc.tables.all[1].caption.element) == "[표 2] 둘째 표"
     code_caption = doc.tables.all[2].caption
-    assert (code_caption.side, code_caption.text) == ("TOP", "[표 3] 코드 캡션")
+    assert (code_caption.side, _text(code_caption.element)) == ("TOP", "[표 3] 코드 캡션")
     hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic"))
     pic_caption = pic.find(f"{hp}caption")
     assert pic_caption.get("side") == "BOTTOM"
-    assert "".join(pic_caption.itertext()) == "[그림 1] 그림 캡션"
+    assert _text(pic_caption) == "[그림 1] 그림 캡션"
     assert [p.text for p in doc.paragraphs if p.text] == ["[표] 표가 뒤따르지 않음", "문단"]
 
     style = doc.styles.resolve("표그림 제목")
@@ -317,7 +325,7 @@ def test_convert_alt_text_captions(tmp_path):
     hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
     captions = [pic.find(f"{hp}caption") for pic in pics]
-    assert [c is not None and "".join(c.itertext()) for c in captions] == [
+    assert [c is not None and _text(c) for c in captions] == [
         "[그림 1] 대체 텍스트 제목",
         "[그림 2] 줄로 쓴 제목",
         False,
@@ -453,6 +461,7 @@ def test_convert_inline_code(tmp_path):
         return [
             (run.text, doc.styles.font_face(run.element.get("charPrIDRef")) == "D2Coding")
             for run in paragraph.runs
+            if run.text  # not a control's own run, such as a heading's number restart
         ]
 
     heading, body = doc.paragraphs[1:3]
@@ -464,7 +473,8 @@ def test_convert_inline_code(tmp_path):
         (" 를 쓴다. 닫히지 않은 ` 는 그대로.", False),
     ]
     table = doc.tables.all[0]
-    assert runs(table.caption.paragraphs[0]) == [("[표 1-1] ", False), ("md2hwpx", True), (" 표", False)]
+    # The number is Hancom's own (hp:autoNum), a control in the first run rather than its text.
+    assert runs(table.caption.paragraphs[0]) == [("[표 1-] ", False), ("md2hwpx", True), (" 표", False)]
     header_run = table.cell(0, 0).paragraphs[0].runs[0]
     assert runs(table.cell(0, 0).paragraphs[0]) == [("헤더", True)]
     assert "bold" in doc.styles.char_property(header_run.element.get("charPrIDRef")).child_attributes
@@ -969,6 +979,82 @@ def test_convert_page_breaks(tmp_path):
     assert [p.text for p in paragraphs][-1] == "본문"
 
 
+def _new_numbers(paragraph) -> list[str]:
+    """The numTypes *paragraph* starts over (hp:newNum), each at 1."""
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    news = list(paragraph.element.iter(f"{hp}newNum"))
+    assert all(n.get("num") == "1" for n in news)
+    return [n.get("numType") for n in news]
+
+
+def test_convert_caption_numbers_are_hancoms_own(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png())
+    md = tmp_path / "numbers.md"
+    md.write_text(
+        "# 장\n\n[표] 표 캡션\n\n| a |\n|---|\n| 1 |\n\n```\n캡션 없는 코드\n```\n\n"
+        "![](a.png)\n\n[그림] 그림 캡션\n\n![](a.png)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "numbers.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    tables = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}tbl")]
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    # The caption's number is an hp:autoNum, as Hancom writes it, holding the count as its cached value.
+    auto = tables[0].find(f"{hp}caption").find(f".//{hp}autoNum")
+    assert (auto.get("numType"), auto.get("num")) == ("TABLE", "1")
+    assert auto.find(f"{hp}autoNumFormat").get("type") == "DIGIT"
+    assert pics[1].find(f"{hp}caption").find(f".//{hp}autoNum").get("numType") == "PICTURE"
+    # Hancom counts every table and picture: those without a caption are kept out of the count.
+    assert [t.get("numberingType") for t in tables] == ["TABLE", "NONE"]
+    assert [p.get("numberingType") for p in pics] == ["NONE", "PICTURE"]
+    # A chapter starts the table and picture numbers over, on its heading.
+    assert _new_numbers(doc.paragraphs[1]) == ["PICTURE", "TABLE"]
+
+
+def test_convert_page_break_restarts_numbers(tmp_path):
+    md = tmp_path / "restart.md"
+    md.write_text(
+        "# 장\n\n[표] 첫째\n\n| a |\n|---|\n| 1 |\n\n"
+        "\\newpage 쪽 표 그림 수식\n[표] 둘째\n\n| b |\n|---|\n| 2 |\n\n"
+        "\\newpage 장\n\n\\newpage 쪽\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "restart.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    # The count starts over within the chapter; the chapter number stays.
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1-1] 첫째", "[표 1-1] 둘째"]
+    second = next(p for p in doc.paragraphs if p.element.get("pageBreak") == "1")
+    assert _new_numbers(second) == ["EQUATION", "PAGE", "PICTURE", "TABLE"]
+    # The restarts come before the table the paragraph holds, so it is numbered after them.
+    tags = [e.tag for e in second.element.iter(f"{hp}newNum", f"{hp}tbl")]
+    assert tags[-1] == f"{hp}tbl"
+    # An unknown word leaves the line as text; a restart with nothing after it is dropped.
+    assert doc.paragraphs[-1].text == "\\newpage 장"
+    assert _new_numbers(doc.paragraphs[-1]) == []
+
+
+def test_convert_page_break_before_toc_restarts_numbers_at_the_toc(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("표지\n\n\\newpage 쪽\n[TOC]\n\n# 장\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    assert paragraphs[1].text == "차례" and paragraphs[1].element.get("pageBreak") == "1"
+    assert _new_numbers(paragraphs[1]) == ["PAGE"]
+    heading = next(p for p in paragraphs if p.text == "장")
+    assert _new_numbers(heading) == ["PICTURE", "TABLE"]
+
+
 def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
     from hwpx.tools.validator import ValidationIssue, ValidationReport
 
@@ -1077,7 +1163,7 @@ def test_convert_image_inside_text(tmp_path):
     pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
     assert len(pics) == 2
     assert pics[0].find(f"{hp}caption") is None
-    assert "".join(pics[1].find(f"{hp}caption").itertext()) == "[그림 1] 캡션"
+    assert _text(pics[1].find(f"{hp}caption")) == "[그림 1] 캡션"
 
 
 def test_convert_emphasis_and_formatted_footnotes(tmp_path):

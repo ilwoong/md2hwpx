@@ -31,7 +31,8 @@ _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 _MARKERS = {
     # "[TOC]", or "[TOC 그림 표 제목]": the lists to make, in that order. "링크없음" leaves out the links.
     "toc": re.compile(r"\[TOC((?:[ \t]+(?:제목|표|그림|수식|링크없음))*)[ \t]*\]", re.IGNORECASE),
-    "page_break": re.compile(r"\\(?:newpage|pagebreak)"),
+    # "\newpage", or "\newpage 쪽 표 그림 수식": those numbers start over on the new page.
+    "page_break": re.compile(r"\\(?:newpage|pagebreak)((?:[ \t]+(?:쪽|표|그림|수식))*)[ \t]*"),
     # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
     "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
 }
@@ -61,6 +62,8 @@ TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 TOC_KINDS = {"제목": 17, "표": 2, "그림": 4, "수식": 8}
 TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
 _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
+# Hancom's running numbers (hp:newNum / hp:autoNum numType) a "\newpage" line can start over.
+NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
@@ -109,7 +112,7 @@ class _Piece(NamedTuple):
     kind: str
     runs: list[Run] | None = None
     image: SyntaxTreeNode | None = None
-    text: str = ""  # a blank page's wording, or the TOC marker's words (see _MARKERS)
+    text: str = ""  # a blank page's wording, or the TOC or page break marker's words (see _MARKERS)
 
 
 class ConversionError(Exception):
@@ -358,7 +361,7 @@ def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
         if found:
             flush()
             marker, match = found
-            # The blank page marker carries a wording and the TOC marker its words, in their one group.
+            # The blank page marker carries a wording, the TOC and page break markers their words, in their one group.
             pieces.append(_Piece(marker, text=match.group(1).strip() if match.groups() else ""))
             continue
         if runs:
@@ -411,12 +414,15 @@ class _Writer:
         self.caption: list[Run] | None = None  # for the next table, code block or picture
         # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
-        self.numbers = {"표": 0, "그림": 0}  # within that chapter
+        self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "\newpage 표" / "\newpage 그림"
+        self.caption_number: tuple[str, int, str] | None = None  # the caption's (text before it, number, numType)
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_page_break = False  # a page break right before the [TOC] marker
         self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
         self.toc_links = True  # entries are hyperlinks, unless the [TOC] marker says 링크없음
         self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
+        self.restarts: dict[int, set[str]] = {}  # paragraph index -> numTypes that start over at 1 there
+        self.toc_restarts: set[str] = set()  # numTypes that start over at the TOC
         # Paragraphs already there when the conversion starts (see new_page).
         self._first_content = self.paragraph_count()
         self._h2_seen = 0  # level 2 headings in the chapter being written (see heading)
@@ -552,6 +558,8 @@ class _Writer:
 
     def set_caption(self, obj, side: str) -> None:
         if self.caption is None:
+            # Hancom numbers every table and picture, captioned or not: keep this one out of the count.
+            obj.element.set("numberingType", "NONE")
             return
         style = self.caption_style
         caption = obj.set_caption(_plain(self.caption), side=side, char_pr_id_ref=style.char_pr_id_ref)
@@ -559,6 +567,7 @@ class _Writer:
             paragraph.style_id_ref = style.id
             paragraph.para_pr_id_ref = style.para_pr_id_ref
             self.write_runs(paragraph, self.caption, footnotes=False)
+        _auto_number(caption.paragraphs[0], *self.caption_number)
         self.caption = None
 
     def take_caption(self, runs: list[Run], following: str | None) -> bool:
@@ -577,10 +586,21 @@ class _Writer:
 
     def number_caption(self, kind: str, title: list[Run]) -> None:
         """Keep "[표 2-1] *title*" / "[그림 2-1] *title*" as the next caption: the number is the chapter
-        (the level 1 heading it is under) and, after it, the object's own count within that chapter."""
+        (the level 1 heading it is under) and, after it, the object's own count within that chapter.
+
+        The count becomes Hancom's own number (see _auto_number), which starts over where the count does.
+        """
         self.numbers[kind] += 1
-        number = f"{self.chapter}-{self.numbers[kind]}" if self.chapter else str(self.numbers[kind])
-        self.caption = [Run(f"[{kind} {number}] "), *title]
+        before = f"[{kind} {self.chapter}-" if self.chapter else f"[{kind} "
+        self.caption_number = (before, self.numbers[kind], NUMBERS[kind])
+        self.caption = [Run(f"{before}{self.numbers[kind]}] "), *title]
+
+    def restart(self, at: int, names: Iterable[str]) -> None:
+        """Start the numbers *names* (keys of NUMBERS) over at 1 from the paragraph at index *at*."""
+        for name in names:
+            self.restarts.setdefault(at, set()).add(NUMBERS[name])
+            if name in self.numbers:
+                self.numbers[name] = 0
 
     def add_table(self, rows: int, columns: int, quote: int, indent: int):
         """A new table (a code block is one too) that runs on to the next pages, placed like a paragraph."""
@@ -615,7 +635,7 @@ class _Writer:
             self._h2_seen = 0  # the next level 2 heading is a chapter's first
             # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
             self.chapter += 1
-            self.numbers = {"표": 0, "그림": 0}
+            self.restart(self.paragraph_count(), self.numbers)
             self.new_page()  # a chapter opens a page
         elif depth == 2:
             self._h2_seen += 1
@@ -666,8 +686,10 @@ class _Writer:
                     if self.toc_at in self.page_breaks:
                         self.page_breaks.remove(self.toc_at)
                         self.toc_page_break = True
+                    self.toc_restarts = self.restarts.pop(self.toc_at, set())
             elif piece.kind == "page_break":
                 self.page_breaks.append(self.paragraph_count())
+                self.restart(self.paragraph_count(), piece.text.split())
             elif piece.kind == "blank_page":
                 self.blank_page(piece.text)
             elif piece.kind == "image":
@@ -877,6 +899,9 @@ class _Writer:
         for index in self.page_breaks:
             if index < len(paragraphs):
                 paragraphs[index].element.set("pageBreak", "1")
+        for index, num_types in self.restarts.items():
+            if index < len(paragraphs):
+                _new_numbers(paragraphs[index], num_types)
 
         headings = [p for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL]
         if self.toc_at is not None and headings:
@@ -903,6 +928,34 @@ class _Writer:
                         entry.element.getparent().remove(entry.element)
             if self.toc_page_break:
                 self.doc.paragraphs[self.toc_at].element.set("pageBreak", "1")
+            _new_numbers(self.doc.paragraphs[self.toc_at], self.toc_restarts)
+
+
+def _new_numbers(paragraph, num_types: Iterable[str]) -> None:
+    """Start Hancom's running numbers *num_types* over at 1 from *paragraph* (hp:newNum)."""
+    first_run = paragraph.element.find(f"{_HP}run")
+    for num_type in sorted(num_types):
+        ctrl = paragraph.add_new_num(number=1, kind=num_type)
+        # Ahead of what the paragraph holds: a table in it is numbered after the restart.
+        first_run.addprevious(ctrl.element.getparent())
+
+
+def _auto_number(paragraph, before: str, number: int, num_type: str) -> None:
+    """Make *number*, right after *before* at the start of *paragraph*, Hancom's own running number
+    (hp:autoNum *num_type*), as Hancom writes a caption's number; *number* is its cached value."""
+    text = paragraph.element.find(f"{_HP}run/{_HP}t")
+    rest = text.text[len(before) + len(str(number)) :]
+    text.text = before
+    ctrl = text.makeelement(f"{_HP}ctrl", {})
+    auto = ctrl.makeelement(f"{_HP}autoNum", {"num": str(number), "numType": num_type})
+    auto.append(auto.makeelement(f"{_HP}autoNumFormat", {
+        "type": "DIGIT", "userChar": "", "prefixChar": "", "suffixChar": "", "supscript": "0",
+    }))
+    ctrl.append(auto)
+    after = text.makeelement(f"{_HP}t", {})
+    after.text = rest
+    text.addnext(ctrl)
+    ctrl.addnext(after)
 
 
 def _set_toc_make(paragraph, field_id: str, make: int) -> None:
