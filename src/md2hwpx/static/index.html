@@ -33,6 +33,9 @@
   #status { margin-top: 16px; white-space: pre-wrap; }
   #status.error { color: var(--error); }
   #status.warning { color: var(--warning); }
+  #accounts { margin: -6px 0 14px; color: var(--muted); }
+  #accounts a, #accounts .link { color: var(--accent); }
+  #accounts .link { padding: 0; border: 0; background: none; font: inherit; font-weight: normal; cursor: pointer; text-decoration: underline; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -65,8 +68,9 @@
     <fieldset data-source="git" hidden>
       <label class="field"><span>저장소 주소</span>
         <input type="url" name="repo" placeholder="https://github.com/user/repo.git">
-        <small>http·https 로 인증 없이 받을 수 있는 저장소만 됩니다 (폐쇄망 http 저장소 포함).</small>
+        <small>http·https 저장소 (폐쇄망 http 저장소 포함). 비공개 저장소는 아래에서 그 서버에 로그인하세요.</small>
       </label>
+      <div id="accounts" hidden></div>
       <label class="field"><span>브랜치 또는 태그 (선택)</span>
         <input type="text" name="ref" placeholder="기본 브랜치">
       </label>
@@ -103,6 +107,43 @@
   }
   for (const radio of form.source) radio.addEventListener("change", showSource);
   showSource();
+
+  // Servers to sign in to for private repositories (GitLab, Gitea), if this instance is set up for any.
+  const accounts = document.getElementById("accounts");
+  async function showAccounts() {
+    const servers = await fetch("auth").then((r) => r.json()).catch(() => []);
+    accounts.replaceChildren();
+    for (const server of servers) {
+      const line = document.createElement("div");
+      line.append(`${server.label} (${server.url}): `);
+      if (server.signed_in) {
+        const out = document.createElement("button");
+        out.type = "button";
+        out.className = "link";
+        out.textContent = "로그아웃";
+        out.addEventListener("click", async () => { await fetch(`logout/${server.name}`, { method: "POST" }); showAccounts(); });
+        line.append("로그인됨 · ", out);
+      } else {
+        const link = document.createElement("a");
+        link.href = `login/${server.name}`;
+        link.textContent = "로그인";
+        line.append(link);
+      }
+      accounts.append(line);
+    }
+    accounts.hidden = servers.length === 0;
+  }
+  showAccounts();
+
+  // Back from a sign-in that failed: show why, and drop it from the address.
+  const loginError = new URLSearchParams(location.search).get("login_error");
+  if (loginError) {
+    for (const radio of form.source) radio.checked = radio.value === "git";
+    showSource();
+    status.className = "error";
+    status.textContent = loginError;
+    history.replaceState(null, "", location.pathname);
+  }
 
   function filename(response) {
     const header = response.headers.get("Content-Disposition") || "";
