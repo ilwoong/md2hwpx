@@ -26,6 +26,7 @@ Dockerfile 은 세 단계다.
 | `docker/plantuml` | `java -jar plantuml.jar` 실행 스크립트 |
 | `.dockerignore` | 빌드 컨텍스트를 `pyproject.toml`, `uv.lock`, `docker/`, `src/`(`__pycache__` 제외), `template.hwpx` 로 제한 |
 | `compose.yaml` | `web` 단계를 빌드해 8000 번 포트로 실행 |
+| `build-images.sh` | `dev`·`web` 이미지를 빌드해 `latest` 와 날짜 태그로 남긴다 (아래 "빌드 스크립트") |
 
 ## 이미지 내용
 
@@ -84,6 +85,22 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
   `../` 처럼 밖을 가리키면 "No such file or directory" 오류가 난다.
 - 이미지 이름은 `md2hwpx` 로 고정이다 (`docker build -t md2hwpx .` 로 만든 이미지).
 
+## 빌드 스크립트 (`build-images.sh`)
+
+이미지를 빌드할 때마다 그날 날짜 태그를 남겨, 이전 이미지로 되돌릴 수 있게 하는 POSIX sh 스크립트.
+
+```sh
+/path/to/md2hwpx/build-images.sh
+```
+
+- 저장소 폴더로 옮겨 `dev` 이미지(`docker build -t md2hwpx .`)와 `web` 이미지(`docker compose build web`)를 빌드한 뒤,
+  각각의 `latest` 에 `<YYMMDD>` 태그(`date +%y%m%d`, 예: `md2hwpx:261030`, `md2hwpx-web:261030`)를 붙인다.
+  어느 폴더에서나 실행할 수 있다. 두 이미지는 `tools` 단계를 함께 쓰므로 공통 부분은 한 번만 빌드된다.
+- 같은 날 다시 빌드하면 그날 태그를 새 이미지로 옮긴다. 이전 날짜 태그는 그대로 남는다.
+- 빌드만 한다. 실행 중인 웹 서비스는 `docker compose up -d` 로 바꾼다. 중간에 실패하면 거기서 멈추고 태그를 붙이지 않는다.
+- 바뀐 것이 없어 모든 단계가 캐시돼도 이미지 ID 는 빌드마다 바뀔 수 있다. 빌드 기록(attestation)에 빌드 시각이 들어가기 때문이며,
+  레이어는 같다.
+
 ## 검증 기준
 
 | 항목 | 방법 |
@@ -94,4 +111,5 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 | D2Coding | `fc-list` 에 Regular/Bold 가 보이고, 폰트를 지정한 두 다이어그램이 고정폭으로 그려짐 |
 | 한글 렌더링 | 한글 라벨을 가진 mermaid / plantuml 다이어그램 PNG 를 눈으로 확인 |
 | 실행 스크립트 | 저장소 밖 폴더에서 다이어그램이 있는 문서 변환, `-o` 폴더, 인자 없이 도움말, 저장소 템플릿 자동 사용, 밖 경로 오류 |
+| 빌드 스크립트 | 저장소 밖 폴더에서 실행, 두 이미지 모두 `latest` 와 날짜 태그가 같은 이미지(같은 레이어) |
 | 마운트 폴더 오염 없음 | 실행 후 프로젝트 폴더에 core 덤프, `?` 폴더 등 새 파일이 없음 |
