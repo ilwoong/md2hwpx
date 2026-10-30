@@ -105,10 +105,9 @@ def test_cli_reports_missing_files(tmp_path, monkeypatch, capsys):
 
     assert main([str(tmp_path / "nope.md"), "-t", str(TEMPLATE)]) == 1
     assert main([str(md), "-t", str(tmp_path / "nope.hwpx")]) == 1
-    assert main([str(md), "-t", str(TEMPLATE)]) == 1
     assert main([str(tmp_path / "empty"), "-t", str(TEMPLATE)]) == 1
     err = capsys.readouterr().err
-    assert err.count("md2hwpx: ") == 4 and "missing.png" in err and "no .md files" in err
+    assert err.count("md2hwpx: ") == 3 and "no .md files" in err
     assert not (tmp_path / "doc.hwpx").exists()
 
 
@@ -125,30 +124,33 @@ def test_cli_renders_diagrams(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["doc.hwpx", "doc.md"]  # no images left behind
 
 
-def test_cli_reports_missing_images_with_location(tmp_path, monkeypatch, capsys):
+def test_cli_warns_about_missing_images_with_location(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     folder = tmp_path / "book"
     folder.mkdir()
     (folder / "1.md").write_text("# 하나\n\n```\n![](in-code.png)\n```\n", encoding="utf-8")
     (folder / "2.md").write_text("---\nk: v\n---\n![](a.png)\n\n![](b.png)\n", encoding="utf-8")
 
-    assert main([str(folder), "-t", str(TEMPLATE)]) == 1
+    assert main([str(folder), "-t", str(TEMPLATE)]) == 0
 
-    assert capsys.readouterr().err.splitlines() == [
-        f"md2hwpx: {folder / '2.md'}:4: 이미지 파일이 없습니다: {folder / 'a.png'}",
-        f"md2hwpx: {folder / '2.md'}:6: 이미지 파일이 없습니다: {folder / 'b.png'}",
+    # The HWPX is made, with a placeholder for each missing image, and each one is warned about.
+    out = capsys.readouterr()
+    assert out.err.splitlines() == [
+        f"md2hwpx: 경고: {folder / '2.md'}:4: 이미지 파일이 없어 대체 이미지를 넣었습니다: {folder / 'a.png'}",
+        f"md2hwpx: 경고: {folder / '2.md'}:6: 이미지 파일이 없어 대체 이미지를 넣었습니다: {folder / 'b.png'}",
     ]
-    assert not (tmp_path / "book.hwpx").exists()
+    assert out.out == "book.hwpx\n"
+    assert len(HwpxDocument.open(tmp_path / "book.hwpx").media.picture_references()) == 2
 
 
-def test_cli_reports_inline_and_reference_images(tmp_path, monkeypatch, capsys):
+def test_cli_warns_about_inline_and_reference_images(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     md = tmp_path / "doc.md"
     md.write_text("# 제목\n\n앞 ![](inline.png) 뒤\n\n![참조][pic]\n\n[pic]: ref%20image.png\n", encoding="utf-8")
 
-    assert main([str(md), "-t", str(TEMPLATE)]) == 1
+    assert main([str(md), "-t", str(TEMPLATE)]) == 0
 
     assert capsys.readouterr().err.splitlines() == [
-        f"md2hwpx: {md}:3: 이미지 파일이 없습니다: {tmp_path / 'inline.png'}",
-        f"md2hwpx: {md}:5: 이미지 파일이 없습니다: {tmp_path / 'ref image.png'}",
+        f"md2hwpx: 경고: {md}:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: {tmp_path / 'inline.png'}",
+        f"md2hwpx: 경고: {md}:5: 이미지 파일이 없어 대체 이미지를 넣었습니다: {tmp_path / 'ref image.png'}",
     ]

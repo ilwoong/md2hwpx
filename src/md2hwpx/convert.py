@@ -44,6 +44,8 @@ _HP_P = f"{_HP}p"
 _LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
+# Shown in place of an image whose file is not there.
+MISSING_IMAGE = Path(__file__).resolve().parent / "static" / "missing-image.png"
 BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
@@ -712,6 +714,8 @@ class _Writer:
 
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
+        if not image_path.is_file():
+            image_path = MISSING_IMAGE  # the caller warns about it (missing_images)
         data = image_path.read_bytes()
         if self.caption is None:  # without a "[그림] ..." line, the alt text (if any) is the caption
             alt = _strip(_runs(node.children))

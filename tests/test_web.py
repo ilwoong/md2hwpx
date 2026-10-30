@@ -70,12 +70,20 @@ def test_files_with_image(tmp_path):
     doc = _hwpx(response, tmp_path)
     assert [p.text for p in doc.paragraphs if p.text][:2] == ["제목", "본문"]
     assert len(doc.media.picture_references()) == 1
+    assert "x-md2hwpx-warnings" not in response.headers
 
 
-def test_files_missing_image_is_reported_from_the_upload():
-    files = [("files", ("doc.md", b"text\n\n![](missing.png)\n", "text/markdown"))]
-    detail = _error(client.post("/convert", data={"source": "files"}, files=files))
-    assert detail == "doc.md:3: 이미지 파일이 없습니다: missing.png"
+def test_files_missing_image_is_a_placeholder_and_a_warning(tmp_path):
+    files = [("files", ("doc.md", b"text\n\n![](missing.png)\n\n![](img/gone.png)\n", "text/markdown"))]
+    response = client.post("/convert", data={"source": "files"}, files=files)
+
+    doc = _hwpx(response, tmp_path)
+    assert len(doc.media.picture_references()) == 2
+    # Named from the upload's root, one per line, URL-encoded as a header holds Latin-1 only.
+    assert unquote(response.headers["x-md2hwpx-warnings"]).splitlines() == [
+        "doc.md:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: missing.png",
+        "doc.md:5: 이미지 파일이 없어 대체 이미지를 넣었습니다: img/gone.png",
+    ]
 
 
 @pytest.mark.parametrize("src", ["../secret.png", "/etc/hostname", "%2E%2E/secret.png"])

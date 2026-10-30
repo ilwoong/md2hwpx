@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from hwpx.errors import HwpxError
 
-from md2hwpx.cli import MissingImagesError, convert_input
+from md2hwpx.cli import convert_input, missing_image_message
 from md2hwpx.convert import ConversionError, image_paths
 from md2hwpx.diagram import DiagramError
 
@@ -31,6 +31,7 @@ GIT_TIMEOUT = 120  # seconds
 _REPO = re.compile(r"https://[^\s]+")
 _REF = re.compile(r"[\w][\w./-]*")
 HWPX_TYPE = "application/hwp+zip"
+WARNINGS_HEADER = "X-Md2hwpx-Warnings"  # what the HWPX was made despite, one per line
 
 app = FastAPI(title="md2hwpx")
 
@@ -208,16 +209,18 @@ def convert(
             budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
-            convert_input(input_path, template_path, output)
-        except MissingImagesError as error:
-            # Every image is inside root (_check_images): name them from there.
-            lines = [f"{_relative(f, root)}:{line}: 이미지 파일이 없습니다: {_relative(image.resolve(), root)}"
-                     for f, line, image in error.missing]
-            raise HTTPException(400, "\n".join(lines)) from None
+            missing = convert_input(input_path, template_path, output)
         except (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile) as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None
         data = output.read_bytes()
+        # Every image is inside root (_check_images): name them from there.
+        warnings = [missing_image_message(_relative(f, root), line, _relative(image.resolve(), root))
+                    for f, line, image in missing]
     filename = f"{name}.hwpx"
     disposition = f"attachment; filename=\"document.hwpx\"; filename*=UTF-8''{quote(filename)}"
-    return Response(data, media_type=HWPX_TYPE, headers={"Content-Disposition": disposition})
+    headers = {"Content-Disposition": disposition}
+    if warnings:
+        # A header holds Latin-1 only: the page decodes it (decodeURIComponent).
+        headers[WARNINGS_HEADER] = quote("\n".join(warnings))
+    return Response(data, media_type=HWPX_TYPE, headers=headers)

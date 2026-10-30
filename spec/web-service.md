@@ -50,8 +50,12 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 - 성공: `200`, `Content-Type: application/hwp+zip`,
   `Content-Disposition: attachment; filename="document.hwpx"; filename*=UTF-8''<이름>.hwpx`.
+  - 없는 이미지는 대체 이미지로 변환하고, `X-Md2hwpx-Warnings` 헤더에 경고를 한 줄씩 담는다
+    (`docs/a.md:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: img/b.png`).
+    헤더는 Latin-1 만 담으므로 퍼센트 인코딩하고, 페이지가 풀어서 내려받기 안내 아래에 경고 색으로 보여 준다.
+    경고가 없으면 헤더도 없다.
 - 실패: `400` (업로드 크기 초과는 `413`), `{"detail": "<한국어 메시지>"}`.
-  메시지의 경로는 서버 임시 폴더가 아니라 올린 내용의 맨 위 폴더 기준이다 (`docs/a.md:3: 이미지 파일이 없습니다: img/b.png`).
+  메시지와 경고의 경로는 서버 임시 폴더가 아니라 올린 내용의 맨 위 폴더 기준이다.
 
 ## 입력 처리
 
@@ -99,7 +103,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 | 항목 | 방법 |
 |------|------|
-| 파일 입력 | md + 이미지 → 그림이 든 HWPX, 한글 파일 이름 헤더, 없는 이미지 메시지(올린 이름 기준), md 없음 |
+| 파일 입력 | md + 이미지 → 그림이 든 HWPX, 한글 파일 이름 헤더, 없는 이미지의 대체 이미지와 경고 헤더(올린 이름 기준), 경고 없으면 헤더 없음, md 없음 |
 | zip 입력 | 폴더 하나를 압축한 zip 의 이름 순 합치기와 하위 폴더 이미지, `path` 로 파일 고르기, cp949 이름, zip 아님 |
 | git 입력 | clone 명령의 `--branch`, `--`, 프로토콜·심볼릭 링크 설정 (테스트는 `subprocess.run` 을 대신함), `.git` 제거 |
 | 보안 | root 밖 이미지 3가지, zip slip, root 밖 `path`, https 아닌 주소 4가지, 옵션 모양의 `ref`, 심볼릭 링크 제거, 업로드 크기 제한 |
