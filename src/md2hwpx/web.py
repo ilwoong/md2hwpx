@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from hwpx.errors import HwpxError
 
-from md2hwpx.cli import convert_input, image_warning
+from md2hwpx.cli import convert_input, image_warning, input_files
 from md2hwpx.convert import ConversionError, image_paths
 from md2hwpx.diagram import DiagramError
 
@@ -157,9 +157,10 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
 
 def _check_images(input_path: Path, root: Path) -> None:
     """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX."""
-    files = [input_path] if input_path.is_file() else sorted(input_path.glob("*.md"))
-    if not files:
-        raise HTTPException(400, f"변환할 .md 파일이 없습니다: {_relative(input_path, root) or '/'}")
+    try:
+        files = input_files(input_path)
+    except FileNotFoundError:
+        raise HTTPException(400, f"변환할 .md 파일이 없습니다: {_relative(input_path, root) or '/'}") from None
     for md in files:
         for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
             if not _inside(image, root):

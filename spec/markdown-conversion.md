@@ -371,6 +371,8 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
 ```python
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
 def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]]
+
+# md2hwpx.images
 def picture_data(path: Path) -> tuple[bytes, str]
 ```
 
@@ -407,6 +409,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를 쓴다.
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
+  입력 파일 목록은 `input_files(input_path)` 가 정하며, 웹 서비스가 이미지 경로를 검사할 때도 같은 목록을 쓴다.
   넣을 수 없는 이미지의 (입력 파일, 줄, 이미지 경로, 이유) 목록을 돌려준다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.

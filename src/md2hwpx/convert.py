@@ -2,31 +2,27 @@
 
 from __future__ import annotations
 
-import io
 import re
-import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import unquote
 
 from hwpx import HwpxDocument
-from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.oxml import Style
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
 from markdown_it.tree import SyntaxTreeNode
-from PIL import Image
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 
-from md2hwpx.diagram import LANGS
+from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER
+from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
-# File names render_diagrams gives the PNGs it renders.
-_DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
 # "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
@@ -43,13 +39,8 @@ _MARKERS = {
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
-# An image's width / height attribute: percent of the page body, or millimetres.
-_LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
-# Shown in place of an image whose file is not there, or that cannot be read.
-MISSING_IMAGE = Path(__file__).resolve().parent / "static" / "missing-image.png"
-SVG_TIMEOUT = 60  # seconds for rsvg-convert
 BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
@@ -72,15 +63,10 @@ _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
 # Hancom's running numbers (hp:newNum / hp:autoNum numType) a "\newpage" line can start over.
 NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
 HIDE_PAGE = "쪽숨김"  # on a "\newpage" line: that page shows no page number, header or footer
-HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
-HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
 # A picture is laid out as a character in its paragraph, so it follows that paragraph's alignment: one
 # narrower than the body is centred rather than left at the margin.
 PICTURE_REDUCED_ALIGN = "CENTER"
-# Table cell padding, as Hancom's own new tables have it: 1.8 mm left and right, 0.5 mm above and below.
-CELL_MARGIN_LR = 510  # HWPUNIT (1.8 mm)
-CELL_MARGIN_TB = 141  # HWPUNIT (0.5 mm)
 OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above and below: about one 10pt line
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
@@ -123,108 +109,24 @@ class _Piece(NamedTuple):
     text: str = ""  # a blank page's wording, or the TOC or page break marker's words (see _MARKERS)
 
 
+@dataclass
+class _PageStart:
+    """What a paragraph does about its page: start a new one, start numbers over, hide the page number."""
+
+    page_break: bool = False
+    restarts: set[str] = field(default_factory=set)  # numTypes (NUMBERS values) that start over at 1 there
+    hide: bool = False  # the page shows no page number, header or footer
+
+    def apply(self, paragraph) -> None:
+        if self.page_break:
+            paragraph.element.set("pageBreak", "1")
+        _new_numbers(paragraph, self.restarts)
+        if self.hide:
+            _hide_page(paragraph)
+
+
 class ConversionError(Exception):
     """The converted document failed HWPX validation, so it was not saved."""
-
-
-def _image_pixels(data: bytes) -> tuple[int, int] | None:
-    """(width, height) in pixels of a PNG, GIF or JPEG image, or None."""
-    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
-        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
-    if data.startswith(b"\xff\xd8"):
-        i = 2
-        while i + 9 <= len(data) and data[i] == 0xFF:
-            marker = data[i + 1]
-            # Start-of-frame markers hold the size; C4 / C8 / CC are other tables.
-            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                return int.from_bytes(data[i + 7 : i + 9], "big"), int.from_bytes(data[i + 5 : i + 7], "big")
-            i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
-    return None
-
-
-class ImageError(Exception):
-    """An image that cannot go in the HWPX. The message is a Korean clause ending in "-어" / "-해",
-    which a warning goes on from ("... 대체 이미지를 넣었습니다")."""
-
-
-def _image_format(data: bytes) -> str | None:
-    """The format of a PNG, JPEG or GIF image, as the HWPX names it, or None."""
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png"
-    if data.startswith(b"\xff\xd8"):
-        return "jpg"
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    return None
-
-
-def picture_data(path: Path) -> tuple[bytes, str]:
-    """The image at *path* as (data, format) to put in the HWPX: PNG, JPEG and GIF as they are, any other
-    image as PNG (SVG by rsvg-convert, the rest by Pillow). Raises ImageError if it cannot be either."""
-    if not path.is_file():
-        raise ImageError("이미지 파일이 없어")
-    data = path.read_bytes()
-    image_format = _image_format(data)
-    if image_format is not None:
-        return data, image_format
-    if path.suffix.lower() == ".svg" or b"<svg" in data[:4096]:
-        return _svg_to_png(data), "png"
-    try:
-        with Image.open(io.BytesIO(data)) as image:
-            png = io.BytesIO()
-            image.convert("RGBA").save(png, "PNG")  # RGBA: PNG cannot hold every mode (CMYK, ...)
-    # UnidentifiedImageError is an OSError; DecompressionBombError, for one too large to open, is not.
-    except (OSError, ValueError, Image.DecompressionBombError):
-        raise ImageError("이미지 형식을 읽을 수 없어") from None
-    return png.getvalue(), "png"
-
-
-def _svg_to_png(svg: bytes) -> bytes:
-    """*svg* drawn as PNG at 96 DPI by rsvg-convert. Given on stdin, it has no base to load files from."""
-    try:
-        result = subprocess.run(["rsvg-convert", "--format=png"], input=svg, capture_output=True, timeout=SVG_TIMEOUT)
-    except FileNotFoundError:
-        raise ImageError("SVG 를 변환할 rsvg-convert 가 없어") from None
-    except subprocess.TimeoutExpired:
-        raise ImageError("SVG 변환이 너무 오래 걸려") from None
-    if result.returncode != 0 or _image_format(result.stdout) != "png":
-        raise ImageError("SVG 를 변환하지 못해")
-    return result.stdout
-
-
-def _length(value: str | None, whole: int) -> int | None:
-    """A width / height attribute ("50%" of *whole*, or "80mm") in HWPUNIT, or None if absent, zero or neither."""
-    match = _LENGTH.fullmatch(value or "")
-    if match is None:
-        return None
-    number = float(match[1])
-    length = round(whole * number / 100 if match[2] == "%" else number * HWPUNIT_PER_MM)
-    return length or None
-
-
-def _picture_size(
-    image_path: Path, data: bytes, max_width: int, max_height: int, width: int | None = None, height: int | None = None
-) -> tuple[int, int] | None:
-    """Picture (width, height) in HWPUNIT within *max_width* x *max_height*, or None if the image size is unknown.
-
-    The *width* / *height* asked for is used, the other side following the aspect ratio. Without either,
-    a diagram is as wide as *max_width*; any other image keeps its size at 96 DPI.
-    Any of them is scaled down, keeping its aspect ratio, to fit.
-    """
-    pixels = _image_pixels(data)
-    if pixels is None or 0 in pixels:
-        return None
-    ratio = pixels[1] / pixels[0]
-    if width is None and height is None:
-        width = max_width if _DIAGRAM_IMAGE.match(image_path.name) else pixels[0] * HWPUNIT_PER_PIXEL
-    if width is None:
-        width = height / ratio
-    if height is None:
-        height = width * ratio
-    scale = min(1.0, max_width / width, max_height / height)
-    return round(width * scale), round(height * scale)
 
 
 def _runs(nodes: Iterable[SyntaxTreeNode], marks: frozenset[str] = frozenset(), url: str | None = None) -> list[Run]:
@@ -271,11 +173,6 @@ def _strip(runs: list[Run]) -> list[Run]:
     return runs
 
 
-def _text_width(text: str, size: int) -> int:
-    """*text* on one line at *size* pt, in HWPUNIT."""
-    return round(estimate_text_width(text, size))
-
-
 def _blank_page_width(text: str, size: int) -> int:
     """The wording's width for a blank page, in HWPUNIT.
 
@@ -289,77 +186,11 @@ def _blank_page_width(text: str, size: int) -> int:
     return max(width, full) + full
 
 
-def _column_widths(cells: list[list[list[Run]]], total: int, size: int) -> list[int]:
-    """The width of each column, in HWPUNIT, adding up to *total*.
-
-    A column is first as wide as its longest cell's text at *size* pt plus the cell padding, so that text
-    stays on one line; with room to spare the extra goes to the columns that asked for more. Only when the
-    text does not fit does a column come down, and then never below its longest word, which could not wrap
-    anyway.
-    """
-    columns = len(cells[0])
-    one_line: list[int] = []  # the widest cell of the column, and the width it wants
-    longest_word: list[int] = []  # its longest unbreakable word: the narrowest the column can be
-    for c in range(columns):
-        texts = [_plain(row[c]) for row in cells]
-        one_line.append(max(_text_width(text, size) for text in texts) + CELL_MARGIN_LR * 2)
-        words = [word for text in texts for word in text.split()]
-        longest_word.append(max((_text_width(word, size) for word in words), default=0) + CELL_MARGIN_LR * 2)
-
-    if sum(one_line) <= total:
-        return _share(total, one_line)
-    if sum(longest_word) <= total:
-        # Room for every word, not for every line: what the wrap costs comes off the columns in proportion
-        # to it, so the narrow ones keep their words whole.
-        wrapped = [one - word for one, word in zip(one_line, longest_word)]
-        return [word + share for word, share in zip(longest_word, _share(total - sum(longest_word), wrapped))]
-    # Even the words do not fit: share the width out by how much each column wants.
-    return _share(total, longest_word)
-
-
-def _share(total: int, weights: list[int]) -> list[int]:
-    """*total* split in proportion to *weights*, the parts adding up to exactly *total*."""
-    if not any(weights):
-        weights = [1] * len(weights)
-    total_weight = sum(weights)
-    parts = [round(total * weight / total_weight) for weight in weights[:-1]]
-    return [*parts, total - sum(parts)]
-
-
 def _space_above_below(obj) -> None:
     """Keep about a line of space above and below the table or picture *obj*, none at its sides."""
     margin = obj.element.find(f"{_HP}outMargin")
     margin.set("top", str(OBJECT_SPACING))
     margin.set("bottom", str(OBJECT_SPACING))
-
-
-def _cell_height(cell, doc, line_height: int) -> int:
-    """The height *cell* needs for its text at *line_height* a line, in HWPUNIT: at least one line.
-
-    Count the lines with Hancom's own breaking rules (resolve_slot_metrics + measure), not by characters:
-    a run of '-' is half as wide again as a letter, and a cell of a narrow column wraps where a wide one
-    does not.
-    """
-    slot = resolve_slot_metrics(cell, doc)
-    lines = sum(measure(paragraph.text, slot).lines for paragraph in cell.paragraphs)
-    return max(lines, 1) * line_height + CELL_MARGIN_TB * 2
-
-
-def _fit_rows(table, doc, line_height: int) -> None:
-    """Declare each row of *table* as tall as its tallest cell's text, and the table as their sum.
-
-    A cell declares its own height, and Hancom lays the text out inside it: when the declaration is
-    shorter than the text, the table takes more room on the page than it says it will, which pushes the
-    block after it to the next page and leaves the space it should have filled empty.
-    """
-    total = 0
-    for r in range(table.row_count):
-        cells = [table.cell(r, c) for c in range(table.column_count)]
-        height = max(_cell_height(cell, doc, line_height) for cell in cells)
-        for cell in cells:
-            cell.set_size(height=height)
-        total += height
-    table.element.find(f"{_HP}sz").set("height", str(total))
 
 
 def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
@@ -475,15 +306,11 @@ class _Writer:
         self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "\newpage 표" / "\newpage 그림"
         self.caption_number: tuple[str, int, str] | None = None  # the caption's (text before it, number, numType)
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
-        self.toc_page_break = False  # a page break right before the [TOC] marker
         self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
         self.toc_links = True  # entries are hyperlinks, unless the [TOC] marker says 링크없음
-        self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
-        self.restarts: dict[int, set[str]] = {}  # paragraph index -> numTypes that start over at 1 there
-        self.toc_restarts: set[str] = set()  # numTypes that start over at the TOC
-        self.hidden_pages: set[int] = set()  # indexes of the paragraphs whose page hides its number
-        self.toc_hidden = False  # the TOC's first page hides its number
-        # Paragraphs already there when the conversion starts (see new_page).
+        self.page_starts: dict[int, _PageStart] = {}  # paragraph index -> what it does about its page
+        self.toc_start = _PageStart()  # what the [TOC] marker's position asked for, done by the TOC's title
+        # Paragraphs already there when the conversion starts (see has_content).
         self._first_content = self.paragraph_count()
         self._h2_seen = 0  # level 2 headings in the chapter being written (see heading)
 
@@ -516,13 +343,18 @@ class _Writer:
         """len(doc.paragraphs), counted in the section XML instead of wrapping every paragraph."""
         return self._paragraphs_before + len(self._section.element.findall(_HP_P))
 
-    def new_page(self) -> None:
-        """Start a new page at the next paragraph, unless nothing is written yet: the first page is new.
+    def has_content(self) -> bool:
+        """Whether anything is written yet. The [TOC] marker counts, though its paragraphs go in only in finish()."""
+        return self.paragraph_count() > self._first_content or self.toc_at is not None
 
-        The [TOC] marker counts as written, though its paragraphs go in only in finish().
-        """
-        if self.paragraph_count() > self._first_content or self.toc_at is not None:
-            self.page_breaks.append(self.paragraph_count())
+    def page_start(self) -> _PageStart:
+        """What the next paragraph does about its page."""
+        return self.page_starts.setdefault(self.paragraph_count(), _PageStart())
+
+    def new_page(self) -> None:
+        """Start a new page at the next paragraph, unless nothing is written yet: the first page is new."""
+        if self.has_content():
+            self.page_start().page_break = True
 
     # --- runs -------------------------------------------------------------------------------
 
@@ -655,10 +487,10 @@ class _Writer:
         self.caption_number = (before, self.numbers[kind], NUMBERS[kind])
         self.caption = [Run(f"{before}{self.numbers[kind]}] "), *title]
 
-    def restart(self, at: int, names: Iterable[str]) -> None:
-        """Start the numbers *names* (keys of NUMBERS) over at 1 from the paragraph at index *at*."""
+    def restart(self, names: Iterable[str]) -> None:
+        """Start the numbers *names* (keys of NUMBERS) over at 1 from the next paragraph."""
         for name in names:
-            self.restarts.setdefault(at, set()).add(NUMBERS[name])
+            self.page_start().restarts.add(NUMBERS[name])
             if name in self.numbers:
                 self.numbers[name] = 0
 
@@ -671,7 +503,7 @@ class _Writer:
         table.element.find(f"{_HP}pos").set("horzRelTo", "PARA")
         _space_above_below(table)
         # Cell padding: a cell without hasMargin uses the table's inMargin, whatever the template has there.
-        # The height each row needs for its text is set by the caller, once the text is in (see _fit_rows).
+        # The height each row needs for its text is set by the caller, once the text is in (see fit_rows).
         padding = table.element.find(f"{_HP}inMargin")
         for side, value in (("left", CELL_MARGIN_LR), ("right", CELL_MARGIN_LR),
                             ("top", CELL_MARGIN_TB), ("bottom", CELL_MARGIN_TB)):
@@ -687,8 +519,7 @@ class _Writer:
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
             self.heading_styles[depth] = self.doc.styles.resolve(f"개요 {depth}")
-        # Anything before it (see new_page), counted ahead of the empty paragraph below.
-        written = self.paragraph_count() > self._first_content or self.toc_at is not None
+        has_content = self.has_content()  # before the empty paragraph below adds to it
         if depth > 1:
             # An empty 본문 paragraph before a sub-heading: the template's 개요 styles carry no
             # space above, so the gap from what came before is that paragraph's own line.
@@ -697,14 +528,14 @@ class _Writer:
             self._h2_seen = 0  # the next level 2 heading is a chapter's first
             # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
             self.chapter += 1
-            self.restart(self.paragraph_count(), self.numbers)
+            self.restart(self.numbers)
             self.new_page()  # a chapter opens a page
         elif depth == 2:
             self._h2_seen += 1
             # Within a chapter the first level 2 heading stays on the chapter's page; the ones after it,
             # and those before any chapter, start a page of their own (unless the document starts with it).
-            if self._h2_seen > 1 or (not self.chapter and written):
-                self.page_breaks.append(self.paragraph_count())
+            if self._h2_seen > 1 or (not self.chapter and has_content):
+                self.page_start().page_break = True
         heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
         self.write_runs(heading, runs)
 
@@ -745,19 +576,15 @@ class _Writer:
                     words = piece.text.split()
                     self.toc_kinds = [w for w in dict.fromkeys(words) if w != TOC_NO_LINKS]
                     self.toc_links = TOC_NO_LINKS not in words
-                    if self.toc_at in self.page_breaks:
-                        self.page_breaks.remove(self.toc_at)
-                        self.toc_page_break = True
-                    self.toc_restarts = self.restarts.pop(self.toc_at, set())
-                    self.toc_hidden = self.toc_at in self.hidden_pages
-                    self.hidden_pages.discard(self.toc_at)
+                    # A page break, restart or hiding asked for here goes on the TOC's title.
+                    self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
             elif piece.kind == "page_break":
                 # At the very start it only carries its restarts and hiding: the first page is new already.
                 self.new_page()
                 words = piece.text.split()
-                self.restart(self.paragraph_count(), (w for w in words if w != HIDE_PAGE))
+                self.restart(w for w in words if w != HIDE_PAGE)
                 if HIDE_PAGE in words:
-                    self.hidden_pages.add(self.paragraph_count())
+                    self.page_start().hide = True
             elif piece.kind == "blank_page":
                 self.blank_page(piece.text)
             elif piece.kind == "image":
@@ -780,13 +607,13 @@ class _Writer:
             if alt:
                 self.number_caption("그림", alt)
         max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
-        width, height = _picture_size(
+        width, height = picture_size(
             image_path,
             data,
             self.body_width,
             max_height,
-            _length(node.attrs.get("width"), self.body_width),
-            _length(node.attrs.get("height"), self.body_height),
+            length(node.attrs.get("width"), self.body_width),
+            length(node.attrs.get("height"), self.body_height),
         ) or (None, None)
         picture = self.doc.add_picture(data, image_format, width=width, height=height, **self.picture_body)
         _space_above_below(picture)
@@ -836,7 +663,7 @@ class _Writer:
         self.plain(table.paragraph, with_runs=False)  # holds the table, not text: its run is the table's own
         # The next block — a piece of this paragraph or the following one — starts on the page after it.
         # A break with nothing after it is dropped in finish().
-        self.page_breaks.append(self.paragraph_count())
+        self.page_start().page_break = True
 
     def table(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         rows = [tr for section in node.children for tr in section.children]
@@ -845,7 +672,8 @@ class _Writer:
         table = self.add_table(len(cells), len(cells[0]), quote, indent)
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
-        table.set_column_widths(_column_widths(cells, self.body_width, self.plain_size))
+        texts = [[_plain(runs) for runs in row] for row in cells]
+        table.set_column_widths(column_widths(texts, self.body_width, self.plain_size))
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
             for c, runs in enumerate(row):
@@ -867,7 +695,7 @@ class _Writer:
                         self.border_fill(fill_color=HEADER_FILL, active_borders=TABLE_SIDES, **TABLE_BORDER),
                     )
                 self.write_runs(paragraph, runs)
-        _fit_rows(table, self.doc, self.plain_line_height)
+        fit_rows(table, self.doc, self.plain_line_height)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
         table = self.add_table(1, 1, quote, indent)
@@ -892,7 +720,7 @@ class _Writer:
                 )
             paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING)
         # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
-        _fit_rows(table, self.doc, CODE_LINE_HEIGHT)
+        fit_rows(table, self.doc, CODE_LINE_HEIGHT)
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""
@@ -966,15 +794,9 @@ class _Writer:
         """Page breaks and the table of contents, which go in once all paragraphs are there."""
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs
-        for index in self.page_breaks:
+        for index, start in self.page_starts.items():
             if index < len(paragraphs):
-                paragraphs[index].element.set("pageBreak", "1")
-        for index, num_types in self.restarts.items():
-            if index < len(paragraphs):
-                _new_numbers(paragraphs[index], num_types)
-        for index in self.hidden_pages:
-            if index < len(paragraphs):
-                _hide_page(paragraphs[index])
+                start.apply(paragraphs[index])
 
         headings = [p for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL]
         if self.toc_at is not None and headings:
@@ -999,11 +821,7 @@ class _Writer:
                     # Its entries are the headings: drop them, Hancom lists the captions when it rebuilds.
                     for entry in paragraphs[1:]:
                         entry.element.getparent().remove(entry.element)
-            if self.toc_page_break:
-                self.doc.paragraphs[self.toc_at].element.set("pageBreak", "1")
-            _new_numbers(self.doc.paragraphs[self.toc_at], self.toc_restarts)
-            if self.toc_hidden:
-                _hide_page(self.doc.paragraphs[self.toc_at])
+            self.toc_start.apply(self.doc.paragraphs[self.toc_at])
 
 
 def _new_numbers(paragraph, num_types: Iterable[str]) -> None:
