@@ -1,4 +1,5 @@
 import struct
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
 
-from md2hwpx.convert import convert
+from md2hwpx.convert import MISSING_IMAGE, convert
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 
@@ -1173,6 +1174,24 @@ def test_convert_commonmark_blocks(tmp_path):
     assert doc.tables.all[0].cell(0, 0).text == "들여쓴 코드"
     assert [link["url"] for link in paragraphs[6].hyperlinks] == ["https://example.com"]
     assert len(doc.media.picture_references()) == 1
+
+
+def test_convert_missing_image_is_a_placeholder(tmp_path):
+    md = tmp_path / "missing.md"
+    md.write_text("[그림] 없는 그림\n\n![](nope.png){width=50%}\n", encoding="utf-8")
+    out = tmp_path / "missing.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    # The placeholder takes the image's place: its caption and size attributes still apply.
+    with zipfile.ZipFile(out) as hwpx:
+        images = [hwpx.read(n) for n in hwpx.namelist() if n.startswith("BinData/")]
+    assert images == [MISSING_IMAGE.read_bytes()]
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic"))
+    assert _text(pic.find(f"{hp}caption")) == "[그림 1] 없는 그림"
+    assert int(pic.find(f"{hp}curSz").get("width")) == BODY_WIDTH // 2
 
 
 def test_convert_image_inside_text(tmp_path):

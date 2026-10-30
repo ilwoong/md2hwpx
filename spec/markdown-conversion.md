@@ -159,6 +159,8 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
   헤딩과 표 셀 안의 이미지는 대체 텍스트로 넣는다.
 - 경로는 Markdown 파일이 있는 폴더 기준이며, 퍼센트 인코딩(`%20` 등)은 풀어서 찾는다.
   확장자를 이미지 형식으로 사용한다.
+- 파일이 없으면 대체 이미지 `src/md2hwpx/static/missing-image.png`(480×270, "이미지 파일이 없습니다")를 대신 넣는다.
+  캡션·크기 속성은 원래 이미지처럼 적용한다. 경고는 명령줄·웹 서비스가 `missing_images` 로 알린다.
 - 크기는 항상 원본 비율을 유지한다.
   - 다이어그램 이미지(`render_diagrams` 가 만든 `mermaid-<해시 12자리>.png`, `plantuml-<해시 12자리>.png`)는
     폭을 본문 폭에 맞춘다.
@@ -357,7 +359,7 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
   오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
   경고(warning)는 저장을 막지 않는다.
 - 템플릿에 필요한 스타일이 없으면 python-hwpx 의 `HwpxLookupError` 가 발생한다.
-- 이미지 파일이 없으면 `FileNotFoundError` 가 발생한다.
+- 이미지 파일이 없으면 대체 이미지를 넣는다 (위 "이미지").
 
 ```python
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
@@ -393,12 +395,12 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를 쓴다.
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
-  없는 이미지는 `MissingImagesError` 로 알리고, 그 `missing` 에 (입력 파일, 줄, 이미지 경로) 목록을 담는다.
+  없는 이미지의 (입력 파일, 줄, 이미지 경로) 목록을 돌려준다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
-- 변환 전에 입력 파일마다 `missing_images` 로 이미지 파일을 확인한다. 없는 이미지가 있으면 모두
-  `md2hwpx: <입력 파일>:<줄>: 이미지 파일이 없습니다: <경로>` 로 stderr 에 쓰고 종료 코드 1 을 돌려준다.
-  줄 번호는 front matter 를 포함한 원본 파일 기준이다.
+- 변환 전에 입력 파일마다 `missing_images` 로 이미지 파일을 확인한다. 없는 이미지는 대체 이미지로 변환하고,
+  저장한 뒤 모두 `md2hwpx: 경고: <입력 파일>:<줄>: 이미지 파일이 없어 대체 이미지를 넣었습니다: <경로>` 로
+  stderr 에 쓴다. 종료 코드는 0 이다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
 - 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError` 는
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
 
@@ -429,6 +431,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 인라인 코드 | 헤딩·문단·표 셀·캡션의 코드 조각이 D2Coding, 중첩 백틱, 닫히지 않은 백틱, 머리 행 굵게 유지 |
 | 인라인 서식 | 굵게·기울임·취소선(두 표기), 겹친 서식(`***a** b*` 포함), `file_name`·이스케이프·닫히지 않은 기호는 글자 그대로, 링크 서식과 URL, 표 셀 |
 | 캡션 | 위치(TOP/BOTTOM), `[표 N-M]`/`[그림 N-M]` 번호와 장마다 다시 매김, 장 앞 개체의 `[표 N]` 번호, `표그림 제목` 스타일, 개체 없는 캡션 줄은 문단 유지 |
+| 없는 이미지 | 대체 이미지 파일이 그대로 들어감, 캡션·크기 속성 적용 |
 | 대체 텍스트 캡션 | `[그림]` 줄 없는 이미지의 대체 텍스트 캡션·번호·서식, `[그림]` 줄 우선, 빈 대체 텍스트는 캡션 없음·번호 안 셈, 헤딩 안 이미지는 글 유지 |
 | Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
 | 수평선 | `---`·`***`·`- - -`·`___`, 목록 뒤 `---`, 아래쪽 테두리만 있음 |
@@ -445,5 +448,5 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 여백 면 | `[여백면]`·`[여백면] 문구`, 문구 크기 1×1 표, 쪽 가운데, `numberingType="NONE"`, 앞뒤 쪽 나눔, 빈 문구, 문서 맨 앞이면 첫 쪽 |
 | 저장 전 검증 | 검증 오류 시 `ConversionError` 와 파일 미생성 |
 | 성능 회귀 | 헤딩 다음 목록의 수준 (최적화 중 변수 이름이 겹쳐 생겼던 버그) |
-| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외·파일마다 front matter 제거, 없는 이미지의 파일:줄 목록(코드블록 안 제외, 문장 안·참조식 그림 포함), `.` 입력 이름, 없는 입력·템플릿·이미지·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
+| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외·파일마다 front matter 제거, 없는 이미지의 파일:줄 경고와 대체 이미지·종료 코드 0(코드블록 안 제외, 문장 안·참조식 그림 포함), `.` 입력 이름, 없는 입력·템플릿·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
 | 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md -o samples/` 로 변환해 한/글로 확인 |

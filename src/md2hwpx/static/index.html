@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>md2hwpx</title>
 <style>
-  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; }
+  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; --warning: #9a6700; }
   @media (prefers-color-scheme: dark) {
-    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; }
+    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; --warning: #d29922; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, -apple-system, "Malgun Gothic", sans-serif; }
@@ -32,6 +32,7 @@
   button:disabled { opacity: .6; cursor: progress; }
   #status { margin-top: 16px; white-space: pre-wrap; }
   #status.error { color: var(--error); }
+  #status.warning { color: var(--warning); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -137,6 +138,11 @@
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 60000);  // after the download has started
       status.textContent = `${link.download} 을 내려받았습니다.`;
+      const warnings = response.headers.get("X-Md2hwpx-Warnings");
+      if (warnings) {
+        status.className = "warning";
+        status.textContent += `\n\n경고:\n${decodeURIComponent(warnings)}`;
+      }
     } catch (error) {
       status.className = "error";
       status.textContent = error.message;
