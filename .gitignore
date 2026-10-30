@@ -15,3 +15,6 @@ dist/
 samples/*.hwpx
 /*.hwpx
 !/template.hwpx
+
+# 웹 서비스 비밀 설정 (.env.example 참고)
+.env

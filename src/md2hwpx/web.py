@@ -14,10 +14,11 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from hwpx.errors import HwpxError
 
+from md2hwpx import oauth
 from md2hwpx.cli import convert_input, image_warning, input_files
 from md2hwpx.convert import ConversionError, image_paths
 from md2hwpx.diagram import DiagramError
@@ -35,6 +36,7 @@ HWPX_TYPE = "application/hwp+zip"
 WARNINGS_HEADER = "X-Md2hwpx-Warnings"  # what the HWPX was made despite, one per line
 
 app = FastAPI(title="md2hwpx")
+app.include_router(oauth.router)
 
 
 class _Budget:
@@ -103,8 +105,9 @@ def _extract_zip(upload: UploadFile | None, root: Path, work: Path, budget: _Bud
     return Path(upload.filename).stem
 
 
-def _clone(repo: str, ref: str, root: Path) -> str:
-    """Shallow-clone the http(s) git *repo* (at branch or tag *ref*, if given) into *root*."""
+def _clone(repo: str, ref: str, root: Path, request: Request) -> str:
+    """Shallow-clone the http(s) git *repo* (at branch or tag *ref*, if given) into *root*,
+    as the user if they are signed in to the server it is on (see oauth)."""
     if not _REPO.fullmatch(repo):
         raise HTTPException(400, "git 저장소 주소는 http:// 또는 https:// 로 시작해야 합니다.")
     if ref and not _REF.fullmatch(ref):
@@ -116,12 +119,19 @@ def _clone(repo: str, ref: str, root: Path) -> str:
     ]
     # No prompt for a user name: a private repository fails instead of waiting.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    server = oauth.server_for(repo)
+    auth = oauth.git_header(request, server) if server else None
+    if auth:
+        # In the environment, not the command line, which other processes can list. Only for this server's
+        # address (server_for): a token sent to any address given would be handed to whoever runs it.
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0=auth)
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
     except subprocess.TimeoutExpired:
         raise HTTPException(400, f"git 저장소를 {GIT_TIMEOUT}초 안에 받지 못했습니다.") from None
     if result.returncode != 0:
-        raise HTTPException(400, f"git 저장소를 받지 못했습니다: {result.stderr.strip()}")
+        hint = f"\n비공개 저장소라면 {server.provider.label} 에 로그인하세요." if server and not auth else ""
+        raise HTTPException(400, f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}")
     shutil.rmtree(root / ".git", ignore_errors=True)
     return repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git") or "document"
 
@@ -180,6 +190,7 @@ def index() -> str:
 
 @app.post("/convert")
 def convert(
+    request: Request,
     source: str = Form(...),
     files: list[UploadFile] = File(default=[]),
     archive: UploadFile | None = File(default=None),
@@ -199,7 +210,7 @@ def convert(
         elif source == "zip":
             name = _extract_zip(archive, root, work, budget)
         elif source == "git":
-            name = _clone(repo.strip(), ref.strip(), root)
+            name = _clone(repo.strip(), ref.strip(), root, request)
         else:
             raise HTTPException(400, f"알 수 없는 입력 방식입니다: {source}")
         _remove_symlinks(root)

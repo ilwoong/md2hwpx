@@ -7,4 +7,8 @@ services:
     image: md2hwpx-web
     ports:
       - "8000:8000"
+    # GitLab·Gitea 로그인 설정 (.env.example 참고). 없으면 로그인 없이 실행한다.
+    env_file:
+      - path: .env
+        required: false
     restart: unless-stopped
