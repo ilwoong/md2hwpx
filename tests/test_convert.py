@@ -965,6 +965,28 @@ def test_convert_level_2_heading_page_breaks(tmp_path):
     ]
 
 
+def test_convert_level_2_heading_before_chapter_starts_a_new_page(tmp_path):
+    md = tmp_path / "preface.md"
+    md.write_text("서문\n\n## 앞 절 1\n\na\n\n## 앞 절 2\n\n# 첫 장\n\n## 장 절 1\n", encoding="utf-8")
+    out = tmp_path / "preface.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    starts = [p.text for p in HwpxDocument.open(out).paragraphs[1:] if p.element.get("pageBreak") == "1"]
+    # Not in a chapter, the first level 2 heading opens a page too; a chapter's first one stays put.
+    assert starts == ["앞 절 1", "앞 절 2", "첫 장"]
+
+
+def test_convert_level_2_heading_at_document_start_stays_on_first_page(tmp_path):
+    md = tmp_path / "start.md"
+    md.write_text("## 앞 절\n\na\n", encoding="utf-8")
+    out = tmp_path / "start.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    assert not [p for p in HwpxDocument.open(out).paragraphs if p.element.get("pageBreak") == "1"]
+
+
 def test_convert_page_breaks(tmp_path):
     md = tmp_path / "breaks.md"
     md.write_text(

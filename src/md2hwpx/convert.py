@@ -687,6 +687,8 @@ class _Writer:
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
             self.heading_styles[depth] = self.doc.styles.resolve(f"개요 {depth}")
+        # Anything before it (see new_page), counted ahead of the empty paragraph below.
+        written = self.paragraph_count() > self._first_content or self.toc_at is not None
         if depth > 1:
             # An empty 본문 paragraph before a sub-heading: the template's 개요 styles carry no
             # space above, so the gap from what came before is that paragraph's own line.
@@ -700,8 +702,8 @@ class _Writer:
         elif depth == 2:
             self._h2_seen += 1
             # Within a chapter the first level 2 heading stays on the chapter's page; the ones after it,
-            # and those before any chapter, start a page of their own.
-            if self._h2_seen > 1:
+            # and those before any chapter, start a page of their own (unless the document starts with it).
+            if self._h2_seen > 1 or (not self.chapter and written):
                 self.page_breaks.append(self.paragraph_count())
         heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
         self.write_runs(heading, runs)

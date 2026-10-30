@@ -12,14 +12,14 @@ Markdown 파일을 한/글 문서 형식인 HWPX 파일로 변환하는 Python �
   - 헤딩(ATX `#`~`######`, Setext `===`/`---`) → `개요 1`~`개요 6` 스타일, 일반 문단 → `본문` 스타일
   - 이미지(문장 안·참조식 포함, `![](a.png){width=50%}` 처럼 크기 지정 가능), 표(머리 행 굵게·회색 배경, 열 정렬), 코드블록(1×1 표, D2Coding 9pt, 줄간격 140%, Pygments 구문 강조)
   - 글머리표·번호 목록 (하위 목록 3단계까지)
-  - 각주(`[^1]` / `[^1]: 내용`), `[TOC]` 자리에 한/글 차례(`[TOC 그림 표 제목]` 처럼 넣을 차례와 순서 지정, `링크없음` 으로 하이퍼링크 끄기), `\newpage` 줄에서 쪽 나누기(`\newpage 쪽 표 그림 수식` 처럼 그 번호를 새로 시작, `쪽숨김` 으로 그 쪽의 쪽 번호·머리말·꼬리말 숨김), `[여백면]` 줄에 여백 면 한 장
+  - 각주(`[^1]` / `[^1]: 내용`), `[TOC]` 자리에 한/글 차례(`[TOC 그림 표 제목]` 처럼 넣을 차례와 순서 지정, `링크없음` 으로 하이퍼링크 끄기), `\newpage`(또는 `\pagebreak`) 줄에서 쪽 나누기(`\newpage 쪽 표 그림 수식` 처럼 그 번호를 새로 시작, `쪽숨김` 으로 그 쪽의 쪽 번호·머리말·꼬리말 숨김), `[여백면]` 줄에 여백 면 한 장
   - 이미지는 PNG·JPEG·GIF 는 그대로, 그 밖의 형식(BMP·TIFF·WebP 등)은 Pillow 로, SVG 는 `rsvg-convert` 로 PNG 로 바꿔 넣음
   - 저장 전 HWPX 스키마 검증, 넣을 수 없는 이미지(없는 파일, 읽을 수 없는 형식)는 대체 이미지("이미지 파일이 없습니다")를 넣고 `파일:줄` 위치와 함께 경고
   - 파일 맨 앞의 YAML front matter(`---` ... `---`)는 변환하지 않고 무시
   - `[표] 제목` / `[그림] 제목` 줄 → `[표 N-M] 제목` / `[그림 N-M] 제목` 캡션 (`표그림 제목` 스타일). `N` 은 장(수준 1 헤딩) 번호, `M` 은 그 장에서의 순번(한/글 자동 번호). `[그림]` 줄이 없으면 이미지의 대체 텍스트가 제목
 
 HWPX 생성에는 [python-hwpx](https://github.com/airmang/python-hwpx) 를 사용합니다.
-템플릿에는 `개요 1`~`개요 6`, `본문`, `표그림 제목` 스타일이 있어야 합니다.
+템플릿에는 `개요 1`~`개요 6`, `본문`, `바탕글`, `표그림 제목` 스타일이 있어야 합니다.
 인라인 서식은 코드(D2Coding 글꼴), 굵게, 기울임, 취소선, 링크(한/글 하이퍼링크, 참조식 포함)를 지원합니다.
 인용문(왼쪽 선), 수평선, 강제 줄바꿈(줄 끝 공백 두 칸 또는 `\`)도 지원합니다. 원시 HTML 은 글자 그대로 들어갑니다.
 
@@ -74,11 +74,11 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
 
 ```python
 from pathlib import Path
-from md2hwpx.convert import convert_markdown
+from md2hwpx.convert import convert_markdown, read_markdown
 from md2hwpx.diagram import render_diagrams
 
 doc = Path("docs/guide.md")
-markdown = render_diagrams(doc.read_text(encoding="utf-8"), out_dir=doc.parent / "images", link_base=doc.parent)
+markdown = render_diagrams(read_markdown(doc), out_dir=doc.parent / "images", link_base=doc.parent)
 convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".hwpx"))
 ```
 
