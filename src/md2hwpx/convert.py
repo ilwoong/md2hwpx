@@ -32,7 +32,8 @@ _MARKERS = {
     # "[TOC]", or "[TOC 그림 표 제목]": the lists to make, in that order. "링크없음" leaves out the links.
     "toc": re.compile(r"\[TOC((?:[ \t]+(?:제목|표|그림|수식|링크없음))*)[ \t]*\]", re.IGNORECASE),
     # "\newpage", or "\newpage 쪽 표 그림 수식": those numbers start over on the new page.
-    "page_break": re.compile(r"\\(?:newpage|pagebreak)((?:[ \t]+(?:쪽|표|그림|수식))*)[ \t]*"),
+    # "쪽숨김" hides the new page's page number, header and footer.
+    "page_break": re.compile(r"\\(?:newpage|pagebreak)((?:[ \t]+(?:쪽숨김|쪽|표|그림|수식))*)[ \t]*"),
     # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
     "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
 }
@@ -64,6 +65,7 @@ TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks
 _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
 # Hancom's running numbers (hp:newNum / hp:autoNum numType) a "\newpage" line can start over.
 NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
+HIDE_PAGE = "쪽숨김"  # on a "\newpage" line: that page shows no page number, header or footer
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
@@ -423,6 +425,8 @@ class _Writer:
         self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
         self.restarts: dict[int, set[str]] = {}  # paragraph index -> numTypes that start over at 1 there
         self.toc_restarts: set[str] = set()  # numTypes that start over at the TOC
+        self.hidden_pages: set[int] = set()  # indexes of the paragraphs whose page hides its number
+        self.toc_hidden = False  # the TOC's first page hides its number
         # Paragraphs already there when the conversion starts (see new_page).
         self._first_content = self.paragraph_count()
         self._h2_seen = 0  # level 2 headings in the chapter being written (see heading)
@@ -687,9 +691,15 @@ class _Writer:
                         self.page_breaks.remove(self.toc_at)
                         self.toc_page_break = True
                     self.toc_restarts = self.restarts.pop(self.toc_at, set())
+                    self.toc_hidden = self.toc_at in self.hidden_pages
+                    self.hidden_pages.discard(self.toc_at)
             elif piece.kind == "page_break":
-                self.page_breaks.append(self.paragraph_count())
-                self.restart(self.paragraph_count(), piece.text.split())
+                # At the very start it only carries its restarts and hiding: the first page is new already.
+                self.new_page()
+                words = piece.text.split()
+                self.restart(self.paragraph_count(), (w for w in words if w != HIDE_PAGE))
+                if HIDE_PAGE in words:
+                    self.hidden_pages.add(self.paragraph_count())
             elif piece.kind == "blank_page":
                 self.blank_page(piece.text)
             elif piece.kind == "image":
@@ -902,6 +912,9 @@ class _Writer:
         for index, num_types in self.restarts.items():
             if index < len(paragraphs):
                 _new_numbers(paragraphs[index], num_types)
+        for index in self.hidden_pages:
+            if index < len(paragraphs):
+                _hide_page(paragraphs[index])
 
         headings = [p for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL]
         if self.toc_at is not None and headings:
@@ -929,6 +942,8 @@ class _Writer:
             if self.toc_page_break:
                 self.doc.paragraphs[self.toc_at].element.set("pageBreak", "1")
             _new_numbers(self.doc.paragraphs[self.toc_at], self.toc_restarts)
+            if self.toc_hidden:
+                _hide_page(self.doc.paragraphs[self.toc_at])
 
 
 def _new_numbers(paragraph, num_types: Iterable[str]) -> None:
@@ -938,6 +953,13 @@ def _new_numbers(paragraph, num_types: Iterable[str]) -> None:
         ctrl = paragraph.add_new_num(number=1, kind=num_type)
         # Ahead of what the paragraph holds: a table in it is numbered after the restart.
         first_run.addprevious(ctrl.element.getparent())
+
+
+def _hide_page(paragraph) -> None:
+    """Hide the page number, header and footer on *paragraph*'s page only (hp:pageHiding)."""
+    first_run = paragraph.element.find(f"{_HP}run")
+    ctrl = paragraph.add_page_hiding(header=True, footer=True, page_num=True)
+    first_run.addprevious(ctrl.element.getparent())  # with the paragraph's other page controls, up front
 
 
 def _auto_number(paragraph, before: str, number: int, num_type: str) -> None:
