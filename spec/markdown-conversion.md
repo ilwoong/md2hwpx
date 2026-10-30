@@ -406,7 +406,8 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
   - `-o`, `--output` 생략 시 현재 작업 폴더의 `입력 이름.hwpx`.
   - `-o` 가 이미 있는 폴더면 그 폴더의 `입력 이름.hwpx`, 아니면 `-o` 경로 그대로.
   - 그 경로에 파일이 있으면 덮어쓰지 않고, 확장자 앞에 `-1`, `-2` ... 를 붙여 처음으로 비어 있는 경로에 저장한다.
-- `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를 쓴다.
+- `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를, 없으면 내장 템플릿(`convert.DEFAULT_TEMPLATE`,
+  `src/md2hwpx/template.hwpx`)을 쓴다. 내장 템플릿은 패키지에 들어 있어 wheel 로 설치해도 쓸 수 있다.
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
   입력 파일 목록은 `input_files(input_path)` 가 정하며, 웹 서비스가 이미지 경로를 검사할 때도 같은 목록을 쓴다.
@@ -416,7 +417,8 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - 변환 전에 입력 파일마다 `unusable_images` 로 이미지를 확인한다. 넣을 수 없는 이미지는 대체 이미지로 변환하고,
   저장한 뒤 모두 `md2hwpx: 경고: <입력 파일>:<줄>: <이유> 대체 이미지를 넣었습니다: <경로>` 로
   stderr 에 쓴다. 종료 코드는 0 이다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
-- 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError` 는
+- 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError`,
+  HWPX(zip) 가 아닌 템플릿(`zipfile.BadZipFile`) 은
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
 
 ## 검증 기준
@@ -464,5 +466,5 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 여백 면 | `[여백면]`·`[여백면] 문구`, 문구 크기 1×1 표, 쪽 가운데, `numberingType="NONE"`, 앞뒤 쪽 나눔, 빈 문구, 문서 맨 앞이면 첫 쪽 |
 | 저장 전 검증 | 검증 오류 시 `ConversionError` 와 파일 미생성 |
 | 성능 회귀 | 헤딩 다음 목록의 수준 (최적화 중 변수 이름이 겹쳐 생겼던 버그) |
-| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외·파일마다 front matter 제거, 없는 이미지의 파일:줄 경고와 대체 이미지·종료 코드 0(코드블록 안 제외, 문장 안·참조식 그림 포함), `.` 입력 이름, 없는 입력·템플릿·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
+| 명령줄 | 인자 없이 실행 시 도움말, 기본 출력 경로(현재 폴더)와 stdout, `-o` 파일·폴더, 기존 파일 미덮어쓰기와 번호, 폴더 입력의 순서·이미지·캡션 번호·하위 폴더 제외·파일마다 front matter 제거, 없는 이미지의 파일:줄 경고와 대체 이미지·종료 코드 0(코드블록 안 제외, 문장 안·참조식 그림 포함), `.` 입력 이름, 템플릿 생략 시 현재 폴더의 `template.hwpx` 우선·없으면 내장 템플릿, 없는 입력·템플릿·HWPX 아닌 템플릿·빈 폴더에서 종료 코드 1, 다이어그램 임시 이미지 미잔존 (`mmdc` 있을 때) |
 | 샘플 | Docker 이미지에서 `python -m md2hwpx samples/sample.md -o samples/` 로 변환해 한/글로 확인 |

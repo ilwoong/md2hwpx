@@ -1,13 +1,12 @@
 import shutil
-from pathlib import Path
 
 import pytest
 from hwpx import HwpxDocument
 
 from md2hwpx.cli import main
+from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from test_convert import _text
 
-TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 needs_mmdc = pytest.mark.skipif(shutil.which("mmdc") is None, reason="mmdc not installed")
 
 
@@ -29,6 +28,27 @@ def test_cli_default_output_in_current_folder(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == "doc.hwpx"
     assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["제목", "본문"]
     assert not (src / "doc.hwpx").exists()
+
+
+def test_cli_without_template_uses_the_bundled_one(tmp_path, monkeypatch):
+    md = tmp_path / "doc.md"
+    md.write_text("본문\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # no template.hwpx here
+
+    assert main([str(md)]) == 0
+    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs[1:]] == ["본문"]
+
+
+def test_cli_without_template_prefers_the_current_folders(tmp_path, monkeypatch, capsys):
+    md = tmp_path / "doc.md"
+    md.write_text("본문\n", encoding="utf-8")
+    (tmp_path / "template.hwpx").write_bytes(b"not a template")
+    monkeypatch.chdir(tmp_path)
+
+    # The folder's template.hwpx is the one opened: it is not HWPX, so the conversion fails on it.
+    assert main([str(md)]) == 1
+    assert capsys.readouterr().err.startswith("md2hwpx: ")
+    assert not (tmp_path / "doc.hwpx").exists()
 
 
 def test_cli_output_option(tmp_path):

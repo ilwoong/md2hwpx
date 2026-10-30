@@ -48,7 +48,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `repo` | `source=git`: `http://` 또는 `https://` 저장소 주소 (폐쇄망의 http 저장소 포함) |
 | `ref` | `source=git`: 브랜치 또는 태그 (선택, 비우면 기본 브랜치) |
 | `path` | `zip`·`git`: 변환할 md 파일 또는 폴더의 상대 경로 (선택) |
-| `template` | 템플릿 HWPX (선택, 비우면 저장소의 `template.hwpx`) |
+| `template` | 템플릿 HWPX (선택, 비우면 내장 템플릿 `src/md2hwpx/template.hwpx`) |
 
 - 성공: `200`, `Content-Type: application/hwp+zip`,
   `Content-Disposition: attachment; filename="document.hwpx"; filename*=UTF-8''<이름>.hwpx`.

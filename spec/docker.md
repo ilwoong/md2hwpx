@@ -10,7 +10,7 @@ Dockerfile 은 세 단계다.
 | 단계 | 내용 | 빌드 |
 |------|------|------|
 | `tools` | 아래 "이미지 내용" 의 도구와 Python 의존성 | (다른 단계의 바탕) |
-| `web` | `tools` + `git`, 코드(`/app/src`)와 `template.hwpx`. `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
+| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
 | `dev` (기본) | `tools` 그대로. 코드는 실행 시 `/work` 에 마운트한다 | `docker build -t md2hwpx .` |
 
 아래 "실행 환경 변수", "사용법", "실행 스크립트" 는 `dev` 이미지 이야기다.
@@ -24,7 +24,7 @@ Dockerfile 은 세 단계다.
 | `docker/mmdc` | mermaid-cli 실행 스크립트. `-p /etc/puppeteer.json` 을 항상 넘긴다 |
 | `docker/puppeteer.json` | 시스템 Chromium 경로와 `--no-sandbox` 설정 |
 | `docker/plantuml` | `java -jar plantuml.jar` 실행 스크립트 |
-| `.dockerignore` | 빌드 컨텍스트를 `pyproject.toml`, `uv.lock`, `docker/`, `src/`(`__pycache__` 제외), `template.hwpx` 로 제한 |
+| `.dockerignore` | 빌드 컨텍스트를 `pyproject.toml`, `uv.lock`, `docker/`, `src/`(`__pycache__` 제외, 내장 템플릿 포함) 로 제한 |
 | `compose.yaml` | `web` 단계를 빌드해 8000 번 포트로 실행 |
 | `build-images.sh` | `dev`·`web` 이미지를 빌드해 `latest` 와 날짜 태그로 남긴다 (아래 "빌드 스크립트") |
 
@@ -79,8 +79,8 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
   `PYTHONPATH=/md2hwpx/src` 로 `python -m md2hwpx` 를 실행한다. 인자는 그대로 넘긴다.
   그래서 변환할 문서가 있는 폴더에 코드가 없어도 된다.
 - `--user "$(id -u):$(id -g)"` 로 실행해 결과 파일이 root 소유가 되지 않게 한다.
-- `-t` / `--template` 가 없고 현재 폴더에 `template.hwpx` 도 없으면 `-t /md2hwpx/template.hwpx` (이 저장소의 템플릿)를 덧붙인다.
-  인자가 없으면 덧붙이지 않으므로 도움말이 나온다.
+- `-t` / `--template` 가 없으면 명령줄과 같이 현재 폴더의 `template.hwpx`, 없으면 내장 템플릿을 쓴다
+  (마운트한 저장소의 `src/md2hwpx/template.hwpx`).
 - 제한: 컨테이너에서는 현재 폴더 아래만 보이므로, 입력·출력·템플릿 경로는 현재 폴더 안의 상대 경로여야 한다.
   `../` 처럼 밖을 가리키면 "No such file or directory" 오류가 난다.
 - 이미지 이름은 `md2hwpx` 로 고정이다 (`docker build -t md2hwpx .` 로 만든 이미지).
@@ -110,6 +110,6 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 | 전체 테스트 | root 와 `--user` 두 방식 모두 skip 없이 통과 |
 | D2Coding | `fc-list` 에 Regular/Bold 가 보이고, 폰트를 지정한 두 다이어그램이 고정폭으로 그려짐 |
 | 한글 렌더링 | 한글 라벨을 가진 mermaid / plantuml 다이어그램 PNG 를 눈으로 확인 |
-| 실행 스크립트 | 저장소 밖 폴더에서 다이어그램이 있는 문서 변환, `-o` 폴더, 인자 없이 도움말, 저장소 템플릿 자동 사용, 밖 경로 오류 |
+| 실행 스크립트 | 저장소 밖 폴더에서 다이어그램이 있는 문서 변환, `-o` 폴더, 인자 없이 도움말, 내장 템플릿 자동 사용, 밖 경로 오류 |
 | 빌드 스크립트 | 저장소 밖 폴더에서 실행, 두 이미지 모두 `latest` 와 날짜 태그가 같은 이미지(같은 레이어) |
 | 마운트 폴더 오염 없음 | 실행 후 프로젝트 폴더에 core 덤프, `?` 폴더 등 새 파일이 없음 |

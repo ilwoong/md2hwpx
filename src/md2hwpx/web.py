@@ -20,10 +20,9 @@ from hwpx.errors import HwpxError
 
 from md2hwpx import oauth
 from md2hwpx.cli import convert_input, image_warning, input_files
-from md2hwpx.convert import ConversionError, image_paths
+from md2hwpx.convert import DEFAULT_TEMPLATE, ConversionError, image_paths
 from md2hwpx.diagram import DiagramError
 
-TEMPLATE = Path(__file__).resolve().parents[2] / "template.hwpx"
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 MAX_UPLOAD = 50 * 1024 * 1024  # bytes: all uploads of a request, and a zip's extracted files
 MAX_ZIP_FILES = 2000
@@ -217,7 +216,7 @@ def convert(
         input_path, name = _input_path(root, path.strip().strip("/"), name)
         _check_images(input_path, root)
 
-        template_path = TEMPLATE
+        template_path = DEFAULT_TEMPLATE
         if template is not None and template.filename:
             template_path = work / "template.hwpx"
             budget.copy(template.file, template_path)

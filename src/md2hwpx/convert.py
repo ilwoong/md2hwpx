@@ -41,6 +41,8 @@ _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
+# The template that comes with the package: used when no other is given.
+DEFAULT_TEMPLATE = Path(__file__).resolve().parent / "template.hwpx"
 BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"

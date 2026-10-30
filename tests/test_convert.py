@@ -11,9 +11,8 @@ from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_met
 from hwpx.layout import lint_layout
 from PIL import Image
 
+from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import MISSING_IMAGE, convert, unusable_images
-
-TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 
 
 def _page_body() -> tuple[int, int, int, int]:

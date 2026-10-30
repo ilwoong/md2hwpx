@@ -6,11 +6,12 @@ import argparse
 import re
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 from hwpx.errors import HwpxError
 
-from md2hwpx.convert import ConversionError, convert_markdown, read_markdown, unusable_images
+from md2hwpx.convert import DEFAULT_TEMPLATE, ConversionError, convert_markdown, read_markdown, unusable_images
 from md2hwpx.diagram import DiagramError, render_diagrams
 
 
@@ -78,8 +79,8 @@ def main(argv: list[str] | None = None) -> int:
         help="저장할 HWPX 파일 또는 폴더 (기본: 현재 폴더의 '입력 이름.hwpx'). 파일이 있으면 이름 뒤에 -1, -2 ... 를 붙인다",
     )
     parser.add_argument(
-        "-t", "--template", type=Path, default=Path("template.hwpx"),
-        help="템플릿 HWPX 파일 (기본: 현재 폴더의 template.hwpx)",
+        "-t", "--template", type=Path,
+        help="템플릿 HWPX 파일 (기본: 현재 폴더의 template.hwpx, 없으면 내장 템플릿)",
     )
     if argv is None:
         argv = sys.argv[1:]
@@ -87,11 +88,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     args = parser.parse_args(argv)
+    template = args.template or (Path("template.hwpx") if Path("template.hwpx").is_file() else DEFAULT_TEMPLATE)
 
     try:
         output = _output_path(args.input, args.output)
-        unusable = convert_input(args.input, args.template, output)
-    except (OSError, DiagramError, HwpxError, ConversionError) as error:
+        unusable = convert_input(args.input, template, output)
+    # BadZipFile: a template that is not HWPX (a zip).
+    except (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile) as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
     for image in unusable:
