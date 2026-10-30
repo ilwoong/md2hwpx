@@ -162,11 +162,28 @@ def test_not_a_zip():
     assert _error(response).startswith("zip 파일을 열 수 없습니다")
 
 
-@pytest.mark.parametrize("repo", ["file:///etc", "git@github.com:a/b.git", "/srv/repo", "http://example.com/a.git"])
-def test_git_needs_https(repo):
+@pytest.mark.parametrize("repo", ["file:///etc", "git@github.com:a/b.git", "/srv/repo", "ftp://example.com/a.git"])
+def test_git_needs_http(repo):
     assert _error(client.post("/convert", data={"source": "git", "repo": repo})) == (
-        "git 저장소 주소는 https:// 로 시작해야 합니다."
+        "git 저장소 주소는 http:// 또는 https:// 로 시작해야 합니다."
     )
+
+
+def test_git_clone_over_http(tmp_path, monkeypatch):
+    # A repository on a closed network may have only http.
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        (Path(command[-1]) / "guide.md").write_text("# 안내\n", encoding="utf-8")
+        return web.subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    response = client.post("/convert", data={"source": "git", "repo": "http://git.internal/docs/manual.git"})
+
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["안내"]
+    assert commands[0][-2] == "http://git.internal/docs/manual.git"
+    assert "protocol.http.allow=always" in commands[0] and "protocol.allow=never" in commands[0]
 
 
 def test_git_ref_must_not_be_an_option():

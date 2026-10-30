@@ -95,7 +95,7 @@ convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".
 docker compose up -d --build    # http://localhost:8000
 ```
 
-- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `https://` git 저장소 주소(브랜치·태그 선택).
+- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `http://`·`https://` git 저장소 주소(브랜치·태그 선택, 폐쇄망 http 저장소 포함).
   zip·git 은 변환할 md 파일이나 폴더의 경로를 지정할 수 있습니다.
 - 템플릿 HWPX 를 함께 올리면 그 템플릿으로 변환합니다.
 - 인증 기능이 없으니 외부에 공개할 때는 앞단에서 접근을 제한하세요. 자세한 내용은 [웹 서비스 스펙](spec/web-service.md).

@@ -27,8 +27,9 @@ INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 MAX_UPLOAD = 50 * 1024 * 1024  # bytes: all uploads of a request, and a zip's extracted files
 MAX_ZIP_FILES = 2000
 GIT_TIMEOUT = 120  # seconds
-# Only https: file://, ssh and local paths would let a request read the server's own files.
-_REPO = re.compile(r"https://[^\s]+")
+# Only http(s), http for repositories on a closed network: file://, ssh and local paths would let a request
+# read the server's own files.
+_REPO = re.compile(r"https?://[^\s]+")
 _REF = re.compile(r"[\w][\w./-]*")
 HWPX_TYPE = "application/hwp+zip"
 WARNINGS_HEADER = "X-Md2hwpx-Warnings"  # what the HWPX was made despite, one per line
@@ -103,13 +104,14 @@ def _extract_zip(upload: UploadFile | None, root: Path, work: Path, budget: _Bud
 
 
 def _clone(repo: str, ref: str, root: Path) -> str:
-    """Shallow-clone the https git *repo* (at branch or tag *ref*, if given) into *root*."""
+    """Shallow-clone the http(s) git *repo* (at branch or tag *ref*, if given) into *root*."""
     if not _REPO.fullmatch(repo):
-        raise HTTPException(400, "git 저장소 주소는 https:// 로 시작해야 합니다.")
+        raise HTTPException(400, "git 저장소 주소는 http:// 또는 https:// 로 시작해야 합니다.")
     if ref and not _REF.fullmatch(ref):
         raise HTTPException(400, f"브랜치·태그 이름이 올바르지 않습니다: {ref}")
     command = [
-        "git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "core.symlinks=false",
+        "git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.http.allow=always",
+        "-c", "core.symlinks=false",
         "clone", "--depth", "1", "--quiet", *(["--branch", ref] if ref else []), "--", repo, str(root),
     ]
     # No prompt for a user name: a private repository fails instead of waiting.
