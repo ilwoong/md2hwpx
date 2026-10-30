@@ -50,7 +50,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 - 성공: `200`, `Content-Type: application/hwp+zip`,
   `Content-Disposition: attachment; filename="document.hwpx"; filename*=UTF-8''<이름>.hwpx`.
-  - 없는 이미지는 대체 이미지로 변환하고, `X-Md2hwpx-Warnings` 헤더에 경고를 한 줄씩 담는다
+  - 넣을 수 없는 이미지(없는 파일, 읽을 수 없는 형식 등)는 대체 이미지로 변환하고, `X-Md2hwpx-Warnings` 헤더에 경고를 한 줄씩 담는다
     (`docs/a.md:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: img/b.png`).
     헤더는 Latin-1 만 담으므로 퍼센트 인코딩하고, 페이지가 풀어서 내려받기 안내 아래에 경고 색으로 보여 준다.
     경고가 없으면 헤더도 없다.

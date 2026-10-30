@@ -158,9 +158,16 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 문단 안의 이미지(인라인, 참조식 `![글][id]` 모두)는 그 자리에서 문단을 나눠 그림 문단 하나가 된다.
   헤딩과 표 셀 안의 이미지는 대체 텍스트로 넣는다.
 - 경로는 Markdown 파일이 있는 폴더 기준이며, 퍼센트 인코딩(`%20` 등)은 풀어서 찾는다.
-  확장자를 이미지 형식으로 사용한다.
-- 파일이 없으면 대체 이미지 `src/md2hwpx/static/missing-image.png`(480×270, "이미지 파일이 없습니다")를 대신 넣는다.
-  캡션·크기 속성은 원래 이미지처럼 적용한다. 경고는 명령줄·웹 서비스가 `missing_images` 로 알린다.
+- 형식은 확장자가 아니라 파일 내용으로 판단한다 (`picture_data`).
+  - PNG·JPEG·GIF 는 그대로 넣는다. 확장자가 내용과 달라도 내용의 형식으로 기록한다.
+  - SVG(확장자 `.svg` 이거나 앞 4KB 안에 `<svg`)는 `rsvg-convert` 로 96 DPI PNG 로 바꿔 넣는다. SVG 를 stdin 으로
+    넘기므로 기준 경로가 없어, SVG 가 가리키는 다른 파일(`<image href="...">`)은 불러오지 않는다. 60초 제한.
+  - 그 밖의 형식(BMP·TIFF·WebP 등)은 Pillow 로 읽어 RGBA PNG 로 바꿔 넣는다. 움직이는 이미지는 첫 장면이다.
+  - 원본 파일은 바꾸지 않는다.
+- 넣을 수 없는 이미지는 대체 이미지 `src/md2hwpx/static/missing-image.png`(480×270, "이미지 파일이 없습니다")를
+  대신 넣는다: 파일이 없을 때, 형식을 읽을 수 없을 때(깨진 파일, Pillow 가 모르는 형식, 너무 큰 이미지),
+  `rsvg-convert` 가 없거나 SVG 변환에 실패했을 때. 캡션·크기 속성은 원래 이미지처럼 적용한다.
+  경고는 명령줄·웹 서비스가 `unusable_images` 로 알린다.
 - 크기는 항상 원본 비율을 유지한다.
   - 다이어그램 이미지(`render_diagrams` 가 만든 `mermaid-<해시 12자리>.png`, `plantuml-<해시 12자리>.png`)는
     폭을 본문 폭에 맞춘다.
@@ -359,15 +366,20 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
   오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
   경고(warning)는 저장을 막지 않는다.
 - 템플릿에 필요한 스타일이 없으면 python-hwpx 의 `HwpxLookupError` 가 발생한다.
-- 이미지 파일이 없으면 대체 이미지를 넣는다 (위 "이미지").
+- 넣을 수 없는 이미지는 대체 이미지를 넣는다 (위 "이미지").
 
 ```python
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
-def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
+def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]]
+def picture_data(path: Path) -> tuple[bytes, str]
 ```
 
 - `image_paths` 는 코드블록 밖의 이미지(인라인·참조식 포함) 모두의 (1부터 센 줄 번호, `base_dir` 기준 경로) 목록을,
-  `missing_images` 는 그 가운데 파일이 없는 것의 목록을 돌려준다.
+  `unusable_images` 는 그 가운데 넣을 수 없는 것의 (줄, 경로, 이유) 목록을 돌려준다.
+  이유는 경고 문장에 이어 붙는 `-어`/`-해` 로 끝나는 말이다 (`이미지 파일이 없어`, `이미지 형식을 읽을 수 없어`,
+  `SVG 를 변환할 rsvg-convert 가 없어`, `SVG 를 변환하지 못해`, `SVG 변환이 너무 오래 걸려`).
+- `picture_data` 는 HWPX 에 넣을 (데이터, 형식) 을 돌려주고, 넣을 수 없으면 그 이유를 담은 `ImageError` 를 낸다.
+  `unusable_images` 와 변환이 둘 다 이것을 쓰므로, 경고한 이미지와 대체 이미지로 들어간 이미지가 같다.
   줄 번호는 이미지 경로가 적힌 문단 안의 줄이며, 참조식이라 경로가 문단에 없으면 문단 첫 줄이다.
   front matter 가 있어도 원본 줄 번호로 센다.
 
@@ -398,8 +410,8 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
   없는 이미지의 (입력 파일, 줄, 이미지 경로) 목록을 돌려준다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
-- 변환 전에 입력 파일마다 `missing_images` 로 이미지 파일을 확인한다. 없는 이미지는 대체 이미지로 변환하고,
-  저장한 뒤 모두 `md2hwpx: 경고: <입력 파일>:<줄>: 이미지 파일이 없어 대체 이미지를 넣었습니다: <경로>` 로
+- 변환 전에 입력 파일마다 `unusable_images` 로 이미지를 확인한다. 넣을 수 없는 이미지는 대체 이미지로 변환하고,
+  저장한 뒤 모두 `md2hwpx: 경고: <입력 파일>:<줄>: <이유> 대체 이미지를 넣었습니다: <경로>` 로
   stderr 에 쓴다. 종료 코드는 0 이다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
 - 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError` 는
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
@@ -432,6 +444,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 인라인 서식 | 굵게·기울임·취소선(두 표기), 겹친 서식(`***a** b*` 포함), `file_name`·이스케이프·닫히지 않은 기호는 글자 그대로, 링크 서식과 URL, 표 셀 |
 | 캡션 | 위치(TOP/BOTTOM), `[표 N-M]`/`[그림 N-M]` 번호와 장마다 다시 매김, 장 앞 개체의 `[표 N]` 번호, `표그림 제목` 스타일, 개체 없는 캡션 줄은 문단 유지 |
 | 없는 이미지 | 대체 이미지 파일이 그대로 들어감, 캡션·크기 속성 적용 |
+| 이미지 형식 | BMP·WebP·TIFF 는 원래 크기의 PNG 로, 확장자와 다른 PNG 는 그대로, 깨진 파일은 대체 이미지와 이유, SVG 는 PNG 로 (`rsvg-convert` 있을 때), `rsvg-convert` 없으면 대체 이미지와 이유 |
 | 대체 텍스트 캡션 | `[그림]` 줄 없는 이미지의 대체 텍스트 캡션·번호·서식, `[그림]` 줄 우선, 빈 대체 텍스트는 캡션 없음·번호 안 셈, 헤딩 안 이미지는 글 유지 |
 | Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
 | 수평선 | `---`·`***`·`- - -`·`___`, 목록 뒤 `---`, 아래쪽 테두리만 있음 |

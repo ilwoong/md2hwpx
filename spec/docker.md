@@ -37,6 +37,7 @@ Dockerfile 은 세 단계다.
 | Java | Alpine `openjdk17-jre` | headless JRE 에는 폰트 라이브러리가 없어 PlantUML 이 실패한다 |
 | Graphviz | Alpine `graphviz` | PlantUML 의 시퀀스 외 다이어그램에 필요 |
 | 한글 폰트 | Alpine `font-noto-cjk` | 다이어그램 안의 한글 표시 |
+| rsvg-convert | Alpine `rsvg-convert` | SVG 이미지를 PNG 로 변환. 없으면 SVG 는 대체 이미지가 된다 |
 | D2Coding | 네이버 GitHub 릴리스 VER1.4.0 | Regular/Bold TTF 와 `OFL.txt` 를 `/usr/share/fonts/d2coding` 에 설치. Alpine 패키지 없음 |
 | Python 의존성 | `uv sync --frozen --no-install-project` → `/opt/venv` | uv 는 빌드 시에만 마운트하고 이미지에 남기지 않는다. 기본 그룹(`dev`, `web`)도 설치한다 |
 | HWPX 라이브러리 | PyPI `python-hwpx` (`pyproject.toml` 의존성) | 순수 Python. 의존성 `lxml` 은 musl 휠이 있어 Alpine 에서 컴파일 없이 설치된다 |

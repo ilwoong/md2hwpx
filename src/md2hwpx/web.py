@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from hwpx.errors import HwpxError
 
-from md2hwpx.cli import convert_input, missing_image_message
+from md2hwpx.cli import convert_input, image_warning
 from md2hwpx.convert import ConversionError, image_paths
 from md2hwpx.diagram import DiagramError
 
@@ -209,14 +209,14 @@ def convert(
             budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
-            missing = convert_input(input_path, template_path, output)
+            unusable = convert_input(input_path, template_path, output)
         except (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile) as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None
         data = output.read_bytes()
         # Every image is inside root (_check_images): name them from there.
-        warnings = [missing_image_message(_relative(f, root), line, _relative(image.resolve(), root))
-                    for f, line, image in missing]
+        warnings = [image_warning(_relative(f, root), line, _relative(image.resolve(), root), why)
+                    for f, line, image, why in unusable]
     filename = f"{name}.hwpx"
     disposition = f"attachment; filename=\"document.hwpx\"; filename*=UTF-8''{quote(filename)}"
     headers = {"Content-Disposition": disposition}
