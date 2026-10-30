@@ -860,7 +860,7 @@ def test_convert_toc_without_headings_is_skipped(tmp_path):
 
 def test_convert_toc_lists_in_the_order_named(tmp_path):
     md = tmp_path / "toc.md"
-    md.write_text("\\newpage\n[toc 그림 제목 표 그림]\n\n# 장\n\n## 절\n", encoding="utf-8")
+    md.write_text("표지\n\n\\newpage\n[toc 그림 제목 표 그림]\n\n# 장\n\n## 절\n", encoding="utf-8")
     out = tmp_path / "toc.hwpx"
 
     convert(md, TEMPLATE, out)
@@ -868,7 +868,7 @@ def test_convert_toc_lists_in_the_order_named(tmp_path):
     doc = HwpxDocument.open(out)
     hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     # A field per list, in the order named (a repeat is dropped); only the 제목 list keeps heading entries.
-    assert [p.text for p in doc.paragraphs[1:]][:8] == [
+    assert [p.text for p in doc.paragraphs[2:]][:8] == [
         "<그림 차례>", "", "<제목 차례>", "1. 장\t1", "2. 절\t1", "", "<표 차례>", "",
     ]
     begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
@@ -880,7 +880,7 @@ def test_convert_toc_lists_in_the_order_named(tmp_path):
         assert int(n) == len(rest) - 1
     assert all(b.get("dirty") == "1" for b in begins)
     # The break before the marker lands on the first list's title.
-    assert doc.paragraphs[1].element.get("pageBreak") == "1"
+    assert doc.paragraphs[2].element.get("pageBreak") == "1"
 
 
 @pytest.mark.parametrize(
@@ -973,9 +973,9 @@ def test_convert_page_breaks(tmp_path):
 
     paragraphs = HwpxDocument.open(out).paragraphs[1:]
     starts = [p.text for p in paragraphs if p.element.get("pageBreak") == "1"]
-    # The break before [TOC] lands on the TOC's title paragraph, the one after it on "본문";
-    # the last one has nothing after it.
-    assert starts == ["첫 쪽", "둘째 쪽", "차례", "본문"]
+    # The first one is at the very start, already a new page; the break before [TOC] lands on the
+    # TOC's title paragraph, the one after it on "본문"; the last one has nothing after it.
+    assert starts == ["둘째 쪽", "차례", "본문"]
     assert [p.text for p in paragraphs][-1] == "본문"
 
 
@@ -1053,6 +1053,32 @@ def test_convert_page_break_before_toc_restarts_numbers_at_the_toc(tmp_path):
     assert _new_numbers(paragraphs[1]) == ["PAGE"]
     heading = next(p for p in paragraphs if p.text == "장")
     assert _new_numbers(heading) == ["PICTURE", "TABLE"]
+
+
+def test_convert_page_break_hides_the_page_number(tmp_path):
+    md = tmp_path / "hide.md"
+    md.write_text(
+        "\\newpage 쪽숨김\n표지\n\n\\newpage 쪽숨김 쪽\n[TOC]\n\n# 장\n\n\\newpage\n\n본문\n\n\\newpage 쪽숨김\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "hide.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    hidden = {p.text: p.element.find(f".//{hp}pageHiding") for p in paragraphs if p.element.find(f".//{hp}pageHiding") is not None}
+    # The cover and the TOC (its title paragraph) hide theirs; a plain break and one at the end hide nothing.
+    assert list(hidden) == ["표지", "차례"]
+    # The cover is the first page as it is: no break before it, but it still hides its number.
+    assert paragraphs[0].text == "표지" and paragraphs[0].element.get("pageBreak") != "1"
+    for hiding in hidden.values():
+        assert (hiding.get("hideHeader"), hiding.get("hideFooter"), hiding.get("hidePageNum")) == ("1", "1", "1")
+    toc = paragraphs[1]
+    assert _new_numbers(toc) == ["PAGE"]
+    # Up front, before the TOC field the paragraph holds.
+    first = next(e for e in toc.element.iter() if e.tag in (f"{hp}pageHiding", f"{hp}fieldBegin"))
+    assert first.tag == f"{hp}pageHiding"
 
 
 def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
