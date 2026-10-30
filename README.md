@@ -95,6 +95,15 @@ convert_markdown(markdown, doc.parent, Path("template.hwpx"), doc.with_suffix(".
 docker compose up -d --build    # http://localhost:8000
 ```
 
+이미지를 날짜 태그와 함께 빌드하려면 `build-images.sh` 를 씁니다. 개발용 `md2hwpx` 와 웹 서비스용 `md2hwpx-web` 을
+모두 빌드해 각각 `latest` 와 오늘 날짜 태그(`md2hwpx-web:261030` 처럼 YYMMDD)를 붙이므로, 나중에 다시 빌드해도
+그날의 이미지로 되돌릴 수 있습니다. 같은 날 다시 빌드하면 그날 태그도 새 이미지로 옮겨 갑니다.
+빌드만 하므로 실행 중인 웹 서비스는 `docker compose up -d` 로 바꿉니다.
+
+```sh
+./build-images.sh && docker compose up -d
+```
+
 - 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `http://`·`https://` git 저장소 주소(브랜치·태그 선택, 폐쇄망 http 저장소 포함).
   zip·git 은 변환할 md 파일이나 폴더의 경로를 지정할 수 있습니다.
 - 템플릿 HWPX 를 함께 올리면 그 템플릿으로 변환합니다.
@@ -193,6 +202,7 @@ Dockerfile      실행용 Alpine 이미지 (dev: 코드 마운트, web: 웹 서�
 compose.yaml    웹 서비스 실행
 template.hwpx   변환에 사용하는 템플릿 HWPX
 md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
+build-images.sh 개발용·웹 서비스 이미지를 latest·날짜 태그로 빌드하는 스크립트
 ```
 
 ## 스펙 문서
