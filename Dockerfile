@@ -7,14 +7,15 @@ ARG D2CODING_VERSION=1.4.0
 ARG D2CODING_DATE=20261003
 
 # chromium: mermaid-cli 렌더링, graphviz: plantuml 의 클래스/컴포넌트 다이어그램,
-# font-noto-cjk: 다이어그램 안의 한글 표시
+# font-noto-cjk: 다이어그램 안의 한글 표시, rsvg-convert: SVG 이미지를 PNG 로 변환
 RUN apk add --no-cache \
         python3 \
         nodejs npm \
         chromium \
         openjdk17-jre \
         graphviz \
-        font-noto-cjk
+        font-noto-cjk \
+        rsvg-convert
 
 ENV PUPPETEER_SKIP_DOWNLOAD=1
 RUN npm install -g @mermaid-js/mermaid-cli@${MERMAID_CLI_VERSION} \

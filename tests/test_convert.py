@@ -1,3 +1,5 @@
+import io
+import shutil
 import struct
 import zipfile
 import zlib
@@ -7,8 +9,9 @@ import pytest
 from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
+from PIL import Image
 
-from md2hwpx.convert import MISSING_IMAGE, convert
+from md2hwpx.convert import MISSING_IMAGE, convert, unusable_images
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "template.hwpx"
 
@@ -1192,6 +1195,87 @@ def test_convert_missing_image_is_a_placeholder(tmp_path):
     pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic"))
     assert _text(pic.find(f"{hp}caption")) == "[그림 1] 없는 그림"
     assert int(pic.find(f"{hp}curSz").get("width")) == BODY_WIDTH // 2
+
+
+def _image(width: int, height: int, image_format: str) -> bytes:
+    data = io.BytesIO()
+    Image.new("RGB", (width, height), "red").save(data, image_format)
+    return data.getvalue()
+
+
+def _embedded(out: Path) -> list[bytes]:
+    with zipfile.ZipFile(out) as hwpx:
+        return [hwpx.read(n) for n in sorted(hwpx.namelist()) if n.startswith("BinData/")]
+
+
+def test_convert_other_image_formats_become_png(tmp_path):
+    (tmp_path / "a.bmp").write_bytes(_image(40, 20, "BMP"))
+    (tmp_path / "b.webp").write_bytes(_image(40, 20, "WEBP"))
+    (tmp_path / "c.tiff").write_bytes(_image(40, 20, "TIFF"))
+    (tmp_path / "png.jpg").write_bytes(_png(40, 20))  # named for one format, holding another
+    md = tmp_path / "formats.md"
+    md.write_text("![](a.bmp)\n\n![](b.webp)\n\n![](c.tiff)\n\n![](png.jpg)\n", encoding="utf-8")
+    out = tmp_path / "formats.hwpx"
+
+    assert unusable_images(md.read_text(encoding="utf-8"), tmp_path) == []
+    convert(md, TEMPLATE, out)
+
+    # Each goes in as a PNG of its own size, the original one as it is.
+    images = _embedded(out)
+    assert len(images) == 4 and all(i.startswith(b"\x89PNG") for i in images)
+    assert _png(40, 20) in images
+    assert all(Image.open(io.BytesIO(i)).size == (40, 20) for i in images)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pics = [e for p in HwpxDocument.open(out).paragraphs for e in p.element.iter(f"{hp}pic")]
+    assert [(int(p.find(f"{hp}curSz").get("width")), int(p.find(f"{hp}curSz").get("height"))) for p in pics] == [
+        (40 * 75, 20 * 75)
+    ] * 4  # 96 DPI
+
+
+def test_convert_unreadable_image_is_a_placeholder(tmp_path):
+    (tmp_path / "broken.png").write_bytes(b"not an image")
+    md = tmp_path / "broken.md"
+    md.write_text("본문\n\n![](broken.png)\n\n![](gone.png)\n", encoding="utf-8")
+    out = tmp_path / "broken.hwpx"
+
+    assert unusable_images(md.read_text(encoding="utf-8"), tmp_path) == [
+        (3, tmp_path / "broken.png", "이미지 형식을 읽을 수 없어"),
+        (5, tmp_path / "gone.png", "이미지 파일이 없어"),
+    ]
+    convert(md, TEMPLATE, out)
+
+    assert _embedded(out) == [MISSING_IMAGE.read_bytes()] * 2
+
+
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>'
+
+
+@pytest.mark.skipif(shutil.which("rsvg-convert") is None, reason="rsvg-convert not installed")
+def test_convert_svg_becomes_png(tmp_path):
+    (tmp_path / "a.svg").write_bytes(SVG)
+    md = tmp_path / "svg.md"
+    md.write_text("![](a.svg)\n", encoding="utf-8")
+    out = tmp_path / "svg.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    [image] = _embedded(out)
+    assert Image.open(io.BytesIO(image)).size == (40, 20)
+
+
+def test_convert_svg_without_rsvg_convert_is_a_placeholder(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))  # no rsvg-convert on it
+    (tmp_path / "a.svg").write_bytes(SVG)
+    md = tmp_path / "svg.md"
+    md.write_text("![](a.svg)\n", encoding="utf-8")
+    out = tmp_path / "svg.hwpx"
+
+    assert unusable_images(md.read_text(encoding="utf-8"), tmp_path) == [
+        (1, tmp_path / "a.svg", "SVG 를 변환할 rsvg-convert 가 없어"),
+    ]
+    convert(md, TEMPLATE, out)
+
+    assert _embedded(out) == [MISSING_IMAGE.read_bytes()]
 
 
 def test_convert_image_inside_text(tmp_path):

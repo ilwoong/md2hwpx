@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import re
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from typing import NamedTuple
@@ -14,6 +16,7 @@ from hwpx.oxml import Style
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
 from markdown_it.tree import SyntaxTreeNode
+from PIL import Image
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
@@ -44,8 +47,9 @@ _HP_P = f"{_HP}p"
 _LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
-# Shown in place of an image whose file is not there.
+# Shown in place of an image whose file is not there, or that cannot be read.
 MISSING_IMAGE = Path(__file__).resolve().parent / "static" / "missing-image.png"
+SVG_TIMEOUT = 60  # seconds for rsvg-convert
 BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
@@ -138,6 +142,56 @@ def _image_pixels(data: bytes) -> tuple[int, int] | None:
                 return int.from_bytes(data[i + 7 : i + 9], "big"), int.from_bytes(data[i + 5 : i + 7], "big")
             i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
     return None
+
+
+class ImageError(Exception):
+    """An image that cannot go in the HWPX. The message is a Korean clause ending in "-어" / "-해",
+    which a warning goes on from ("... 대체 이미지를 넣었습니다")."""
+
+
+def _image_format(data: bytes) -> str | None:
+    """The format of a PNG, JPEG or GIF image, as the HWPX names it, or None."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8"):
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    return None
+
+
+def picture_data(path: Path) -> tuple[bytes, str]:
+    """The image at *path* as (data, format) to put in the HWPX: PNG, JPEG and GIF as they are, any other
+    image as PNG (SVG by rsvg-convert, the rest by Pillow). Raises ImageError if it cannot be either."""
+    if not path.is_file():
+        raise ImageError("이미지 파일이 없어")
+    data = path.read_bytes()
+    image_format = _image_format(data)
+    if image_format is not None:
+        return data, image_format
+    if path.suffix.lower() == ".svg" or b"<svg" in data[:4096]:
+        return _svg_to_png(data), "png"
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            png = io.BytesIO()
+            image.convert("RGBA").save(png, "PNG")  # RGBA: PNG cannot hold every mode (CMYK, ...)
+    # UnidentifiedImageError is an OSError; DecompressionBombError, for one too large to open, is not.
+    except (OSError, ValueError, Image.DecompressionBombError):
+        raise ImageError("이미지 형식을 읽을 수 없어") from None
+    return png.getvalue(), "png"
+
+
+def _svg_to_png(svg: bytes) -> bytes:
+    """*svg* drawn as PNG at 96 DPI by rsvg-convert. Given on stdin, it has no base to load files from."""
+    try:
+        result = subprocess.run(["rsvg-convert", "--format=png"], input=svg, capture_output=True, timeout=SVG_TIMEOUT)
+    except FileNotFoundError:
+        raise ImageError("SVG 를 변환할 rsvg-convert 가 없어") from None
+    except subprocess.TimeoutExpired:
+        raise ImageError("SVG 변환이 너무 오래 걸려") from None
+    if result.returncode != 0 or _image_format(result.stdout) != "png":
+        raise ImageError("SVG 를 변환하지 못해")
+    return result.stdout
 
 
 def _length(value: str | None, whole: int) -> int | None:
@@ -714,9 +768,11 @@ class _Writer:
 
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
-        if not image_path.is_file():
-            image_path = MISSING_IMAGE  # the caller warns about it (missing_images)
-        data = image_path.read_bytes()
+        try:
+            data, image_format = picture_data(image_path)
+        except ImageError:  # the caller warns about it (unusable_images)
+            image_path = MISSING_IMAGE
+            data, image_format = picture_data(image_path)
         if self.caption is None:  # without a "[그림] ..." line, the alt text (if any) is the caption
             alt = _strip(_runs(node.children))
             if alt:
@@ -730,9 +786,7 @@ class _Writer:
             _length(node.attrs.get("width"), self.body_width),
             _length(node.attrs.get("height"), self.body_height),
         ) or (None, None)
-        picture = self.doc.add_picture(
-            data, image_path.suffix.lstrip(".").lower(), width=width, height=height, **self.picture_body
-        )
+        picture = self.doc.add_picture(data, image_format, width=width, height=height, **self.picture_body)
         _space_above_below(picture)
         self.place(picture.paragraph, quote, indent)
         # A picture narrower than the body sits at the left margin and leaves a gap at the right; centred,
@@ -1018,9 +1072,16 @@ def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
     return images
 
 
-def missing_images(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
-    """(line number, path) of each image, outside code blocks, whose file is not in *base_dir*."""
-    return [(number, path) for number, path in image_paths(markdown, base_dir) if not path.is_file()]
+def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]]:
+    """(line number, path, why) of each image, outside code blocks, that cannot go in the HWPX
+    (see picture_data): the conversion shows a placeholder instead."""
+    unusable = []
+    for number, path in image_paths(markdown, base_dir):
+        try:
+            picture_data(path)
+        except ImageError as error:
+            unusable.append((number, path, str(error)))
+    return unusable
 
 
 def read_markdown(md_path: Path) -> str:

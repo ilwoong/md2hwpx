@@ -10,7 +10,7 @@ from pathlib import Path
 
 from hwpx.errors import HwpxError
 
-from md2hwpx.convert import ConversionError, convert_markdown, missing_images, read_markdown
+from md2hwpx.convert import ConversionError, convert_markdown, read_markdown, unusable_images
 from md2hwpx.diagram import DiagramError, render_diagrams
 
 
@@ -29,21 +29,22 @@ def _input_files(path: Path) -> list[Path]:
     return files
 
 
-def missing_image_message(file: Path, line: int, image: Path) -> str:
-    return f"{file}:{line}: 이미지 파일이 없어 대체 이미지를 넣었습니다: {image}"
+def image_warning(file: Path, line: int, image: Path, why: str) -> str:
+    return f"{file}:{line}: {why} 대체 이미지를 넣었습니다: {image}"
 
 
-def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[Path, int, Path]]:
+def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[Path, int, Path, str]]:
     """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*.
 
-    Images whose file is not there are shown as a placeholder; they are returned as (file, line, image).
+    Images that cannot go in (see unusable_images) are shown as a placeholder; they are returned as
+    (file, line, image, why).
     """
     base_dir = input_path if input_path.is_dir() else input_path.parent
     files = _input_files(input_path)
-    missing = [
-        (f, line, image)
+    unusable = [
+        (f, line, image, why)
         for f in files
-        for line, image in missing_images(f.read_text(encoding="utf-8"), f.parent)
+        for line, image, why in unusable_images(f.read_text(encoding="utf-8"), f.parent)
     ]
     # A blank line between files keeps the last block of one file from running into the next.
     markdown = "\n\n".join(read_markdown(f) for f in files)
@@ -51,7 +52,7 @@ def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[
     with tempfile.TemporaryDirectory() as image_dir:
         markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
         convert_markdown(markdown, base_dir, template, output)
-    return missing
+    return unusable
 
 
 def _output_path(input_path: Path, output: Path | None) -> Path:
@@ -89,11 +90,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         output = _output_path(args.input, args.output)
-        missing = convert_input(args.input, args.template, output)
+        unusable = convert_input(args.input, args.template, output)
     except (OSError, DiagramError, HwpxError, ConversionError) as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
-    for image in missing:
-        print(f"md2hwpx: 경고: {missing_image_message(*image)}", file=sys.stderr)
+    for image in unusable:
+        print(f"md2hwpx: 경고: {image_warning(*image)}", file=sys.stderr)
     print(output)
     return 0
