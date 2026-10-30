@@ -160,6 +160,8 @@ docker compose up -d    # .env 를 바꾼 뒤에도 다시 실행해야 컨테�
 
 | 증상 | 원인 |
 |---|---|
+| 로그인을 누르면 Gitea 의 `/oauth/authorize?...` 로 가서 404 | Gitea 값을 `MD2HWPX_GITLAB_*` 에 넣음. `MD2HWPX_GITEA_*` 로 옮기고, Gitea 앱의 Redirect URI 도 `/oauth/gitea/callback` 으로 고친 뒤 다시 실행 |
+| 로그인을 누르면 GitLab 의 `/login/oauth/authorize?...` 로 가서 404 | 반대로 GitLab 값을 `MD2HWPX_GITEA_*` 에 넣음. `MD2HWPX_GITLAB_*` 로 옮김 |
 | 로그인을 누르면 서버가 "redirect_uri 가 맞지 않는다" 는 오류를 보여 줌 | Redirect URI 와 `MD2HWPX_BASE_URL` 이 다름 (`localhost` / `127.0.0.1`, 포트, 끝의 `/` 등) |
 | 로그인 후 "로그인 요청이 올바르지 않거나 오래되었습니다" | 로그인을 시작한 주소와 `MD2HWPX_BASE_URL` 이 달라 쿠키가 이어지지 않음. `MD2HWPX_BASE_URL` 로 접속해서 로그인 |
 | 로그인 후 "토큰을 받지 못했습니다" | 컨테이너에서 서버 주소로 접속되지 않거나 Client Secret 이 틀림 |
