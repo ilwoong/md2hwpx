@@ -29,7 +29,8 @@ _DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
 _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 # Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
 _MARKERS = {
-    "toc": re.compile(r"\[TOC\]", re.IGNORECASE),
+    # "[TOC]", or "[TOC 그림 표 제목]": the lists to make, in that order. "링크없음" leaves out the links.
+    "toc": re.compile(r"\[TOC((?:[ \t]+(?:제목|표|그림|수식|링크없음))*)[ \t]*\]", re.IGNORECASE),
     "page_break": re.compile(r"\\(?:newpage|pagebreak)"),
     # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
     "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
@@ -55,6 +56,11 @@ QUOTE_BAR_GAP = 850  # HWPUNIT between the quote bar and the text
 RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic break
 TOC_TITLE = "차례"
 TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
+# The TOC field's ContentsMake bits for each list, as Hancom writes them with only that list chosen.
+# A plain [TOC] keeps python-hwpx's 31, all of them in one field.
+TOC_KINDS = {"제목": 17, "표": 2, "그림": 4, "수식": 8}
+TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
+_TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
 HWPUNIT_PER_PIXEL = 75  # 7200 HWPUNIT per inch at 96 DPI
 HWPUNIT_PER_MM = 7200 / 25.4  # 7200 HWPUNIT per inch
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
@@ -103,7 +109,7 @@ class _Piece(NamedTuple):
     kind: str
     runs: list[Run] | None = None
     image: SyntaxTreeNode | None = None
-    text: str = ""  # a blank page's wording (see _MARKERS)
+    text: str = ""  # a blank page's wording, or the TOC marker's words (see _MARKERS)
 
 
 class ConversionError(Exception):
@@ -352,7 +358,7 @@ def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
         if found:
             flush()
             marker, match = found
-            # Only the blank page marker carries a wording, in its one group.
+            # The blank page marker carries a wording and the TOC marker its words, in their one group.
             pieces.append(_Piece(marker, text=match.group(1).strip() if match.groups() else ""))
             continue
         if runs:
@@ -408,6 +414,8 @@ class _Writer:
         self.numbers = {"표": 0, "그림": 0}  # within that chapter
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_page_break = False  # a page break right before the [TOC] marker
+        self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
+        self.toc_links = True  # entries are hyperlinks, unless the [TOC] marker says 링크없음
         self.page_breaks: list[int] = []  # indexes of the paragraphs that start a new page
         # Paragraphs already there when the conversion starts (see new_page).
         self._first_content = self.paragraph_count()
@@ -652,6 +660,9 @@ class _Writer:
             if piece.kind == "toc":
                 if self.toc_at is None:
                     self.toc_at = self.paragraph_count()
+                    words = piece.text.split()
+                    self.toc_kinds = [w for w in dict.fromkeys(words) if w != TOC_NO_LINKS]
+                    self.toc_links = TOC_NO_LINKS not in words
                     if self.toc_at in self.page_breaks:
                         self.page_breaks.remove(self.toc_at)
                         self.toc_page_break = True
@@ -872,11 +883,35 @@ class _Writer:
             # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
             ensure_body_styles_not_collected(self.doc)
             # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
-            add_native_toc(
-                self.doc, at_index=self.toc_at, title=TOC_TITLE, level=TOC_LEVEL, headings=headings, dirty=True
-            )
+            if not self.toc_kinds:
+                add_native_toc(
+                    self.doc, at_index=self.toc_at, title=TOC_TITLE, level=TOC_LEVEL, hyperlink=self.toc_links,
+                    headings=headings, dirty=True,
+                )
+            # A field per list: Hancom orders the lists within one field itself. Each goes in at the
+            # same place, so they are added last first.
+            for kind in reversed(self.toc_kinds):
+                made = add_native_toc(
+                    self.doc, at_index=self.toc_at, title=f"<{kind} 차례>", level=TOC_LEVEL,
+                    hyperlink=self.toc_links, headings=headings, dirty=True,
+                )
+                paragraphs = self.doc.paragraphs[self.toc_at : self.toc_at + 1 + made["entryCount"]]
+                _set_toc_make(paragraphs[0], made["tocFieldId"], TOC_KINDS[kind])
+                if kind != "제목":
+                    # Its entries are the headings: drop them, Hancom lists the captions when it rebuilds.
+                    for entry in paragraphs[1:]:
+                        entry.element.getparent().remove(entry.element)
             if self.toc_page_break:
                 self.doc.paragraphs[self.toc_at].element.set("pageBreak", "1")
+
+
+def _set_toc_make(paragraph, field_id: str, make: int) -> None:
+    """Set the ContentsMake bits (the lists it makes) of TOC field *field_id*, which opens in *paragraph*."""
+    begin = next(b for b in paragraph.element.iter(f"{_HP}fieldBegin") if b.get("id") == field_id)
+    command = next(p for p in begin.iter(f"{_HP}stringParam") if p.get("name") == "Command")
+    params = _TOC_MAKE.sub(f"ContentsMake:uint:{make}", command.text.split(":", 3)[3])
+    # "TableOfContents:set:N:...": Hancom writes N as the length of what follows less one.
+    command.text = f"TableOfContents:set:{len(params) - 1}:{params}"
 
 
 def _walk(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
