@@ -830,6 +830,8 @@ def test_convert_table_of_contents(tmp_path):
     assert len(begins) == 1
     command = "".join(begins[0].itertext())
     assert "ContentsLevel:int:3" in command
+    assert "ContentsMake:uint:31" in command  # every list, in one field
+    assert "ContentsHyperlink:bool:1" in command  # entries link to their headings
     assert begins[0].get("dirty") == "1"  # Hancom rebuilds it on open
     # Body text in table cells is moved off 바탕글 so Hancom does not list it in the TOC.
     code = doc.tables.all[0].cell(0, 0).paragraphs[0]
@@ -844,6 +846,61 @@ def test_convert_toc_without_headings_is_skipped(tmp_path):
     convert(md, TEMPLATE, out)
 
     assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["본문"]
+
+
+def test_convert_toc_lists_in_the_order_named(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("\\newpage\n[toc 그림 제목 표 그림]\n\n# 장\n\n## 절\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    # A field per list, in the order named (a repeat is dropped); only the 제목 list keeps heading entries.
+    assert [p.text for p in doc.paragraphs[1:]][:8] == [
+        "<그림 차례>", "", "<제목 차례>", "1. 장\t1", "2. 절\t1", "", "<표 차례>", "",
+    ]
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    commands = [p.text for b in begins for p in b.iter(f"{hp}stringParam") if p.get("name") == "Command"]
+    assert [c.split()[0].rsplit(":", 1)[1] for c in commands] == ["4", "17", "2"]  # ContentsMake:uint:N
+    for command in commands:
+        # As Hancom writes it: "set:N:" with N the length of the rest less one.
+        _, _, n, rest = command.split(":", 3)
+        assert int(n) == len(rest) - 1
+    assert all(b.get("dirty") == "1" for b in begins)
+    # The break before the marker lands on the first list's title.
+    assert doc.paragraphs[1].element.get("pageBreak") == "1"
+
+
+@pytest.mark.parametrize(
+    "marker, makes",
+    [("[TOC 링크없음]", ["31"]), ("[TOC 표 링크없음 제목]", ["2", "17"])],
+)
+def test_convert_toc_without_links(tmp_path, marker, makes):
+    md = tmp_path / "toc.md"
+    md.write_text(f"{marker}\n\n# 장\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    commands = [p.text for b in begins for p in b.iter(f"{hp}stringParam") if p.get("name") == "Command"]
+    # 링크없음 is not a list: it turns the links off in every field the marker makes.
+    assert [c.split()[0].rsplit(":", 1)[1] for c in commands] == makes
+    assert all("ContentsHyperlink:bool:0" in c for c in commands)
+
+
+def test_convert_toc_with_unknown_list_stays_text(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("# 장\n\n[TOC 목록]\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["장", "[TOC 목록]"]
 
 
 def test_convert_level_1_heading_starts_a_new_page(tmp_path):
