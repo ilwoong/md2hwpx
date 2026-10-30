@@ -19,7 +19,7 @@ def _natural_key(path: Path) -> list:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
 
 
-def _input_files(path: Path) -> list[Path]:
+def input_files(path: Path) -> list[Path]:
     """The Markdown file, or every .md file directly in the folder, in name order."""
     if not path.is_dir():
         return [path]
@@ -40,7 +40,7 @@ def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[
     (file, line, image, why).
     """
     base_dir = input_path if input_path.is_dir() else input_path.parent
-    files = _input_files(input_path)
+    files = input_files(input_path)
     unusable = [
         (f, line, image, why)
         for f in files

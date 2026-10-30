@@ -113,6 +113,14 @@ def test_zip_of_a_folder_with_subfolder_images(tmp_path):
     assert len(doc.media.picture_references()) == 1
 
 
+def test_zip_folder_named_like_markdown_is_skipped(tmp_path):
+    archive = _zip({"docs/a.md": b"# A\n", "docs/b.md": b"# B\n", "docs/old.md/note.txt": b"x"})
+    response = client.post("/convert", data={"source": "zip"}, files={"archive": ("docs.zip", archive)})
+
+    # Only files are joined, as the command line does: the folder "old.md" is not read as Markdown.
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["A", "B"]
+
+
 def test_zip_path_picks_a_file(tmp_path):
     archive = _zip({"a.md": b"# A\n", "sub/b.md": b"# B\n"})
     response = client.post(
