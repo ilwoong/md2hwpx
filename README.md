@@ -79,8 +79,9 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
 
 ```python
 from pathlib import Path
-from md2hwpx.convert import DEFAULT_TEMPLATE, caption_numbering, convert_markdown, read_markdown
+from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown
 from md2hwpx.diagram import render_diagrams
+from md2hwpx.source import caption_numbering, read_markdown
 
 doc = Path("docs/guide.md")
 markdown = render_diagrams(read_markdown(doc), out_dir=doc.parent / "images", link_base=doc.parent)

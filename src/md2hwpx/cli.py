@@ -12,11 +12,9 @@ from typing import NamedTuple
 
 from hwpx.errors import HwpxError
 
-from md2hwpx.convert import (
-    DEFAULT_TEMPLATE, ConversionError, caption_numbering, convert_markdown, paragraph_styles, read_markdown,
-    unknown_styles, unusable_images,
-)
+from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, paragraph_styles
 from md2hwpx.diagram import DiagramError, render_diagrams
+from md2hwpx.source import ConversionError, caption_numbering, read_markdown, unknown_styles, unusable_images
 
 # What convert_input raises for an input it cannot convert. BadZipFile: a template that is not HWPX (a zip).
 CONVERSION_ERRORS = (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile)

@@ -19,7 +19,8 @@ from fastapi.responses import HTMLResponse, Response
 
 from md2hwpx import oauth
 from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files
-from md2hwpx.convert import DEFAULT_TEMPLATE, image_paths
+from md2hwpx.convert import DEFAULT_TEMPLATE
+from md2hwpx.source import image_paths
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 MAX_UPLOAD = 50 * 1024 * 1024  # bytes: all uploads of a request, and a zip's extracted files
