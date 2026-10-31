@@ -43,12 +43,12 @@ def warning(file: Path | str, line: int, message: str, path: Path | str | None =
 
 def _warnings(md: Path, styles: set[str]) -> list[tuple[Path, int, str, Path | None]]:
     """What the HWPX is made despite in *md*, in line order: images shown as a placeholder (see
-    unusable_images) and custom-style divs whose style the template lacks (see unknown_styles)."""
+    unusable_images) and styles the template lacks that custom-style divs or [TOC] name (see unknown_styles)."""
     markdown = md.read_text(encoding="utf-8")
     found = [(md, line, f"{why} 대체 이미지를 넣었습니다", image) for line, image, why in unusable_images(markdown, md.parent)]
     found += [
-        (md, line, f"템플릿에 '{name}' 문단 스타일이 없어 본문 스타일로 넣었습니다", None)
-        for line, name in unknown_styles(markdown, styles)
+        (md, line, f"템플릿에 '{name}' 문단 스타일이 없어 {result}", None)
+        for line, name, result in unknown_styles(markdown, styles)
     ]
     return sorted(found, key=lambda w: w[1])
 
