@@ -29,6 +29,10 @@ GIT_TIMEOUT = 120  # seconds
 # read the server's own files.
 _REPO = re.compile(r"https?://[^\s]+")
 _REF = re.compile(r"[\w][\w./-]*")
+_COMMIT = re.compile(r"[0-9a-fA-F]{40}")
+# What may be a commit's abbreviated hash, which a server will not fetch: only a failed ref is taken for one,
+# as a tag or branch may be named like it ("20261031").
+_SHORT_COMMIT = re.compile(r"[0-9a-fA-F]{4,39}")
 HWPX_TYPE = "application/hwp+zip"
 WARNINGS_HEADER = "X-Md2hwpx-Warnings"  # what the HWPX was made despite, one per line
 
@@ -103,17 +107,25 @@ def _extract_zip(upload: UploadFile | None, root: Path, work: Path, budget: _Bud
 
 
 def _clone(repo: str, ref: str, root: Path, request: Request) -> str:
-    """Shallow-clone the http(s) git *repo* (at branch or tag *ref*, if given) into *root*,
+    """Shallow-clone the http(s) git *repo* (at branch, tag or full commit hash *ref*, if given) into *root*,
     as the user if they are signed in to the server it is on (see oauth)."""
     if not _REPO.fullmatch(repo):
         raise HTTPException(400, "git 저장소 주소는 http:// 또는 https:// 로 시작해야 합니다.")
     if ref and not _REF.fullmatch(ref):
         raise HTTPException(400, f"브랜치·태그 이름이 올바르지 않습니다: {ref}")
-    command = [
+    git = [
         "git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.http.allow=always",
         "-c", "core.symlinks=false",
-        "clone", "--depth", "1", "--quiet", *(["--branch", ref] if ref else []), "--", repo, str(root),
     ]
+    if _COMMIT.fullmatch(ref):
+        # clone --branch takes no commit: fetch that one commit into a new repository and check it out.
+        commands = [
+            [*git, "init", "--quiet", str(root)],
+            [*git, "-C", str(root), "fetch", "--depth", "1", "--quiet", "--", repo, ref.lower()],
+            [*git, "-C", str(root), "checkout", "--quiet", "FETCH_HEAD"],
+        ]
+    else:
+        commands = [[*git, "clone", "--depth", "1", "--quiet", *(["--branch", ref] if ref else []), "--", repo, str(root)]]
     # No prompt for a user name: a private repository fails instead of waiting.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     server = oauth.server_for(repo)
@@ -122,13 +134,16 @@ def _clone(repo: str, ref: str, root: Path, request: Request) -> str:
         # In the environment, not the command line, which other processes can list. Only for this server's
         # address (server_for): a token sent to any address given would be handed to whoever runs it.
         env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0=auth)
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(400, f"git 저장소를 {GIT_TIMEOUT}초 안에 받지 못했습니다.") from None
-    if result.returncode != 0:
-        hint = f"\n비공개 저장소라면 {server.provider.label} 에 로그인하세요." if server and not auth else ""
-        raise HTTPException(400, f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}")
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(400, f"git 저장소를 {GIT_TIMEOUT}초 안에 받지 못했습니다.") from None
+        if result.returncode != 0:
+            hint = f"\n비공개 저장소라면 {server.provider.label} 에 로그인하세요." if server and not auth else ""
+            if _SHORT_COMMIT.fullmatch(ref):
+                hint += "\n커밋은 전체 해시(40자)로 지정하세요."
+            raise HTTPException(400, f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}")
     shutil.rmtree(root / ".git", ignore_errors=True)
     return repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git") or "document"
 
