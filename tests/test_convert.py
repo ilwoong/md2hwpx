@@ -12,9 +12,8 @@ from hwpx.layout import lint_layout
 from PIL import Image
 
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
-from md2hwpx.convert import (
-    MISSING_IMAGE, ConversionError, caption_numbering, convert, paragraph_styles, unknown_styles, unusable_images,
-)
+from md2hwpx.convert import MISSING_IMAGE, convert, paragraph_styles
+from md2hwpx.source import ConversionError, caption_numbering, unknown_styles, unusable_images
 
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"  # Hancom paragraph XML
 HH = "{http://www.hancom.co.kr/hwpml/2011/head}"  # Hancom header XML

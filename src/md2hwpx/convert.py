@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -21,16 +21,12 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    Piece, Run, TocRequest, block_kind, caption_line, inline_runs, marker_lines, paragraph_pieces, plain_text,
+    Piece, Run, TocRequest, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text,
     strip_runs, toc_request,
 )
+from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
-# YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
-_FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
-# The front matter key that says how captions are numbered (see caption_numbering), and its values.
-CAPTION_NUMBERING = "caption-numbering"
-CAPTION_NUMBERINGS = ("chapter", "document")
-_CAPTION_NUMBERING = re.compile(rf"^{CAPTION_NUMBERING}:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
@@ -71,13 +67,16 @@ OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above a
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
-# One line of code as Hancom draws it: 9pt at 140% spacing, 1260 HWPUNIT.
-CODE_LINE_HEIGHT = CODE_SIZE * 100 * CODE_LINE_SPACING // 100
 CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
 # A blank page's wording: 11pt, in the body font, one line at 160% spacing.
 BLANK_PAGE_FONT_SIZE = 11  # pt
 BLANK_PAGE_LINE_SPACING = 160  # %
 BLANK_PAGE_MARGIN = {"left": 5660, "right": 5660, "top": 1415, "bottom": 1415}  # 20 mm sides, 5 mm above and below
+
+
+def _line_height(size: int, spacing: int) -> int:
+    """One line's height in HWPUNIT, as Hancom draws it: *size* pt (100 HWPUNIT a point) at *spacing* %."""
+    return size * 100 * spacing // 100
 
 
 def _line_metrics(doc: HwpxDocument, style: Style) -> tuple[int, int]:
@@ -88,7 +87,7 @@ def _line_metrics(doc: HwpxDocument, style: Style) -> tuple[int, int]:
     """
     size = int(doc.styles.char_property(style.char_pr_id_ref).attributes["height"]) // 100
     spacing = doc.styles.paragraph_property(style.para_pr_id_ref).line_spacing.value
-    return size, size * 100 * spacing // 100
+    return size, _line_height(size, spacing)
 
 
 class _Caption(NamedTuple):
@@ -114,11 +113,6 @@ class _PageStart:
         _new_numbers(paragraph, self.restarts)
         if self.hide:
             _hide_page(paragraph)
-
-
-class ConversionError(Exception):
-    """The Markdown cannot be converted (its front matter says what cannot be done), or the converted
-    document failed HWPX validation, so it was not saved."""
 
 
 def _blank_page_width(text: str, size: int) -> int:
@@ -557,7 +551,7 @@ class _Writer:
         and carries numberingType NONE so Hancom's table of contents leaves it out. The next block starts on
         the page after it, so the page break goes on the next paragraph (see the piece after this one).
         """
-        line = BLANK_PAGE_FONT_SIZE * 100 * BLANK_PAGE_LINE_SPACING // 100  # the font at 160% line spacing
+        line = _line_height(BLANK_PAGE_FONT_SIZE, BLANK_PAGE_LINE_SPACING)
         margin = BLANK_PAGE_MARGIN
         width = _blank_page_width(text, BLANK_PAGE_FONT_SIZE) + margin["left"] + margin["right"]
         height = line + margin["top"] + margin["bottom"]
@@ -645,7 +639,7 @@ class _Writer:
                 )
             paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING)
         # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
-        fit_rows(table, self.doc, CODE_LINE_HEIGHT)
+        fit_rows(table, self.doc, _line_height(CODE_SIZE, CODE_LINE_SPACING))
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""
@@ -798,105 +792,9 @@ def _set_toc_command(paragraph, field_id: str, make: int, styles: Iterable[str] 
     command.text = f"TableOfContents:set:{len(params) - 1}:{params}"
 
 
-def _walk(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
-    yield node
-    for child in node.children:
-        yield from _walk(child)
-
-
-def _ancestors(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
-    while node.parent is not None:
-        node = node.parent
-        yield node
-
-
-def _blank_front_matter(markdown: str) -> str:
-    """*markdown* with its front matter as blank lines, so line numbers still count it."""
-    return _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
-
-
-def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
-    """(line number, path) of each image outside code blocks, its path taken from *base_dir*."""
-    markdown = _blank_front_matter(markdown)
-    lines = markdown.splitlines()
-    images: list[tuple[int, Path]] = []
-    for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
-        if node.type != "inline" or node.map is None:
-            continue
-        for image in (n for n in _walk(node) if n.type == "image"):
-            src = image.attrs["src"]
-            # The line of the paragraph that names the image.
-            start, end = node.map
-            raw = next((s for s in (src, unquote(src)) if any(s in line for line in lines[start:end])), None)
-            number = next((i + 1 for i in range(start, end) if raw and raw in lines[i]), start + 1)
-            images.append((number, base_dir / unquote(src)))
-    return images
-
-
-def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]]:
-    """(line number, path, why) of each image, outside code blocks, that cannot go in the HWPX
-    (see picture_data): the conversion shows a placeholder instead."""
-    unusable = []
-    for number, path in image_paths(markdown, base_dir):
-        try:
-            picture_data(path)
-        except ImageError as error:
-            unusable.append((number, path, str(error)))
-    return unusable
-
-
 def paragraph_styles(template_path: Path) -> set[str]:
     """The names of the template's paragraph styles, which a custom-style div can name."""
     return set(_paragraph_styles(HwpxDocument.open(template_path)))
-
-
-def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str, str]]:
-    """(line number, name, what follows) of each paragraph style not in *styles* (see paragraph_styles) that
-    a custom-style div or a [TOC] marker names. A div's paragraphs are left 본문; a TOC keeps the name, but
-    Hancom finds no paragraph of it to collect. "What follows" says which, as a Korean clause."""
-    found = []
-    for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
-        if node.type == "container_div" and (name := custom_style(node.info)) not in styles:
-            found.append((node.map[0] + 1, name, "본문 스타일로 넣었습니다"))
-        elif node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
-            # The [TOC] markers as the conversion finds them; a footnote's paragraphs are only text.
-            for offset, marker, words in marker_lines(node.children[0]):
-                if marker == "toc":
-                    found += [
-                        (node.map[0] + offset + 1, name, "차례에 모을 수 없습니다")
-                        for name in toc_request(words).styles if name not in styles
-                    ]
-    return found
-
-
-def read_markdown(md_path: Path) -> str:
-    """Read *md_path* (UTF-8) without its front matter, which is metadata, not document content."""
-    return _FRONT_MATTER.sub("", md_path.read_text(encoding="utf-8"), count=1)
-
-
-def caption_numbering(md_paths: Iterable[Path]) -> str:
-    """How the captions of the document made of *md_paths* are numbered, as their front matter says
-    ("caption-numbering: ..."): "chapter" ([표 2-1], within each chapter) or "document" ([표 7]).
-
-    A file that does not say leaves it to the others; if none does, it is "chapter". Raises ConversionError
-    for any other value, or for files that say different ones: a document has one way.
-    """
-    said: dict[str, Path] = {}  # value -> the first file that says it
-    for path in md_paths:
-        front = _FRONT_MATTER.match(path.read_text(encoding="utf-8"))
-        match = _CAPTION_NUMBERING.search(front[0]) if front else None
-        if match is None:
-            continue
-        value = match[1].strip("\"'")
-        if value not in CAPTION_NUMBERINGS:
-            raise ConversionError(f"{path}: {CAPTION_NUMBERING} 는 chapter 또는 document 여야 합니다: {value}")
-        said.setdefault(value, path)
-    if len(said) > 1:
-        (first, first_path), (other, other_path) = said.items()
-        raise ConversionError(
-            f"{CAPTION_NUMBERING} 가 파일마다 다릅니다: {first_path} 는 '{first}', {other_path} 는 '{other}'"
-        )
-    return next(iter(said), "chapter")
 
 
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None:

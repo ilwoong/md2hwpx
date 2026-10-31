@@ -430,16 +430,22 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 (차례의 헤딩 앵커 확인, 각주 번호 계산, `apply_list_format` 의 문단 나열, 저장·검증 직렬화).
 비공개 함수를 바꾸지 않고는 피할 수 없어 그대로 둔다.
 
-## 공개 API (`md2hwpx.convert`)
+## 공개 API
+
+변환(HWPX 쓰기)은 `md2hwpx.convert`, 변환 전 원고 읽기·검사(front matter, 경고할 이미지·스타일)는 `md2hwpx.source` 에 있다.
+`ConversionError` 는 `md2hwpx.source` 에 정의하고 `md2hwpx.convert` 도 쓴다.
 
 ```python
-def read_markdown(md_path: Path) -> str
+# md2hwpx.convert
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None
 def convert_markdown(
     markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
 ) -> None
-def caption_numbering(md_paths: Iterable[Path]) -> str
 def paragraph_styles(template_path: Path) -> set[str]
+
+# md2hwpx.source
+def read_markdown(md_path: Path) -> str
+def caption_numbering(md_paths: Iterable[Path]) -> str
 def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str, str]]
 ```
 
@@ -463,6 +469,7 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
 - 넣을 수 없는 이미지는 대체 이미지를 넣는다 (위 "이미지").
 
 ```python
+# md2hwpx.source
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]
 def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]]
 
