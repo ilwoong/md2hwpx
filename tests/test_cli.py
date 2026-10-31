@@ -3,9 +3,9 @@ import shutil
 import pytest
 from hwpx import HwpxDocument
 
+from helpers import _text
 from md2hwpx.cli import main
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
-from test_convert import _text
 
 needs_mmdc = pytest.mark.skipif(shutil.which("mmdc") is None, reason="mmdc not installed")
 
