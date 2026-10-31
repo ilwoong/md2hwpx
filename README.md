@@ -15,8 +15,10 @@ Markdown 파일을 한/글 문서 형식인 HWPX 파일로 변환하는 Python �
   - 각주(`[^1]` / `[^1]: 내용`), `[TOC]` 자리에 한/글 차례(`[TOC 그림 표 제목]` 처럼 넣을 차례와 순서 지정, `링크없음` 으로 하이퍼링크 끄기), `\newpage`(또는 `\pagebreak`) 줄에서 쪽 나누기, `[새 번호 쪽 표 그림 수식]` 줄에서 그 번호를 새로 시작, `[감추기]` 줄에서 그 쪽의 쪽 번호·머리말·꼬리말 숨김, `[여백면]` 줄에 여백 면 한 장
   - 이미지는 PNG·JPEG·GIF 는 그대로, 그 밖의 형식(BMP·TIFF·WebP 등)은 Pillow 로, SVG 는 `rsvg-convert` 로 PNG 로 바꿔 넣음
   - 저장 전 HWPX 스키마 검증, 넣을 수 없는 이미지(없는 파일, 읽을 수 없는 형식)는 대체 이미지("이미지 파일이 없습니다")를 넣고 `파일:줄` 위치와 함께 경고
-  - 파일 맨 앞의 YAML front matter(`---` ... `---`)는 변환하지 않고 무시
+  - 파일 맨 앞의 YAML front matter(`---` ... `---`)는 변환하지 않음. `caption-numbering` 키만 읽음
   - `[표] 제목` / `[그림] 제목` 줄 → `[표 N-M] 제목` / `[그림 N-M] 제목` 캡션 (`표그림 제목` 스타일). `N` 은 장(수준 1 헤딩) 번호, `M` 은 그 장에서의 순번(한/글 자동 번호). `[그림]` 줄이 없으면 이미지의 대체 텍스트가 제목
+  - front matter 에 `caption-numbering: document` 를 쓰면 장 번호 없이 문서 전체에서 센 `[표 7] 제목` 캡션. 기본은 `chapter`.
+    폴더 입력에서 파일마다 값이 다르면 변환하지 않음
 
 HWPX 생성에는 [python-hwpx](https://github.com/airmang/python-hwpx) 를 사용합니다.
 템플릿에는 `개요 1`~`개요 6`, `본문`, `바탕글`, `표그림 제목` 스타일이 있어야 합니다.
@@ -76,17 +78,18 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
 
 ```python
 from pathlib import Path
-from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, read_markdown
+from md2hwpx.convert import DEFAULT_TEMPLATE, caption_numbering, convert_markdown, read_markdown
 from md2hwpx.diagram import render_diagrams
 
 doc = Path("docs/guide.md")
 markdown = render_diagrams(read_markdown(doc), out_dir=doc.parent / "images", link_base=doc.parent)
-convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"))
+convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"), caption_numbering([doc]))
 ```
 
 다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장되고,
 반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
 이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
+`read_markdown` 은 front matter 를 지우므로 캡션 번호 방식은 `caption_numbering` 으로 따로 읽어 넘깁니다 (생략하면 `chapter`).
 `DEFAULT_TEMPLATE` 은 내장 템플릿입니다. 다른 템플릿은 그 경로를 넘깁니다.
 파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
 
