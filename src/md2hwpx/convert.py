@@ -34,7 +34,10 @@ _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
 # page hiding and blank page markers.
 _MARKERS = {
     # "[TOC]", or "[TOC 그림 표 제목]": the lists to make, in that order. "링크없음" leaves out the links.
-    "toc": re.compile(r"\[TOC((?:[ \t]+(?:제목|표|그림|수식|링크없음))*)[ \t]*\]", re.IGNORECASE),
+    # The 제목 list collects 개요 paragraphs, or with 스타일="A;B" those styles' (and with "개요" both).
+    "toc": re.compile(
+        r'\[TOC((?:[ \t]+(?:제목|개요|표|그림|수식|링크없음|스타일="[^"\n]+"))*)[ \t]*\]', re.IGNORECASE
+    ),
     "page_break": re.compile(r"\\(?:newpage|pagebreak)[ \t]*"),
     # "[새 번호 쪽 표 그림 수식]": those numbers start over at 1 from the next paragraph (Hancom's 새 번호로 시작).
     "restart": re.compile(r"\[새 번호((?:[ \t]+(?:쪽|표|그림|수식))+)[ \t]*\]"),
@@ -68,8 +71,15 @@ TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 # The TOC field's ContentsMake bits for each list, as Hancom writes them with only that list chosen.
 # A plain [TOC] keeps python-hwpx's 31, all of them in one field.
 TOC_KINDS = {"제목": 17, "표": 2, "그림": 4, "수식": 8}
+# The 제목 list's bits, as Hancom writes them: the list itself (1), and where it collects its entries from,
+# 개요 paragraphs (16, "개요 문단으로 모으기") and the styles named in ContentsStyles (32, "스타일로 모으기").
+TOC_TITLE_LIST, TOC_BY_OUTLINE, TOC_BY_STYLE = 1, 16, 32
 TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
+TOC_OUTLINE = "개요"  # in the [TOC] marker: the 제목 list collects 개요 paragraphs, with its styles if any
+_TOC_STYLES = re.compile(r'스타일="([^"]*)"')  # in the [TOC] marker: the styles the 제목 list collects
+_TOC_WORD = re.compile(r'스타일="[^"]*"|\S+')
 _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
+_TOC_NO_STYLES = "ContentsStyles:wstring:0:"  # as python-hwpx writes the TOC command: no styles
 # Hancom's running numbers (hp:newNum / hp:autoNum numType) a "[새 번호]" line can start over.
 NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
@@ -246,6 +256,12 @@ def _block_kind(node: SyntaxTreeNode | None) -> str | None:
     return node.type
 
 
+def _toc_styles(words: str) -> list[str]:
+    """The styles the [TOC] marker's *words* name in 스타일="A;B" for the 제목 list to collect, once each."""
+    names = (name.strip() for match in _TOC_STYLES.finditer(words) for name in match[1].split(";"))
+    return list(dict.fromkeys(name for name in names if name))
+
+
 def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
     """Split a paragraph's inline content into pieces: each image, and each line holding only
     a marker, stands apart; the text between them is a "runs" piece (blank ones are dropped)."""
@@ -334,6 +350,8 @@ class _Writer:
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
         self.toc_links = True  # entries are hyperlinks, unless the [TOC] marker says 링크없음
+        self.toc_outline = True  # the 제목 list collects 개요 paragraphs (see toc_marker)
+        self.toc_styles: list[str] = []  # and the paragraphs of these styles
         self.page_starts: dict[int, _PageStart] = {}  # paragraph index -> what it does about its page
         self.toc_start = _PageStart()  # what the [TOC] marker's position asked for, done by the TOC's title
         # Paragraphs already there when the conversion starts (see has_content).
@@ -603,12 +621,7 @@ class _Writer:
         for k, piece in enumerate(pieces):
             if piece.kind == "toc":
                 if self.toc_at is None:
-                    self.toc_at = self.paragraph_count()
-                    words = piece.text.split()
-                    self.toc_kinds = [w for w in dict.fromkeys(words) if w != TOC_NO_LINKS]
-                    self.toc_links = TOC_NO_LINKS not in words
-                    # A page break, restart or hiding asked for here goes on the TOC's title.
-                    self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
+                    self.toc_marker(piece.text)
             elif piece.kind == "page_break":
                 self.new_page()
             elif piece.kind == "restart":
@@ -624,6 +637,32 @@ class _Writer:
                 next_kind = pieces[k + 1].kind if k + 1 < len(pieces) else following
                 if not self.take_caption(piece.runs, next_kind):
                     self.text_paragraph(piece.runs, quote, indent)
+
+    def toc_marker(self, words: str) -> None:
+        """Keep the TOC's place, at the first [TOC] marker, and what its *words* ask for.
+
+        제목, 개요 and 스타일="..." all name the 제목 list (at the first of them). It collects 개요 paragraphs
+        unless styles are named; with them, the paragraphs of those styles, and 개요 ones too if 개요 is named.
+        """
+        self.toc_at = self.paragraph_count()
+        self.toc_styles = _toc_styles(words)
+        words = _TOC_WORD.findall(words)
+        self.toc_outline = TOC_OUTLINE in words or not self.toc_styles
+        kinds = ("제목" if word == TOC_OUTLINE or _TOC_STYLES.fullmatch(word) else word for word in words)
+        self.toc_kinds = [kind for kind in dict.fromkeys(kinds) if kind != TOC_NO_LINKS]
+        self.toc_links = TOC_NO_LINKS not in words
+        # A page break, restart or hiding asked for here goes on the TOC's title.
+        self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
+
+    def toc_entries(self) -> list:
+        """The paragraphs the 제목 list collects, in document order: 개요 ones down to TOC_LEVEL (if it
+        collects them) and those of its styles. Hancom collects them again when it rebuilds the TOC."""
+        outline = (
+            {p.element.get("styleIDRef") for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL}
+            if self.toc_outline else set()
+        )
+        styled = {str(self.paragraph_styles[name].id) for name in self.toc_styles if name in self.paragraph_styles}
+        return [p for p in self.doc.paragraphs if p.text.strip() and p.element.get("styleIDRef") in outline | styled]
 
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
@@ -828,7 +867,7 @@ class _Writer:
             if index < len(paragraphs):
                 start.apply(paragraphs[index])
 
-        headings = [p for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL]
+        headings = self.toc_entries()
         if self.toc_at is not None and headings:
             # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
             ensure_body_styles_not_collected(self.doc)
@@ -846,8 +885,12 @@ class _Writer:
                     hyperlink=self.toc_links, headings=headings, dirty=True,
                 )
                 paragraphs = self.doc.paragraphs[self.toc_at : self.toc_at + 1 + made["entryCount"]]
-                _set_toc_make(paragraphs[0], made["tocFieldId"], TOC_KINDS[kind])
-                if kind != "제목":
+                if kind == "제목":
+                    make = TOC_TITLE_LIST | (TOC_BY_OUTLINE if self.toc_outline else 0)
+                    make |= TOC_BY_STYLE if self.toc_styles else 0
+                    _set_toc_command(paragraphs[0], made["tocFieldId"], make, self.toc_styles)
+                else:
+                    _set_toc_command(paragraphs[0], made["tocFieldId"], TOC_KINDS[kind])
                     # Its entries are the headings: drop them, Hancom lists the captions when it rebuilds.
                     for entry in paragraphs[1:]:
                         entry.element.getparent().remove(entry.element)
@@ -888,11 +931,15 @@ def _auto_number(paragraph, before: str, number: int, num_type: str) -> None:
     ctrl.addnext(after)
 
 
-def _set_toc_make(paragraph, field_id: str, make: int) -> None:
-    """Set the ContentsMake bits (the lists it makes) of TOC field *field_id*, which opens in *paragraph*."""
+def _set_toc_command(paragraph, field_id: str, make: int, styles: Iterable[str] = ()) -> None:
+    """Set the ContentsMake bits (the lists it makes, and where from) and the ContentsStyles (the styles
+    "스타일로 모으기" collects) of TOC field *field_id*, which opens in *paragraph*."""
     begin = next(b for b in paragraph.element.iter(f"{_HP}fieldBegin") if b.get("id") == field_id)
     command = next(p for p in begin.iter(f"{_HP}stringParam") if p.get("name") == "Command")
     params = _TOC_MAKE.sub(f"ContentsMake:uint:{make}", command.text.split(":", 3)[3])
+    # As Hancom writes them: each name ends in ";", after the count of characters.
+    style_list = "".join(f"{name};" for name in styles)
+    params = params.replace(_TOC_NO_STYLES, f"ContentsStyles:wstring:{len(style_list)}:{style_list}", 1)
     # "TableOfContents:set:N:...": Hancom writes N as the length of what follows less one.
     command.text = f"TableOfContents:set:{len(params) - 1}:{params}"
 
@@ -943,14 +990,24 @@ def paragraph_styles(template_path: Path) -> set[str]:
     return set(_paragraph_styles(HwpxDocument.open(template_path)))
 
 
-def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str]]:
-    """(line number, name) of each custom-style div that names a paragraph style not in *styles*
-    (see paragraph_styles): the conversion leaves its paragraphs 본문."""
-    return [
-        (token.map[0] + 1, name)
-        for token in PARSER.parse(_blank_front_matter(markdown))
-        if token.type == "container_div_open" and (name := custom_style(token.info)) not in styles
-    ]
+def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str, str]]:
+    """(line number, name, what follows) of each paragraph style not in *styles* (see paragraph_styles) that
+    a custom-style div or a [TOC] marker names. A div's paragraphs are left 본문; a TOC keeps the name, but
+    Hancom finds no paragraph of it to collect. "What follows" says which, as a Korean clause."""
+    found = []
+    tokens = PARSER.parse(_blank_front_matter(markdown))
+    for k, token in enumerate(tokens):
+        if token.type == "container_div_open" and (name := custom_style(token.info)) not in styles:
+            found.append((token.map[0] + 1, name, "본문 스타일로 넣었습니다"))
+        elif token.type == "inline" and tokens[k - 1].type == "paragraph_open":
+            # A marker is a line of its own in a paragraph (see _pieces).
+            for i, line in enumerate(token.content.split("\n")):
+                if match := _MARKERS["toc"].fullmatch(line.strip()):
+                    found += [
+                        (token.map[0] + i + 1, name, "차례에 모을 수 없습니다")
+                        for name in _toc_styles(match[1]) if name not in styles
+                    ]
+    return found
 
 
 def read_markdown(md_path: Path) -> str:

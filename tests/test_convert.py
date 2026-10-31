@@ -877,6 +877,73 @@ def test_convert_toc_lists_in_the_order_named(tmp_path):
     assert doc.paragraphs[2].element.get("pageBreak") == "1"
 
 
+def _toc_commands(doc) -> list[str]:
+    """The Command of each TOC field in *doc*, without its "TableOfContents:set:N:" head."""
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{HP}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    commands = [p.text for b in begins for p in b.iter(f"{HP}stringParam") if p.get("name") == "Command"]
+    for command in commands:
+        _, _, n, rest = command.split(":", 3)
+        assert int(n) == len(rest) - 1
+    return [command.split(":", 3)[3] for command in commands]
+
+
+@pytest.mark.parametrize(
+    "marker, make, styles",
+    [
+        # As Hancom writes them: 1 the 제목 list, 16 from 개요 paragraphs, 32 from the styles named.
+        ("[TOC 제목]", "17", "ContentsStyles:wstring:0:"),
+        ('[TOC 스타일="요약문-본문"]', "33", "ContentsStyles:wstring:7:요약문-본문;"),
+        ('[TOC 스타일="요약문-본문; 표준"]', "33", "ContentsStyles:wstring:10:요약문-본문;표준;"),
+        ('[TOC 개요 스타일="요약문-본문"]', "49", "ContentsStyles:wstring:7:요약문-본문;"),
+    ],
+)
+def test_convert_toc_collects_styles(tmp_path, marker, make, styles):
+    md = tmp_path / "toc.md"
+    md.write_text(
+        f"{marker}\n\n# 장\n\n::: {{custom-style=\"요약문-본문\"}}\n모을 문단\n:::\n\n본문 문단\n", encoding="utf-8"
+    )
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    [command] = _toc_commands(doc)
+    assert command.startswith(f"ContentsMake:uint:{make} {styles} ContentsLevel:int:3 ")
+    # Its first entries are what it collects; Hancom collects them again when it rebuilds the TOC.
+    entries = [p.text.split("\t")[0] for p in doc.paragraphs[2:4]]
+    assert entries == {"17": ["1. 장", ""], "33": ["1. 모을 문단", ""], "49": ["1. 장", "2. 모을 문단"]}[make]
+
+
+def test_convert_toc_styles_with_other_lists(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text('[TOC 그림 스타일="표준;표준" 표 제목]\n\n# 장\n\n::: {custom-style="표준"}\n글\n:::\n', encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    # 스타일="..." names the 제목 list where it stands (제목 after it adds nothing); a name repeated counts once.
+    commands = _toc_commands(HwpxDocument.open(out))
+    assert [c.split()[0] for c in commands] == ["ContentsMake:uint:4", "ContentsMake:uint:33", "ContentsMake:uint:2"]
+    assert "ContentsStyles:wstring:3:표준;" in commands[1]
+
+
+def test_convert_toc_without_paragraphs_of_its_styles(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text('[TOC 스타일="표준"]\n\n# 장\n', encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    # Nothing to collect (the 개요 heading is not asked for): no TOC, as without headings.
+    assert _toc_commands(HwpxDocument.open(out)) == []
+
+
+def test_unknown_toc_styles():
+    markdown = '본문\n[TOC 스타일="본문;없는 스타일"]\n\n| [TOC 스타일="표 안"] |\n|---|\n'
+    # The marker's line; a [TOC] in a table cell is not a marker.
+    assert unknown_styles(markdown, {"본문"}) == [(2, "없는 스타일", "차례에 모을 수 없습니다")]
+
+
 @pytest.mark.parametrize(
     "marker, makes",
     [("[TOC 링크없음]", ["31"]), ("[TOC 표 링크없음 제목]", ["2", "17"])],
@@ -1068,7 +1135,7 @@ def test_unknown_styles(tmp_path):
         '```\n::: {custom-style="코드 안"}\n```\n'
     )
     # Line numbers count the front matter; a div in a code block is not one.
-    assert unknown_styles(markdown, {"본문"}) == [(8, "없는 스타일")]
+    assert unknown_styles(markdown, {"본문"}) == [(8, "없는 스타일", "본문 스타일로 넣었습니다")]
     assert "요약문-본문" in paragraph_styles(TEMPLATE) and "본문" in paragraph_styles(TEMPLATE)
 
 

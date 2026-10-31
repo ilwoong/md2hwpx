@@ -292,6 +292,30 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 한/글은 차례를 다시 만들 때 바탕글 문단도 모으므로, 차례를 넣기 전에 바탕글 문단(표·코드블록 셀 등)의
   스타일을 `본문` 으로 바꾼다 (문단 모양은 그대로).
 - 수준 3 이하의 헤딩이 하나도 없으면 차례를 넣지 않는다. `[TOC 표]` 처럼 표·그림 차례만 적어도 그렇다.
+  제목 차례를 스타일로 모으면 "헤딩" 대신 아래 "모으는 방식" 이 모으는 문단으로 센다.
+
+#### 제목 차례를 모으는 방식
+
+한/글 "차례 만들기" 의 "개요 문단으로 모으기"·"스타일로 모으기" 와 같다.
+
+| 표지 | 모으는 문단 | `ContentsMake` |
+|------|------|------|
+| `[TOC]`, `[TOC 제목]`, `[TOC 개요]` | 개요 문단 | 17 (`[TOC]` 는 31, 위) |
+| `[TOC 스타일="요약문-본문;표준"]` | 그 스타일의 문단 | 33 |
+| `[TOC 개요 스타일="요약문-본문"]` | 개요 문단과 그 스타일의 문단 | 49 |
+
+- `제목`·`개요`·`스타일="..."` 은 모두 제목 차례를 가리킨다. 다른 차례와의 순서는 그 가운데 처음 나온 자리다
+  (`[TOC 그림 스타일="표준" 표]` → 그림, 제목, 표).
+- `스타일="..."` 이 있으면 개요 문단은 `개요` 를 적을 때만 함께 모은다 (한/글의 두 체크박스와 같다).
+  스타일 이름은 `;` 로 나누고, 앞뒤 공백과 빈 이름은 버리며, 같은 이름은 한 번만 쓴다. 이름에 공백이 있어도 된다.
+  `스타일=` 을 여러 번 적으면 이어 붙인다.
+- 비트는 한/글이 쓰는 그대로다 (한/글로 만든 차례를 저장해 측정): 1 제목 차례, 16 개요 문단으로 모으기,
+  32 스타일로 모으기. 스타일은 `ContentsStyles:wstring:<글자 수>:<이름>;<이름>;` 로 적는다 (id 가 아니라 이름).
+  "차례 코드로 모으기" 는 지원하지 않는다.
+- 처음 저장하는 항목은 그 방식으로 모은 문단(개요는 3수준까지)을 문서 순서대로 넣는다. 한/글이 열 때 다시 모은다.
+- 템플릿에 없는 스타일 이름도 차례에 그대로 적되 경고한다 (아래 "명령줄"):
+  `<입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 차례에 모을 수 없습니다`. 줄은 `[TOC]` 줄이다.
+- `custom-style` div(위 "문단 스타일 지정")로 스타일을 준 문단을 차례에 모을 수 있다.
 
 ### 여백 면
 
@@ -407,7 +431,7 @@ def convert_markdown(
 ) -> None
 def caption_numbering(md_paths: Iterable[Path]) -> str
 def paragraph_styles(template_path: Path) -> set[str]
-def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str]]
+def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str, str]]
 ```
 
 - `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
@@ -420,7 +444,9 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
   `convert_markdown` 은 front matter 를 보지 않으므로 그 값을 `caption_numbering` 인자로 받는다 (기본 `chapter`).
   `convert` 와 명령줄은 이 함수로 읽어 넘긴다.
 - `paragraph_styles` 는 템플릿의 문단 스타일 이름, `unknown_styles` 는 그 가운데 없는 스타일을 지정한
-  custom-style div 의 (줄, 이름) 목록이다 (위 "문단 스타일 지정"). 변환과 같은 기준이라 경고한 div 와 `본문` 으로 들어간 div 가 같다.
+  custom-style div 와 `[TOC]` 표지의 (줄, 이름, 결과) 목록이다 (위 "문단 스타일 지정", "제목 차례를 모으는 방식").
+  결과는 경고 문장 끝에 붙는 말(`본문 스타일로 넣었습니다`, `차례에 모을 수 없습니다`)이다.
+  변환과 같은 기준이라 경고한 div 와 `본문` 으로 들어간 div 가 같다.
 - 저장하기 전에 python-hwpx `doc.validate()` (header·section XML 스키마 검증)를 실행한다.
   오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
   경고(warning)는 저장을 막지 않는다.
@@ -473,11 +499,12 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
   경고 목록을 (입력 파일, 줄, 내용, 이미지 경로 또는 None) 으로 돌려준다 (아래 경고). `warning(...)` 이 이것을 한 줄로 만든다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
-- 변환 전에 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div 의 스타일을 확인한다.
+- 변환 전에 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div·`[TOC]` 의 스타일을 확인한다.
   넣을 수 없는 이미지는 대체 이미지로, 없는 스타일의 div 는 `본문` 으로 변환하고, 저장한 뒤 모두 stderr 에 쓴다.
   종료 코드는 0 이다. 입력 파일 순서, 파일 안에서는 줄 순서다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
   - `md2hwpx: 경고: <입력 파일>:<줄>: <이유> 대체 이미지를 넣었습니다: <경로>`
   - `md2hwpx: 경고: <입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 본문 스타일로 넣었습니다`
+  - `md2hwpx: 경고: <입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 차례에 모을 수 없습니다`
 - 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError`,
   HWPX(zip) 가 아닌 템플릿(`zipfile.BadZipFile`) 은
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
@@ -512,6 +539,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 없는 이미지 | 대체 이미지 파일이 그대로 들어감, 캡션·크기 속성 적용 |
 | 이미지 형식 | BMP·WebP·TIFF 는 원래 크기의 PNG 로, 확장자와 다른 PNG 는 그대로, 깨진 파일은 대체 이미지와 이유, SVG 는 PNG 로 (`rsvg-convert` 있을 때), `rsvg-convert` 없으면 대체 이미지와 이유 |
 | 대체 텍스트 캡션 | `[그림]` 줄 없는 이미지의 대체 텍스트 캡션·번호·서식, `[그림]` 줄 우선, 빈 대체 텍스트는 캡션 없음·번호 안 셈, 헤딩 안 이미지는 글 유지 |
+| 차례 모으는 방식 | `[TOC 제목]`·`스타일="..."`·`개요 스타일="..."` 의 `ContentsMake` 17·33·49 와 `ContentsStyles` 글자 수·`;`, 처음 항목, 다른 차례와의 순서, 같은 이름 한 번, 모을 문단이 없으면 차례 없음, 없는 스타일 경고(표 셀 안 `[TOC]` 제외) |
 | 문단 스타일 지정 | `custom-style` div 안 문단·인용문 문단의 스타일과 문단 모양, 헤딩·목록 항목 유지, 안쪽 div 우선, 없는 스타일은 `본문`, 다른 `:::` 블록은 글자, `unknown_styles` 의 줄(front matter 포함, 코드블록 안 제외), 명령줄·웹 경고 |
 | Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
 | 캡션 번호 방식 | `caption-numbering: document` 의 `[표 M]`·`[그림 M]`, 장에서 다시 매기지 않음, `[새 번호 표]` 는 동작, 기본 `chapter`, 따옴표 값, 본문의 같은 줄 무시, 모르는 값과 파일마다 다른 값은 `ConversionError`, 키 없는 파일은 다른 파일을 따름 |
