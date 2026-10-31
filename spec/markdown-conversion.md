@@ -497,7 +497,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
   입력 파일 목록은 `input_files(input_path)` 가 정하며, 웹 서비스가 이미지 경로를 검사할 때도 같은 목록을 쓴다.
-  경고 목록을 (입력 파일, 줄, 내용, 이미지 경로 또는 None) 으로 돌려준다 (아래 경고). `warning(...)` 이 이것을 한 줄로 만든다.
+  경고 목록을 `ConversionWarning`(입력 파일, 줄, 내용, 이미지 경로 또는 None) 으로 돌려준다 (아래 경고). `str()` 이 이것을 한 줄로 만든다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
 - 변환 전에 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div·`[TOC]` 의 스타일을 확인한다.

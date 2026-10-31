@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
 from md2hwpx import oauth
-from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files, warning
+from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files
 from md2hwpx.convert import DEFAULT_TEMPLATE, image_paths
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
@@ -227,8 +227,8 @@ def convert(
         data = output.read_bytes()
         # Every image is inside root (_check_images): name them from there.
         warnings = [
-            warning(_relative(f, root), line, message, None if path is None else _relative(path.resolve(), root))
-            for f, line, message, path in found
+            str(w._replace(file=_relative(w.file, root), path=w.path and _relative(w.path.resolve(), root)))
+            for w in found
         ]
     filename = f"{name}.hwpx"
     disposition = f"attachment; filename=\"document.hwpx\"; filename*=UTF-8''{quote(filename)}"

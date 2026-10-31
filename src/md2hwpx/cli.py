@@ -8,6 +8,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import NamedTuple
 
 from hwpx.errors import HwpxError
 
@@ -36,29 +37,37 @@ def input_files(path: Path) -> list[Path]:
     return files
 
 
-def warning(file: Path | str, line: int, message: str, path: Path | str | None = None) -> str:
-    """"<file>:<line>: <message>", and ": <path>" after it if the warning is about a file (an image)."""
-    return f"{file}:{line}: {message}" + (f": {path}" if path is not None else "")
+class ConversionWarning(NamedTuple):
+    """Something the HWPX is made despite: *message*, at *line* of *file*, about *path* (an image) if any."""
+
+    file: Path | str
+    line: int
+    message: str
+    path: Path | str | None = None
+
+    def __str__(self) -> str:
+        """"<file>:<line>: <message>", and ": <path>" after it if the warning is about a file."""
+        return f"{self.file}:{self.line}: {self.message}" + (f": {self.path}" if self.path is not None else "")
 
 
-def _warnings(md: Path, styles: set[str]) -> list[tuple[Path, int, str, Path | None]]:
+def _warnings(md: Path, styles: set[str]) -> list[ConversionWarning]:
     """What the HWPX is made despite in *md*, in line order: images shown as a placeholder (see
     unusable_images) and styles the template lacks that custom-style divs or [TOC] name (see unknown_styles)."""
     markdown = md.read_text(encoding="utf-8")
-    found = [(md, line, f"{why} 대체 이미지를 넣었습니다", image) for line, image, why in unusable_images(markdown, md.parent)]
+    found = [
+        ConversionWarning(md, line, f"{why} 대체 이미지를 넣었습니다", image)
+        for line, image, why in unusable_images(markdown, md.parent)
+    ]
     found += [
-        (md, line, f"템플릿에 '{name}' 문단 스타일이 없어 {result}", None)
+        ConversionWarning(md, line, f"템플릿에 '{name}' 문단 스타일이 없어 {result}")
         for line, name, result in unknown_styles(markdown, styles)
     ]
-    return sorted(found, key=lambda w: w[1])
+    return sorted(found, key=lambda w: w.line)
 
 
-def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[Path, int, str, Path | None]]:
-    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*.
-
-    What the HWPX is made despite (see _warnings) is returned as (file, line, message, path or None),
-    the arguments of warning.
-    """
+def convert_input(input_path: Path, template: Path, output: Path) -> list[ConversionWarning]:
+    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*, and return
+    what the HWPX is made despite (see _warnings)."""
     base_dir = input_path if input_path.is_dir() else input_path.parent
     files = input_files(input_path)
     numbering = caption_numbering(files)
@@ -114,6 +123,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
     for found in warnings:
-        print(f"md2hwpx: 경고: {warning(*found)}", file=sys.stderr)
+        print(f"md2hwpx: 경고: {found}", file=sys.stderr)
     print(output)
     return 0

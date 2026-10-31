@@ -147,6 +147,40 @@ def toc_request(words: str) -> TocRequest:
     )
 
 
+def _lines(inline: SyntaxTreeNode) -> list[tuple[int, list[SyntaxTreeNode]]]:
+    """A paragraph's inline content line by line (split at its soft breaks), each line with its offset in
+    the paragraph's source lines: a hard break ends a source line too, though it stays in its line."""
+    lines: list[tuple[int, list[SyntaxTreeNode]]] = [(0, [])]
+    offset = 0
+    for child in inline.children:
+        if child.type in ("softbreak", "hardbreak"):
+            offset += 1
+        if child.type == "softbreak":
+            lines.append((offset, []))
+        else:
+            lines[-1][1].append(child)
+    return lines
+
+
+def _marker(line: list[SyntaxTreeNode]) -> tuple[str, str] | None:
+    """(marker, its words) if *line* holds only a marker (a key of MARKERS), else None.
+
+    Only plain text is: a line with emphasis, a link or a break in it is text, whatever it reads.
+    """
+    text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
+    for name, pattern in MARKERS.items():
+        if match := pattern.fullmatch(text):
+            # The blank page marker carries a wording, the TOC and restart markers their words, in their one group.
+            return name, match.group(1).strip() if match.groups() else ""
+    return None
+
+
+def marker_lines(inline: SyntaxTreeNode) -> list[tuple[int, str, str]]:
+    """(source line offset in the paragraph, marker, its words) of each marker line of a paragraph's inline
+    content, as paragraph_pieces finds them."""
+    return [(offset, *found) for offset, line in _lines(inline) if (found := _marker(line))]
+
+
 def paragraph_pieces(inline: SyntaxTreeNode) -> list[Piece]:
     """Split a paragraph's inline content into pieces: each image, and each line holding only
     a marker, stands apart; the text between them is a "runs" piece (blank ones are dropped)."""
@@ -158,20 +192,12 @@ def paragraph_pieces(inline: SyntaxTreeNode) -> list[Piece]:
             pieces.append(Piece("runs", strip_runs(runs)))
         runs.clear()
 
-    lines: list[list[SyntaxTreeNode]] = [[]]
-    for child in inline.children:
-        if child.type == "softbreak":
-            lines.append([])
-        else:
-            lines[-1].append(child)
-    for line in lines:
-        text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
-        found = next(((name, m) for name, pattern in MARKERS.items() if (m := pattern.fullmatch(text))), None)
+    for _, line in _lines(inline):
+        found = _marker(line)
         if found:
             flush()
-            marker, match = found
-            # The blank page marker carries a wording, the TOC and restart markers their words, in their one group.
-            pieces.append(Piece(marker, text=match.group(1).strip() if match.groups() else ""))
+            marker, words = found
+            pieces.append(Piece(marker, text=words))
             continue
         if runs:
             runs.append(Run(" "))  # the line break between two lines of text

@@ -21,8 +21,8 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    MARKERS, Piece, Run, TocRequest, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, strip_runs,
-    toc_request,
+    Piece, Run, TocRequest, block_kind, caption_line, inline_runs, marker_lines, paragraph_pieces, plain_text,
+    strip_runs, toc_request,
 )
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
@@ -50,13 +50,14 @@ QUOTE_INDENT = 1000  # HWPUNIT added to the left margin per quote depth
 QUOTE_BAR = {"border_color": "#A6A6A6", "border_width": "0.7 mm"}  # left bar of a quote
 QUOTE_BAR_GAP = 850  # HWPUNIT between the quote bar and the text
 RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic break
-TOC_TITLE = "차례"
+TOC_HEADING = "차례"  # the title of a TOC of all lists in one field (a plain [TOC])
 TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
-# The TOC field's ContentsMake bits for each list, as Hancom writes them with only that list chosen.
-# A plain [TOC] keeps python-hwpx's 31, all of them in one field.
-TOC_KINDS = {"제목": 17, "표": 2, "그림": 4, "수식": 8}
+# The TOC field's ContentsMake bits for the 표, 그림 and 수식 lists, as Hancom writes them with only that list
+# chosen. A plain [TOC] keeps python-hwpx's 31, all of them in one field.
+TOC_KINDS = {"표": 2, "그림": 4, "수식": 8}
 # The 제목 list's bits, as Hancom writes them: the list itself (1), and where it collects its entries from,
-# 개요 paragraphs (16, "개요 문단으로 모으기") and the styles named in ContentsStyles (32, "스타일로 모으기").
+# 개요 paragraphs (16, "개요 문단으로 모으기") and the styles named in ContentsStyles (32, "스타일로 모으기"):
+# 17 with only 개요 paragraphs.
 TOC_TITLE_LIST, TOC_BY_OUTLINE, TOC_BY_STYLE = 1, 16, 32
 _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
 _TOC_NO_STYLES = "ContentsStyles:wstring:0:"  # as python-hwpx writes the TOC command: no styles
@@ -724,7 +725,7 @@ class _Writer:
             # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
             if not self.toc.kinds:
                 add_native_toc(
-                    self.doc, at_index=self.toc_at, title=TOC_TITLE, level=TOC_LEVEL, hyperlink=self.toc.links,
+                    self.doc, at_index=self.toc_at, title=TOC_HEADING, level=TOC_LEVEL, hyperlink=self.toc.links,
                     headings=headings, dirty=True,
                 )
             # A field per list: Hancom orders the lists within one field itself. Each goes in at the
@@ -800,6 +801,12 @@ def _walk(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
         yield from _walk(child)
 
 
+def _ancestors(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
+    while node.parent is not None:
+        node = node.parent
+        yield node
+
+
 def _blank_front_matter(markdown: str) -> str:
     """*markdown* with its front matter as blank lines, so line numbers still count it."""
     return _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
@@ -845,17 +852,16 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
     a custom-style div or a [TOC] marker names. A div's paragraphs are left 본문; a TOC keeps the name, but
     Hancom finds no paragraph of it to collect. "What follows" says which, as a Korean clause."""
     found = []
-    tokens = PARSER.parse(_blank_front_matter(markdown))
-    for k, token in enumerate(tokens):
-        if token.type == "container_div_open" and (name := custom_style(token.info)) not in styles:
-            found.append((token.map[0] + 1, name, "본문 스타일로 넣었습니다"))
-        elif token.type == "inline" and tokens[k - 1].type == "paragraph_open":
-            # A marker is a line of its own in a paragraph (see paragraph_pieces).
-            for i, line in enumerate(token.content.split("\n")):
-                if match := MARKERS["toc"].fullmatch(line.strip()):
+    for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
+        if node.type == "container_div" and (name := custom_style(node.info)) not in styles:
+            found.append((node.map[0] + 1, name, "본문 스타일로 넣었습니다"))
+        elif node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
+            # The [TOC] markers as the conversion finds them; a footnote's paragraphs are only text.
+            for offset, marker, words in marker_lines(node.children[0]):
+                if marker == "toc":
                     found += [
-                        (token.map[0] + i + 1, name, "차례에 모을 수 없습니다")
-                        for name in toc_request(match[1]).styles if name not in styles
+                        (node.map[0] + offset + 1, name, "차례에 모을 수 없습니다")
+                        for name in toc_request(words).styles if name not in styles
                     ]
     return found
 
