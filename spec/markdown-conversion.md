@@ -9,7 +9,7 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 
 - 포함: CommonMark 전체(헤딩, 문단, 강제 줄바꿈, 코드블록, 목록, 인용문, 수평선, 이미지, 링크, 강조, 이스케이프,
   참조식 링크, 임의 깊이의 블록 중첩)와 GFM 표·취소선, 각주, 그리고 이 프로젝트의 표기
-  (표·그림 캡션, 그림 크기 속성, `[TOC]` 차례, `\newpage` 쪽 나누기, `[새 번호]` 번호 새로 시작, `[감추기]` 쪽 감추기, `[여백면]` 여백 면).
+  (표·그림 캡션, 그림 크기 속성, `[TOC]` 차례, `\newpage` 쪽 나누기, `[새 번호]` 번호 새로 시작, `[감추기]` 쪽 감추기, `[여백면]` 여백 면), pandoc 의 `custom-style` 펜스 div.
 - 제외: 원시 HTML (글자 그대로 들어간다).
 - 다이어그램 코드블록은 변환 전에 [diagram-rendering.md](diagram-rendering.md) 의
   `render_diagrams` 로 이미지 링크로 바꿔 둔다. `convert` 는 다이어그램을 렌더링하지 않는다.
@@ -359,6 +359,24 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 그림을 담는 문단과 표 셀 문단은 `바탕글` 스타일이다 (위 "이미지", "표").
   코드블록 셀 문단은 셀 기본 문단 모양에 코드 서식을 더한다.
 
+### 문단 스타일 지정 (custom-style)
+
+```markdown
+::: {custom-style="요약문-본문"}
+이 문단은 템플릿의 '요약문-본문' 스타일로 들어간다.
+:::
+```
+
+- pandoc 의 펜스 div 표기다 (pandoc 이 docx 에 문단 스타일을 지정하는 방법과 같다). 여는 줄은 `:::`(3개 이상) 뒤에
+  `{custom-style="이름"}` 만 둔다. 닫는 줄은 여는 줄 이상의 `:`. 다른 `:::` 블록(`::: note` 등)은 지금처럼 글자로 남는다.
+- div 안의 일반 글 문단(인용문 안 문단, 목록 항목에 이어지는 문단 포함)이 `본문` 대신 그 스타일과 그 스타일의
+  문단 모양을 받는다. 헤딩(`개요`), 목록 항목의 글머리표·번호 문단(`본문`), 표·코드블록·그림·캡션은 그대로다.
+- 이름은 템플릿의 문단 스타일 이름과 정확히 같아야 한다 (id·영문 이름으로는 찾지 않는다).
+- div 안에 div 가 있으면 안쪽 div 의 스타일을 따른다. 바깥 div 는 `:` 를 더 많이 쓴다 (`::::`).
+- 템플릿에 없는 스타일이면 그 div 의 문단은 `본문` 으로 넣고 경고한다 (아래 "명령줄"):
+  `<입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 본문 스타일로 넣었습니다`. 줄은 div 의 여는 줄이다.
+  같은 원고를 여러 템플릿으로 변환할 수 있도록 오류로 멈추지 않는다.
+
 ## 성능
 
 100쪽이 넘는 문서를 다루므로, python-hwpx 의 비용이 문서 크기에 비례하는 호출을 반복하지 않는다.
@@ -388,6 +406,8 @@ def convert_markdown(
     markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
 ) -> None
 def caption_numbering(md_paths: Iterable[Path]) -> str
+def paragraph_styles(template_path: Path) -> set[str]
+def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str]]
 ```
 
 - `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
@@ -399,6 +419,8 @@ def caption_numbering(md_paths: Iterable[Path]) -> str
 - `caption_numbering` 은 파일들의 front matter 에서 캡션 번호 방식(`chapter`·`document`)을 읽는다 (위 "캡션 번호 방식").
   `convert_markdown` 은 front matter 를 보지 않으므로 그 값을 `caption_numbering` 인자로 받는다 (기본 `chapter`).
   `convert` 와 명령줄은 이 함수로 읽어 넘긴다.
+- `paragraph_styles` 는 템플릿의 문단 스타일 이름, `unknown_styles` 는 그 가운데 없는 스타일을 지정한
+  custom-style div 의 (줄, 이름) 목록이다 (위 "문단 스타일 지정"). 변환과 같은 기준이라 경고한 div 와 `본문` 으로 들어간 div 가 같다.
 - 저장하기 전에 python-hwpx `doc.validate()` (header·section XML 스키마 검증)를 실행한다.
   오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
   경고(warning)는 저장을 막지 않는다.
@@ -448,12 +470,14 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
   이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
   입력 파일 목록은 `input_files(input_path)` 가 정하며, 웹 서비스가 이미지 경로를 검사할 때도 같은 목록을 쓴다.
-  넣을 수 없는 이미지의 (입력 파일, 줄, 이미지 경로, 이유) 목록을 돌려준다.
+  경고 목록을 (입력 파일, 줄, 내용, 이미지 경로 또는 None) 으로 돌려준다 (아래 경고). `warning(...)` 이 이것을 한 줄로 만든다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
-- 변환 전에 입력 파일마다 `unusable_images` 로 이미지를 확인한다. 넣을 수 없는 이미지는 대체 이미지로 변환하고,
-  저장한 뒤 모두 `md2hwpx: 경고: <입력 파일>:<줄>: <이유> 대체 이미지를 넣었습니다: <경로>` 로
-  stderr 에 쓴다. 종료 코드는 0 이다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
+- 변환 전에 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div 의 스타일을 확인한다.
+  넣을 수 없는 이미지는 대체 이미지로, 없는 스타일의 div 는 `본문` 으로 변환하고, 저장한 뒤 모두 stderr 에 쓴다.
+  종료 코드는 0 이다. 입력 파일 순서, 파일 안에서는 줄 순서다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
+  - `md2hwpx: 경고: <입력 파일>:<줄>: <이유> 대체 이미지를 넣었습니다: <경로>`
+  - `md2hwpx: 경고: <입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 본문 스타일로 넣었습니다`
 - 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError`,
   HWPX(zip) 가 아닌 템플릿(`zipfile.BadZipFile`) 은
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
@@ -488,6 +512,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 없는 이미지 | 대체 이미지 파일이 그대로 들어감, 캡션·크기 속성 적용 |
 | 이미지 형식 | BMP·WebP·TIFF 는 원래 크기의 PNG 로, 확장자와 다른 PNG 는 그대로, 깨진 파일은 대체 이미지와 이유, SVG 는 PNG 로 (`rsvg-convert` 있을 때), `rsvg-convert` 없으면 대체 이미지와 이유 |
 | 대체 텍스트 캡션 | `[그림]` 줄 없는 이미지의 대체 텍스트 캡션·번호·서식, `[그림]` 줄 우선, 빈 대체 텍스트는 캡션 없음·번호 안 셈, 헤딩 안 이미지는 글 유지 |
+| 문단 스타일 지정 | `custom-style` div 안 문단·인용문 문단의 스타일과 문단 모양, 헤딩·목록 항목 유지, 안쪽 div 우선, 없는 스타일은 `본문`, 다른 `:::` 블록은 글자, `unknown_styles` 의 줄(front matter 포함, 코드블록 안 제외), 명령줄·웹 경고 |
 | Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
 | 캡션 번호 방식 | `caption-numbering: document` 의 `[표 M]`·`[그림 M]`, 장에서 다시 매기지 않음, `[새 번호 표]` 는 동작, 기본 `chapter`, 따옴표 값, 본문의 같은 줄 무시, 모르는 값과 파일마다 다른 값은 `ConversionError`, 키 없는 파일은 다른 파일을 따름 |
 | 수평선 | `---`·`***`·`- - -`·`___`, 목록 뒤 `---`, 아래쪽 테두리만 있음 |

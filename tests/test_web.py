@@ -86,6 +86,16 @@ def test_files_missing_image_is_a_placeholder_and_a_warning(tmp_path):
     ]
 
 
+def test_unknown_style_is_a_warning(tmp_path):
+    files = [("files", ("doc.md", '::: {custom-style="없는 스타일"}\n글\n:::\n'.encode(), "text/markdown"))]
+    response = client.post("/convert", data={"source": "files"}, files=files)
+
+    _hwpx(response, tmp_path)
+    assert unquote(response.headers["x-md2hwpx-warnings"]).splitlines() == [
+        "doc.md:1: 템플릿에 '없는 스타일' 문단 스타일이 없어 본문 스타일로 넣었습니다",
+    ]
+
+
 @pytest.mark.parametrize("src", ["../secret.png", "/etc/hostname", "%2E%2E/secret.png"])
 def test_images_outside_the_upload_are_refused(src):
     files = [("files", ("doc.md", f"![]({src})\n".encode(), "text/markdown"))]
