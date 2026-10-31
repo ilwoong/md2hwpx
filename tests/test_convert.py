@@ -12,7 +12,7 @@ from hwpx.layout import lint_layout
 from PIL import Image
 
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
-from md2hwpx.convert import MISSING_IMAGE, convert, unusable_images
+from md2hwpx.convert import MISSING_IMAGE, ConversionError, caption_numbering, convert, unusable_images
 
 
 def _page_body() -> tuple[int, int, int, int]:
@@ -989,6 +989,55 @@ def test_convert_caption_numbers_are_hancoms_own(tmp_path):
     assert [p.get("numberingType") for p in pics] == ["NONE", "PICTURE"]
     # A chapter starts the table and picture numbers over, on its heading.
     assert _new_numbers(doc.paragraphs[1]) == ["PICTURE", "TABLE"]
+
+
+def test_convert_numbers_captions_through_the_document(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png())
+    md = tmp_path / "document.md"
+    md.write_text(
+        "---\ncaption-numbering: document\n---\n\n"
+        "# 첫 장\n\n[표] 하나\n\n| a |\n|---|\n| 1 |\n\n[그림] 하나\n\n![](a.png)\n\n"
+        "# 둘째 장\n\n[표] 둘\n\n| b |\n|---|\n| 2 |\n\n[그림] 둘\n\n![](a.png)\n\n"
+        "[새 번호 표]\n[표] 다시 하나\n\n| c |\n|---|\n| 3 |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "document.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    # No chapter number, and a chapter does not start the count over; [새 번호] still does.
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1] 하나", "[표 2] 둘", "[표 1] 다시 하나"]
+    assert [_text(pic.find(f"{hp}caption")) for pic in pics] == ["[그림 1] 하나", "[그림 2] 둘"]
+    headings = [p for p in doc.paragraphs if p.text in ("첫 장", "둘째 장")]
+    assert [_new_numbers(h) for h in headings] == [[], []]
+
+
+def test_caption_numbering_from_front_matter(tmp_path):
+    def md(name: str, text: str) -> Path:
+        path = tmp_path / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    plain = md("plain.md", "# 장\n")
+    chapter = md("chapter.md", "---\ntitle: 제목\ncaption-numbering: chapter\n---\n")
+    document = md("document.md", "---\ncaption-numbering: 'document'\n---\n")
+    in_body = md("body.md", "본문\n\ncaption-numbering: document\n")
+    unknown = md("unknown.md", "---\ncaption-numbering: section\n---\n")
+
+    assert caption_numbering([plain]) == "chapter"
+    assert caption_numbering([chapter]) == "chapter"
+    # Quoted as YAML may be; a file that does not say leaves it to the one that does.
+    assert caption_numbering([plain, document, document]) == "document"
+    # Only the front matter says it, not the body.
+    assert caption_numbering([in_body]) == "chapter"
+    with pytest.raises(ConversionError, match=r"unknown\.md: caption-numbering .* section"):
+        caption_numbering([unknown])
+    # Files that disagree: a document has one way, so neither is chosen.
+    with pytest.raises(ConversionError, match=r"chapter\.md 는 'chapter', .*document\.md 는 'document'"):
+        caption_numbering([chapter, plain, document])
 
 
 def test_convert_restarts_numbers(tmp_path):

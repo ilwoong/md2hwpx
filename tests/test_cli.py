@@ -132,6 +132,19 @@ def test_cli_reports_missing_files(tmp_path, monkeypatch, capsys):
 
 
 @needs_mmdc
+def test_cli_folder_input_with_different_caption_numbering(tmp_path, capsys):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "1.md").write_text("---\ncaption-numbering: document\n---\n\n# 장\n", encoding="utf-8")
+    (docs / "2.md").write_text("---\ncaption-numbering: chapter\n---\n\n# 장\n", encoding="utf-8")
+    out = tmp_path / "out.hwpx"
+
+    assert main([str(docs), "-o", str(out), "-t", str(TEMPLATE)]) == 1
+
+    assert "caption-numbering 가 파일마다 다릅니다" in capsys.readouterr().err
+    assert not out.exists()
+
+
 def test_cli_renders_diagrams(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     md = tmp_path / "doc.md"

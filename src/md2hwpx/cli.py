@@ -11,7 +11,9 @@ from pathlib import Path
 
 from hwpx.errors import HwpxError
 
-from md2hwpx.convert import DEFAULT_TEMPLATE, ConversionError, convert_markdown, read_markdown, unusable_images
+from md2hwpx.convert import (
+    DEFAULT_TEMPLATE, ConversionError, caption_numbering, convert_markdown, read_markdown, unusable_images,
+)
 from md2hwpx.diagram import DiagramError, render_diagrams
 
 
@@ -42,6 +44,7 @@ def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[
     """
     base_dir = input_path if input_path.is_dir() else input_path.parent
     files = input_files(input_path)
+    numbering = caption_numbering(files)
     unusable = [
         (f, line, image, why)
         for f in files
@@ -52,7 +55,7 @@ def convert_input(input_path: Path, template: Path, output: Path) -> list[tuple[
     # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
     with tempfile.TemporaryDirectory() as image_dir:
         markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
-        convert_markdown(markdown, base_dir, template, output)
+        convert_markdown(markdown, base_dir, template, output, numbering)
     return unusable
 
 

@@ -23,6 +23,10 @@ from md2hwpx.parser import PARSER
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
+# The front matter key that says how captions are numbered (see caption_numbering), and its values.
+CAPTION_NUMBERING = "caption-numbering"
+CAPTION_NUMBERINGS = ("chapter", "document")
+_CAPTION_NUMBERING = re.compile(rf"^{CAPTION_NUMBERING}:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 # "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
@@ -130,7 +134,8 @@ class _PageStart:
 
 
 class ConversionError(Exception):
-    """The converted document failed HWPX validation, so it was not saved."""
+    """The Markdown cannot be converted (its front matter says what cannot be done), or the converted
+    document failed HWPX validation, so it was not saved."""
 
 
 def _runs(nodes: Iterable[SyntaxTreeNode], marks: frozenset[str] = frozenset(), url: str | None = None) -> list[Run]:
@@ -272,9 +277,10 @@ def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
 class _Writer:
     """Writes the block tree of a Markdown document into an HWPX document."""
 
-    def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode):
+    def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode, by_chapter: bool):
         self.doc = doc
         self.base_dir = base_dir
+        self.by_chapter = by_chapter  # captions are numbered within each chapter, else through the document
         # Styles are resolved once: python-hwpx looks a style name up by walking all of header.xml,
         # which grows with every character and paragraph shape the conversion adds.
         self.body_style = doc.styles.resolve(BODY_STYLE)
@@ -482,11 +488,12 @@ class _Writer:
     def number_caption(self, kind: str, title: list[Run]) -> None:
         """Keep "[표 2-1] *title*" / "[그림 2-1] *title*" as the next caption: the number is the chapter
         (the level 1 heading it is under) and, after it, the object's own count within that chapter.
+        Numbered through the document (not by_chapter), it is the count alone: "[표 7] *title*".
 
         The count becomes Hancom's own number (see _auto_number), which starts over where the count does.
         """
         self.numbers[kind] += 1
-        before = f"[{kind} {self.chapter}-" if self.chapter else f"[{kind} "
+        before = f"[{kind} {self.chapter}-" if self.chapter and self.by_chapter else f"[{kind} "
         self.caption_number = (before, self.numbers[kind], NUMBERS[kind])
         self.caption = [Run(f"{before}{self.numbers[kind]}] "), *title]
 
@@ -529,9 +536,10 @@ class _Writer:
             # space above, so the gap from what came before is that paragraph's own line.
             self.doc.add_paragraph(style=self.body_style)
         if depth == 1:
-            # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
             self.chapter += 1
-            self.restart(self.numbers)
+            if self.by_chapter:
+                # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
+                self.restart(self.numbers)
         heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
         if not has_content:
             # The first page is new already: a style that breaks the page before the heading would leave it
@@ -908,15 +916,43 @@ def read_markdown(md_path: Path) -> str:
     return _FRONT_MATTER.sub("", md_path.read_text(encoding="utf-8"), count=1)
 
 
+def caption_numbering(md_paths: Iterable[Path]) -> str:
+    """How the captions of the document made of *md_paths* are numbered, as their front matter says
+    ("caption-numbering: ..."): "chapter" ([표 2-1], within each chapter) or "document" ([표 7]).
+
+    A file that does not say leaves it to the others; if none does, it is "chapter". Raises ConversionError
+    for any other value, or for files that say different ones: a document has one way.
+    """
+    said: dict[str, Path] = {}  # value -> the first file that says it
+    for path in md_paths:
+        front = _FRONT_MATTER.match(path.read_text(encoding="utf-8"))
+        match = _CAPTION_NUMBERING.search(front[0]) if front else None
+        if match is None:
+            continue
+        value = match[1].strip("\"'")
+        if value not in CAPTION_NUMBERINGS:
+            raise ConversionError(f"{path}: {CAPTION_NUMBERING} 는 chapter 또는 document 여야 합니다: {value}")
+        said.setdefault(value, path)
+    if len(said) > 1:
+        (first, first_path), (other, other_path) = said.items()
+        raise ConversionError(
+            f"{CAPTION_NUMBERING} 가 파일마다 다릅니다: {first_path} 는 '{first}', {other_path} 는 '{other}'"
+        )
+    return next(iter(said), "chapter")
+
+
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
-    convert_markdown(read_markdown(md_path), md_path.parent, template_path, out_path)
+    convert_markdown(read_markdown(md_path), md_path.parent, template_path, out_path, caption_numbering([md_path]))
 
 
-def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None:
-    """Convert *markdown*, whose image paths are relative to *base_dir*."""
+def convert_markdown(
+    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
+) -> None:
+    """Convert *markdown*, whose image paths are relative to *base_dir*, its captions numbered
+    *caption_numbering* (see the function of that name)."""
     doc = HwpxDocument.open(template_path)
     root = SyntaxTreeNode(PARSER.parse(markdown))
-    writer = _Writer(doc, base_dir, root)
+    writer = _Writer(doc, base_dir, root, by_chapter=caption_numbering == "chapter")
     writer.blocks(root.children)
     writer.finish()
 

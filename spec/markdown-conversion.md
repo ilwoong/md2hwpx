@@ -48,6 +48,25 @@ Markdown 파싱에는 [markdown-it-py](https://github.com/executablebooks/markdo
 - 닫는 줄이 없거나 파일 맨 앞이 아닌 `---` 블록은 front matter 가 아니므로 본문으로 둔다.
 - 파일을 읽을 때(`read_markdown`) 제거하므로, 폴더 입력은 파일마다 각자의 front matter 를 제거한다.
 - TOML(`+++`) front matter 는 지원하지 않는다.
+- 단, `caption-numbering` 키는 읽는다 (아래 "캡션 번호 방식"). 그 밖의 키는 무시한다.
+
+### 캡션 번호 방식
+
+```markdown
+---
+caption-numbering: document
+---
+```
+
+- `chapter`(기본): 장 단위 번호 `[표 2-1]`. 장마다 1부터 다시 매긴다 (아래 "표·그림 캡션").
+- `document`: 문서 전체 번호 `[표 7]`. 장 번호를 붙이지 않고, 수준 1 헤딩에서 다시 매기지 않는다
+  (`hp:newNum` 을 넣지 않는다). `[새 번호 표]`·`[새 번호 그림]` 은 그대로 다시 매긴다.
+- 값을 따옴표로 감싸도 된다 (`'document'`). 줄 맨 앞(들여쓰지 않은)의 키만 읽는다. front matter 밖의 같은 줄은 본문이다.
+- 다른 값이면 변환하지 않고 `ConversionError` 를 낸다: `<파일>: caption-numbering 는 chapter 또는 document 여야 합니다: <값>`.
+  오타가 조용히 기본값이 되어 번호가 틀린 문서가 나오지 않게 한다.
+- 폴더 입력: 키가 없는 파일은 다른 파일의 값을 따른다. 어느 파일에도 없으면 `chapter`.
+  파일마다 값이 다르면 문서 하나에 번호 방식은 하나이므로 어느 쪽도 고르지 않고 `ConversionError` 를 낸다:
+  `caption-numbering 가 파일마다 다릅니다: <파일> 는 '<값>', <파일> 는 '<값>'` (이름 순으로 처음 나온 두 값).
 
 ## 변환 규칙
 
@@ -214,6 +233,8 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
     번호를 넣을 때와 같은 모양이고, `num` 에는 변환기가 센 값을 미리 넣는다. `[표 N-` 와 `]` 는 글자다.
   - 장마다 다시 매기는 것은 수준 1 헤딩 문단의 "새 번호로 시작"(`hp:newNum num="1"`, `TABLE`·`PICTURE`)이다.
   - `[새 번호 표]`·`[새 번호 그림]` 으로도 다시 매긴다 (아래 "번호 새로 시작"). 장 번호 `N` 은 그대로다.
+- front matter 에 `caption-numbering: document` 가 있으면 `[표 M] 제목`, `[그림 M] 제목` 처럼 장 번호 없이
+  문서 전체에서 센다 (위 "캡션 번호 방식").
 - 위치: 표·코드블록은 위(`TOP`), 그림은 아래(`BOTTOM`).
 - 캡션 문단에는 `표그림 제목` 스타일의 스타일·문단 모양·글자 모양을 적용한다.
 
@@ -363,7 +384,10 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 ```python
 def read_markdown(md_path: Path) -> str
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None
-def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_path: Path) -> None
+def convert_markdown(
+    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
+) -> None
+def caption_numbering(md_paths: Iterable[Path]) -> str
 ```
 
 - `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
@@ -372,6 +396,9 @@ def convert_markdown(markdown: str, base_dir: Path, template_path: Path, out_pat
   `convert` 는 `read_markdown` 으로 `md_path` 를 읽어 `md_path` 의 폴더를 기준으로 `convert_markdown` 을 부른다.
 - `read_markdown` 은 파일을 UTF-8 로 읽고 front matter 를 제거한다.
   `convert_markdown` 은 front matter 를 제거하지 않으므로, 파일 내용을 넘길 때는 `read_markdown` 으로 읽은 문자열을 넘긴다.
+- `caption_numbering` 은 파일들의 front matter 에서 캡션 번호 방식(`chapter`·`document`)을 읽는다 (위 "캡션 번호 방식").
+  `convert_markdown` 은 front matter 를 보지 않으므로 그 값을 `caption_numbering` 인자로 받는다 (기본 `chapter`).
+  `convert` 와 명령줄은 이 함수로 읽어 넘긴다.
 - 저장하기 전에 python-hwpx `doc.validate()` (header·section XML 스키마 검증)를 실행한다.
   오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
   경고(warning)는 저장을 막지 않는다.
@@ -462,6 +489,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 이미지 형식 | BMP·WebP·TIFF 는 원래 크기의 PNG 로, 확장자와 다른 PNG 는 그대로, 깨진 파일은 대체 이미지와 이유, SVG 는 PNG 로 (`rsvg-convert` 있을 때), `rsvg-convert` 없으면 대체 이미지와 이유 |
 | 대체 텍스트 캡션 | `[그림]` 줄 없는 이미지의 대체 텍스트 캡션·번호·서식, `[그림]` 줄 우선, 빈 대체 텍스트는 캡션 없음·번호 안 셈, 헤딩 안 이미지는 글 유지 |
 | Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
+| 캡션 번호 방식 | `caption-numbering: document` 의 `[표 M]`·`[그림 M]`, 장에서 다시 매기지 않음, `[새 번호 표]` 는 동작, 기본 `chapter`, 따옴표 값, 본문의 같은 줄 무시, 모르는 값과 파일마다 다른 값은 `ConversionError`, 키 없는 파일은 다른 파일을 따름 |
 | 수평선 | `---`·`***`·`- - -`·`___`, 목록 뒤 `---`, 아래쪽 테두리만 있음 |
 | 인용문 | 문단 나눔, 중첩 깊이별 왼쪽 여백, 왼쪽 테두리와 연결, 인라인 서식, 인용문 뒤 문단은 일반 여백 |
 | 강제 줄바꿈 | 공백 두 칸·`\`, 서식이 줄바꿈을 넘는 경우, 목록 항목·인용문 안 |
