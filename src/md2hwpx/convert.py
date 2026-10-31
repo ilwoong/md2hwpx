@@ -12,7 +12,7 @@ from urllib.parse import unquote
 from hwpx import HwpxDocument
 from hwpx.oxml import Style
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
-from hwpx.tools.toc_author import add_native_toc, ensure_body_styles_not_collected, outline_heading_paragraphs
+from hwpx.tools.toc_author import add_native_toc, outline_heading_paragraphs
 from markdown_it.tree import SyntaxTreeNode
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
@@ -721,8 +721,6 @@ class _Writer:
 
         headings = self.toc_entries()
         if self.toc_at is not None and headings:
-            # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
-            ensure_body_styles_not_collected(self.doc)
             # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
             if not self.toc.kinds:
                 add_native_toc(
