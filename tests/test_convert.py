@@ -838,9 +838,9 @@ def test_convert_table_of_contents(tmp_path):
     assert "ContentsMake:uint:31" in command  # every list, in one field
     assert "ContentsHyperlink:bool:1" in command  # entries link to their headings
     assert begins[0].get("dirty") == "1"  # Hancom rebuilds it on open
-    # Body text in table cells is moved off 바탕글 so Hancom does not list it in the TOC.
+    # Text in table cells stays on 바탕글: Hancom does not collect it when it rebuilds the TOC (checked in Hancom).
     code = doc.tables.all[0].cell(0, 0).paragraphs[0]
-    assert int(code.style_id_ref) == doc.styles.resolve("본문").id
+    assert int(code.style_id_ref) == doc.styles.resolve("바탕글").id
 
 
 def test_convert_toc_without_headings_is_skipped(tmp_path):
