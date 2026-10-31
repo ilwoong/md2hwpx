@@ -316,7 +316,6 @@ class _Writer:
         self.toc_start = _PageStart()  # what the [TOC] marker's position asked for, done by the TOC's title
         # Paragraphs already there when the conversion starts (see has_content).
         self._first_content = self.paragraph_count()
-        self._h2_seen = 0  # level 2 headings in the chapter being written (see heading)
 
     # --- shapes -----------------------------------------------------------------------------
 
@@ -518,7 +517,8 @@ class _Writer:
     # --- blocks -----------------------------------------------------------------------------
 
     def heading(self, node: SyntaxTreeNode) -> None:
-        """Write a heading, with the page break and caption number reset its level asks for."""
+        """Write a heading, with the caption number reset its level asks for. Whether a heading starts a page
+        is the template's to say, in its 개요 style's paragraph shape."""
         runs = _runs(node.children[0].children)
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
@@ -529,18 +529,14 @@ class _Writer:
             # space above, so the gap from what came before is that paragraph's own line.
             self.doc.add_paragraph(style=self.body_style)
         if depth == 1:
-            self._h2_seen = 0  # the next level 2 heading is a chapter's first
             # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
             self.chapter += 1
             self.restart(self.numbers)
-            self.new_page()  # a chapter opens a page
-        elif depth == 2:
-            self._h2_seen += 1
-            # Within a chapter the first level 2 heading stays on the chapter's page; the ones after it,
-            # and those before any chapter, start a page of their own (unless the document starts with it).
-            if self._h2_seen > 1 or (not self.chapter and has_content):
-                self.page_start().page_break = True
         heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
+        if not has_content:
+            # The first page is new already: a style that breaks the page before the heading would leave it
+            # empty, as the template's own first paragraph comes before.
+            heading.para_pr_id_ref = self.para_format(heading.para_pr_id_ref, break_setting={"page_break_before": False})
         self.write_runs(heading, runs)
 
     def blocks(self, nodes: list[SyntaxTreeNode], quote: int = 0, indent: int = 0, level: int = 0,
