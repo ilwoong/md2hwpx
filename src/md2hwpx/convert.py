@@ -20,6 +20,10 @@ from pygments.util import ClassNotFound
 
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
+from md2hwpx.pieces import (
+    MARKERS, Piece, Run, TocRequest, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, strip_runs,
+    toc_request,
+)
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
@@ -27,26 +31,6 @@ _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\
 CAPTION_NUMBERING = "caption-numbering"
 CAPTION_NUMBERINGS = ("chapter", "document")
 _CAPTION_NUMBERING = re.compile(rf"^{CAPTION_NUMBERING}:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
-# "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
-# written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
-_CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
-# Lines of their own in a paragraph: table of contents, page break as pandoc writes it, number restart,
-# page hiding and blank page markers.
-_MARKERS = {
-    # "[TOC]", or "[TOC 그림 표 제목]": the lists to make, in that order. "링크없음" leaves out the links.
-    # The 제목 list collects 개요 paragraphs, or with 스타일="A;B" those styles' (and with "개요" both).
-    "toc": re.compile(
-        r'\[TOC((?:[ \t]+(?:제목|개요|표|그림|수식|링크없음|스타일="[^"\n]+"))*)[ \t]*\]', re.IGNORECASE
-    ),
-    "page_break": re.compile(r"\\(?:newpage|pagebreak)[ \t]*"),
-    # "[새 번호 쪽 표 그림 수식]": those numbers start over at 1 from the next paragraph (Hancom's 새 번호로 시작).
-    "restart": re.compile(r"\[새 번호((?:[ \t]+(?:쪽|표|그림|수식))+)[ \t]*\]"),
-    # "[감추기]": the next paragraph's page shows no page number, header or footer (Hancom's 감추기).
-    "hide_page": re.compile(r"\[감추기\]"),
-    # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
-    "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
-}
-_MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
 # Table cell style "text-align:..." -> paragraph alignment; no style keeps the default.
@@ -74,10 +58,6 @@ TOC_KINDS = {"제목": 17, "표": 2, "그림": 4, "수식": 8}
 # The 제목 list's bits, as Hancom writes them: the list itself (1), and where it collects its entries from,
 # 개요 paragraphs (16, "개요 문단으로 모으기") and the styles named in ContentsStyles (32, "스타일로 모으기").
 TOC_TITLE_LIST, TOC_BY_OUTLINE, TOC_BY_STYLE = 1, 16, 32
-TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
-TOC_OUTLINE = "개요"  # in the [TOC] marker: the 제목 list collects 개요 paragraphs, with its styles if any
-_TOC_STYLES = re.compile(r'스타일="([^"]*)"')  # in the [TOC] marker: the styles the 제목 list collects
-_TOC_WORD = re.compile(r'스타일="[^"]*"|\S+')
 _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
 _TOC_NO_STYLES = "ContentsStyles:wstring:0:"  # as python-hwpx writes the TOC command: no styles
 # Hancom's running numbers (hp:newNum / hp:autoNum numType) a "[새 번호]" line can start over.
@@ -110,24 +90,6 @@ def _line_metrics(doc: HwpxDocument, style: Style) -> tuple[int, int]:
     return size, size * 100 * spacing // 100
 
 
-class Run(NamedTuple):
-    """Inline text with one look, or a footnote reference (*note*, with no text)."""
-
-    text: str
-    marks: frozenset[str] = frozenset()  # bold, italic, strike, code
-    url: str | None = None  # link target
-    note: int | None = None  # footnote id
-
-
-class _Piece(NamedTuple):
-    """Part of a paragraph: text "runs", an "image", or a marker line (a key of _MARKERS)."""
-
-    kind: str
-    runs: list[Run] | None = None
-    image: SyntaxTreeNode | None = None
-    text: str = ""  # a blank page's wording, or the TOC or restart marker's words (see _MARKERS)
-
-
 class _Caption(NamedTuple):
     """A numbered caption waiting for the table, code block or picture it goes on."""
 
@@ -156,50 +118,6 @@ class _PageStart:
 class ConversionError(Exception):
     """The Markdown cannot be converted (its front matter says what cannot be done), or the converted
     document failed HWPX validation, so it was not saved."""
-
-
-def _runs(nodes: Iterable[SyntaxTreeNode], marks: frozenset[str] = frozenset(), url: str | None = None) -> list[Run]:
-    """The runs of inline *nodes*. An image here (in a heading or table cell) gives its alt text."""
-    runs: list[Run] = []
-    for node in nodes:
-        if node.type == "text":
-            runs.append(Run(node.content, marks, url))
-        elif node.type == "softbreak":
-            runs.append(Run(" ", marks, url))
-        elif node.type == "hardbreak":
-            runs.append(Run("\n", marks, url))
-        elif node.type == "code_inline":
-            runs.append(Run(node.content, marks | {"code"}, url))
-        elif node.type in _MARKS:
-            runs += _runs(node.children, marks | {_MARKS[node.type]}, url)
-        elif node.type == "link":
-            runs += _runs(node.children, marks, node.attrs["href"])
-        elif node.type == "image":
-            runs += _runs(node.children, marks, url)
-        elif node.type == "footnote_ref":
-            runs.append(Run("", marks, url, note=node.meta["id"]))
-    return runs
-
-
-def _plain(runs: list[Run]) -> str:
-    return "".join(run.text for run in runs)
-
-
-def _is_blank(run: Run) -> bool:
-    return run.note is None and not run.text.strip()
-
-
-def _strip(runs: list[Run]) -> list[Run]:
-    """*runs* without the white space at their start and end."""
-    runs = list(runs)
-    while runs and _is_blank(runs[0]):
-        runs.pop(0)
-    while runs and _is_blank(runs[-1]):
-        runs.pop()
-    if runs:
-        runs[0] = runs[0]._replace(text=runs[0].text.lstrip())
-        runs[-1] = runs[-1]._replace(text=runs[-1].text.rstrip())
-    return runs
 
 
 def _blank_page_width(text: str, size: int) -> int:
@@ -243,61 +161,6 @@ def _highlight(code: list[str], lang: str) -> list[list[tuple[str, dict]]]:
             if part:
                 lines[-1].append((part, style.style_for_token(token)))
     return lines[:-1]
-
-
-def _block_kind(node: SyntaxTreeNode | None) -> str | None:
-    """The block's type, or "image" for a paragraph that starts with an image (a caption may precede it)."""
-    if node is None:
-        return None
-    if node.type == "paragraph":
-        first = next((c for c in node.children[0].children if not (c.type == "text" and not c.content.strip())), None)
-        if first is not None and first.type == "image":
-            return "image"
-    return node.type
-
-
-def _toc_styles(words: str) -> list[str]:
-    """The styles the [TOC] marker's *words* name in 스타일="A;B" for the 제목 list to collect, once each."""
-    names = (name.strip() for match in _TOC_STYLES.finditer(words) for name in match[1].split(";"))
-    return list(dict.fromkeys(name for name in names if name))
-
-
-def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
-    """Split a paragraph's inline content into pieces: each image, and each line holding only
-    a marker, stands apart; the text between them is a "runs" piece (blank ones are dropped)."""
-    pieces: list[_Piece] = []
-    runs: list[Run] = []
-
-    def flush() -> None:
-        if not all(_is_blank(run) for run in runs):
-            pieces.append(_Piece("runs", _strip(runs)))
-        runs.clear()
-
-    lines: list[list[SyntaxTreeNode]] = [[]]
-    for child in inline.children:
-        if child.type == "softbreak":
-            lines.append([])
-        else:
-            lines[-1].append(child)
-    for line in lines:
-        text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
-        found = next(((name, m) for name, pattern in _MARKERS.items() if (m := pattern.fullmatch(text))), None)
-        if found:
-            flush()
-            marker, match = found
-            # The blank page marker carries a wording, the TOC and restart markers their words, in their one group.
-            pieces.append(_Piece(marker, text=match.group(1).strip() if match.groups() else ""))
-            continue
-        if runs:
-            runs.append(Run(" "))  # the line break between two lines of text
-        for child in line:
-            if child.type == "image":
-                flush()
-                pieces.append(_Piece("image", image=child))
-            else:
-                runs += _runs([child])
-    flush()
-    return pieces
 
 
 def _paragraph_styles(doc: HwpxDocument) -> dict[str, Style]:
@@ -348,10 +211,7 @@ class _Writer:
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
         self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "[새 번호 표]" / "[새 번호 그림]"
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
-        self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
-        self.toc_links = True  # entries are hyperlinks, unless the [TOC] marker says 링크없음
-        self.toc_outline = True  # the 제목 list collects 개요 paragraphs (see toc_marker)
-        self.toc_styles: list[str] = []  # and the paragraphs of these styles
+        self.toc = TocRequest(kinds=[], styles=[], outline=True, links=True)  # what the [TOC] marker asks for
         self.page_starts: dict[int, _PageStart] = {}  # paragraph index -> what it does about its page
         self.toc_start = _PageStart()  # what the [TOC] marker's position asked for, done by the TOC's title
         # Paragraphs already there when the conversion starts (see has_content).
@@ -450,9 +310,9 @@ class _Writer:
             if block.type == "paragraph":
                 if runs:
                     runs.append(Run("\n"))
-                runs += _runs(block.children[0].children)
-        runs = _strip(runs)
-        note = self.doc.notes.add_footnote(_plain(runs), paragraph)
+                runs += inline_runs(block.children[0].children)
+        runs = strip_runs(runs)
+        note = self.doc.notes.add_footnote(plain_text(runs), paragraph)
         self.write_runs(note.body_paragraph, runs, footnotes=False)
 
     def plain(self, paragraph, size: int | None = None, with_runs: bool = True) -> None:
@@ -475,7 +335,7 @@ class _Writer:
             run.char_pr_id_ref = paragraph.char_pr_id_ref
 
     def text_paragraph(self, runs: list[Run], quote: int, indent: int):
-        paragraph = self.doc.add_paragraph(_plain(runs), style=self.text_style)
+        paragraph = self.doc.add_paragraph(plain_text(runs), style=self.text_style)
         self.write_runs(paragraph, runs)
         self.place(paragraph, quote, indent)
         return paragraph
@@ -497,7 +357,7 @@ class _Writer:
             obj.element.set("numberingType", "NONE")
             return
         style, caption = self.caption_style, self.caption
-        made = obj.set_caption(_plain(caption.runs), side=side, char_pr_id_ref=style.char_pr_id_ref)
+        made = obj.set_caption(plain_text(caption.runs), side=side, char_pr_id_ref=style.char_pr_id_ref)
         for paragraph in made.paragraphs:
             paragraph.style_id_ref = style.id
             paragraph.para_pr_id_ref = style.para_pr_id_ref
@@ -508,15 +368,14 @@ class _Writer:
     def take_caption(self, runs: list[Run], following: str | None) -> bool:
         """If *runs* is a "[표] ..." / "[그림] ..." line and *following* (the kind of what comes
         next: a block type or "image") is what it captions, keep it as the next caption."""
-        first = runs[0]
-        match = _CAPTION.match(first.text) if first == Run(first.text) else None
-        if match is None:
+        found = caption_line(runs)
+        if found is None:
             return False
-        kind = match.group(1)
+        kind, title = found
         captioned = ("table", "fence", "code_block") if kind == "표" else ("image",)
         if following not in captioned:
             return False
-        self.number_caption(kind, [first._replace(text=first.text[match.end() :]), *runs[1:]])
+        self.number_caption(kind, title)
         return True
 
     def number_caption(self, kind: str, title: list[Run]) -> None:
@@ -560,7 +419,7 @@ class _Writer:
     def heading(self, node: SyntaxTreeNode) -> None:
         """Write a heading, with the caption number reset its level asks for. Whether a heading starts a page
         is the template's to say, in its 개요 style's paragraph shape."""
-        runs = _runs(node.children[0].children)
+        runs = inline_runs(node.children[0].children)
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
             self.heading_styles[depth] = self.doc.styles.resolve(HEADING_STYLE.format(depth))
@@ -574,7 +433,7 @@ class _Writer:
             if self.by_chapter:
                 # A new chapter starts the caption numbers over: 표 2-1 follows 표 1-4.
                 self.restart(self.numbers)
-        heading = self.doc.add_heading(_plain(runs), level=depth, style=self.heading_styles[depth])
+        heading = self.doc.add_heading(plain_text(runs), level=depth, style=self.heading_styles[depth])
         if not has_content:
             # The first page is new already: a style that breaks the page before the heading would leave it
             # empty, as the template's own first paragraph comes before.
@@ -593,7 +452,7 @@ class _Writer:
             if node.type == "heading":
                 self.heading(node)
             elif node.type == "paragraph":
-                self.pieces(_pieces(node.children[0]), _block_kind(following), quote, content)
+                self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, content)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
                 self.code_block(node.content.split("\n")[:-1], lang, quote, content)
@@ -613,10 +472,10 @@ class _Writer:
                 self.blocks(node.children, quote, indent, level, numbering)
                 self.text_style = outer
 
-    def pieces(self, pieces: list[_Piece], following: str | None, quote: int, indent: int) -> None:
+    def pieces(self, pieces: list[Piece], following: str | None, quote: int, indent: int) -> None:
         """A paragraph's pieces become text paragraphs, pictures, captions, the TOC position and page breaks.
 
-        *following* is the kind of the block after the paragraph (see _block_kind).
+        *following* is the kind of the block after the paragraph (see block_kind).
         """
         for k, piece in enumerate(pieces):
             if piece.kind == "toc":
@@ -639,18 +498,9 @@ class _Writer:
                     self.text_paragraph(piece.runs, quote, indent)
 
     def toc_marker(self, words: str) -> None:
-        """Keep the TOC's place, at the first [TOC] marker, and what its *words* ask for.
-
-        제목, 개요 and 스타일="..." all name the 제목 list (at the first of them). It collects 개요 paragraphs
-        unless styles are named; with them, the paragraphs of those styles, and 개요 ones too if 개요 is named.
-        """
+        """Keep the TOC's place, at the first [TOC] marker, and what its *words* ask for (see toc_request)."""
         self.toc_at = self.paragraph_count()
-        self.toc_styles = _toc_styles(words)
-        words = _TOC_WORD.findall(words)
-        self.toc_outline = TOC_OUTLINE in words or not self.toc_styles
-        kinds = ("제목" if word == TOC_OUTLINE or _TOC_STYLES.fullmatch(word) else word for word in words)
-        self.toc_kinds = [kind for kind in dict.fromkeys(kinds) if kind != TOC_NO_LINKS]
-        self.toc_links = TOC_NO_LINKS not in words
+        self.toc = toc_request(words)
         # A page break, restart or hiding asked for here goes on the TOC's title.
         self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
 
@@ -659,9 +509,9 @@ class _Writer:
         collects them) and those of its styles. Hancom collects them again when it rebuilds the TOC."""
         outline = (
             {p.element.get("styleIDRef") for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL}
-            if self.toc_outline else set()
+            if self.toc.outline else set()
         )
-        styled = {str(self.paragraph_styles[name].id) for name in self.toc_styles if name in self.paragraph_styles}
+        styled = {str(self.paragraph_styles[name].id) for name in self.toc.styles if name in self.paragraph_styles}
         return [p for p in self.doc.paragraphs if p.text.strip() and p.element.get("styleIDRef") in outline | styled]
 
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
@@ -672,7 +522,7 @@ class _Writer:
             image_path = MISSING_IMAGE
             data, image_format = picture_data(image_path)
         if self.caption is None:  # without a "[그림] ..." line, the alt text (if any) is the caption
-            alt = _strip(_runs(node.children))
+            alt = strip_runs(inline_runs(node.children))
             if alt:
                 self.number_caption("그림", alt)
         max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
@@ -736,18 +586,20 @@ class _Writer:
 
     def table(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         rows = [tr for section in node.children for tr in section.children]
-        cells = [[_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows]
+        cells = [
+            [inline_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows
+        ]
         aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
         table = self.add_table(len(cells), len(cells[0]), quote, indent)
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
-        texts = [[_plain(runs) for runs in row] for row in cells]
+        texts = [[plain_text(runs) for runs in row] for row in cells]
         table.set_column_widths(column_widths(texts, self.body_width, self.plain_size))
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
             for c, runs in enumerate(row):
                 cell = table.cell(r, c)
-                cell.text = _plain(runs)
+                cell.text = plain_text(runs)
                 paragraph = cell.paragraphs[0]
                 # 바탕글 (휴먼명조): a table's text is not body text, and the 본문 style's first-line
                 # indent would shift every cell in from its left edge.
@@ -811,18 +663,18 @@ class _Writer:
             item_blocks = list(item.children)
             # The item text is the first text of its first paragraph; the rest of that paragraph
             # (pictures, more text) follows it like the item's other blocks.
-            rest: list[_Piece] = []
+            rest: list[Piece] = []
             if item_blocks and item_blocks[0].type == "paragraph":
-                rest = _pieces(item_blocks.pop(0).children[0])
+                rest = paragraph_pieces(item_blocks.pop(0).children[0])
             first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
-            paragraph = self.doc.add_paragraph(_plain(first), style=self.body_style)
+            paragraph = self.doc.add_paragraph(plain_text(first), style=self.body_style)
             self.write_runs(paragraph, first)
             if node.type == "bullet_list":
                 self.list_format(paragraph, "bullet", list_level)
             else:
                 own = self.list_format(paragraph, "number", list_level, own if k else numbering, start)
             self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
-            following = _block_kind(item_blocks[0] if item_blocks else None)
+            following = block_kind(item_blocks[0] if item_blocks else None)
             self.pieces(rest, following, quote, indent + list_level * LIST_INDENT)
             self.blocks(item_blocks, quote, indent, level, own if node.type == "ordered_list" else None)
 
@@ -872,23 +724,23 @@ class _Writer:
             # Hancom's TOC update also collects 바탕글 paragraphs (e.g. table cells): move them to 본문 first.
             ensure_body_styles_not_collected(self.doc)
             # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
-            if not self.toc_kinds:
+            if not self.toc.kinds:
                 add_native_toc(
-                    self.doc, at_index=self.toc_at, title=TOC_TITLE, level=TOC_LEVEL, hyperlink=self.toc_links,
+                    self.doc, at_index=self.toc_at, title=TOC_TITLE, level=TOC_LEVEL, hyperlink=self.toc.links,
                     headings=headings, dirty=True,
                 )
             # A field per list: Hancom orders the lists within one field itself. Each goes in at the
             # same place, so they are added last first.
-            for kind in reversed(self.toc_kinds):
+            for kind in reversed(self.toc.kinds):
                 made = add_native_toc(
                     self.doc, at_index=self.toc_at, title=f"<{kind} 차례>", level=TOC_LEVEL,
-                    hyperlink=self.toc_links, headings=headings, dirty=True,
+                    hyperlink=self.toc.links, headings=headings, dirty=True,
                 )
                 paragraphs = self.doc.paragraphs[self.toc_at : self.toc_at + 1 + made["entryCount"]]
                 if kind == "제목":
-                    make = TOC_TITLE_LIST | (TOC_BY_OUTLINE if self.toc_outline else 0)
-                    make |= TOC_BY_STYLE if self.toc_styles else 0
-                    _set_toc_command(paragraphs[0], made["tocFieldId"], make, self.toc_styles)
+                    make = TOC_TITLE_LIST | (TOC_BY_OUTLINE if self.toc.outline else 0)
+                    make |= TOC_BY_STYLE if self.toc.styles else 0
+                    _set_toc_command(paragraphs[0], made["tocFieldId"], make, self.toc.styles)
                 else:
                     _set_toc_command(paragraphs[0], made["tocFieldId"], TOC_KINDS[kind])
                     # Its entries are the headings: drop them, Hancom lists the captions when it rebuilds.
@@ -1000,12 +852,12 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
         if token.type == "container_div_open" and (name := custom_style(token.info)) not in styles:
             found.append((token.map[0] + 1, name, "본문 스타일로 넣었습니다"))
         elif token.type == "inline" and tokens[k - 1].type == "paragraph_open":
-            # A marker is a line of its own in a paragraph (see _pieces).
+            # A marker is a line of its own in a paragraph (see paragraph_pieces).
             for i, line in enumerate(token.content.split("\n")):
-                if match := _MARKERS["toc"].fullmatch(line.strip()):
+                if match := MARKERS["toc"].fullmatch(line.strip()):
                     found += [
                         (token.map[0] + i + 1, name, "차례에 모을 수 없습니다")
-                        for name in _toc_styles(match[1]) if name not in styles
+                        for name in toc_request(match[1]).styles if name not in styles
                     ]
     return found
 
