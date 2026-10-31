@@ -939,9 +939,25 @@ def test_convert_toc_without_paragraphs_of_its_styles(tmp_path):
 
 
 def test_unknown_toc_styles():
-    markdown = '본문\n[TOC 스타일="본문;없는 스타일"]\n\n| [TOC 스타일="표 안"] |\n|---|\n'
-    # The marker's line; a [TOC] in a table cell is not a marker.
-    assert unknown_styles(markdown, {"본문"}) == [(2, "없는 스타일", "차례에 모을 수 없습니다")]
+    markdown = (
+        '본문  \n다음 줄\n[TOC 스타일="본문;없는 스타일"]\n\n| [TOC 스타일="표 안"] |\n|---|\n\n'
+        '[TOC 스타일="*강조*"]\n\n각주[^1]\n\n[^1]: [TOC 스타일="각주 안"]\n'
+    )
+    # The marker's line, past a hard break. A [TOC] in a table cell or a footnote, or with emphasis in it,
+    # is not a marker: the conversion writes it as text, so it is not warned about.
+    assert unknown_styles(markdown, {"본문"}) == [(3, "없는 스타일", "차례에 모을 수 없습니다")]
+
+
+def test_convert_marker_with_emphasis_is_text(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text('[TOC 스타일="*강조*"]\n\n# 장\n', encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    assert _toc_commands(doc) == []
+    assert [p.text for p in doc.paragraphs[1:]] == ['[TOC 스타일="강조"]', "장"]
 
 
 @pytest.mark.parametrize(
