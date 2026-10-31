@@ -31,10 +31,6 @@ MARKERS = {
     "blank_lines": re.compile(r"\[빈 줄((?:[ \t]+(?:10|\d))?)[ \t]*\]"),
 }
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
-TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
-TOC_OUTLINE = "개요"  # in the [TOC] marker: the 제목 list collects 개요 paragraphs, with its styles if any
-_TOC_STYLES = re.compile(r'스타일="([^"]*)"')  # in the [TOC] marker: the styles the 제목 list collects
-_TOC_WORD = re.compile(r'스타일="[^"]*"|\S+')
 
 
 class Run(NamedTuple):
@@ -53,15 +49,6 @@ class Piece(NamedTuple):
     runs: list[Run] | None = None
     image: SyntaxTreeNode | None = None
     text: str = ""  # a blank page's wording, or the TOC or restart marker's words (see MARKERS)
-
-
-class TocRequest(NamedTuple):
-    """What a [TOC] marker asks for (see toc_request)."""
-
-    kinds: list[str]  # the lists to make, in order: 제목, 표, 그림, 수식 (none: all in one field)
-    styles: list[str]  # the styles the 제목 list collects
-    outline: bool  # the 제목 list collects 개요 paragraphs
-    links: bool  # entries are hyperlinks to what they list
 
 
 def inline_runs(
@@ -128,25 +115,6 @@ def caption_line(runs: list[Run]) -> tuple[str, list[Run]] | None:
     if match is None:
         return None
     return match[1], [first._replace(text=first.text[match.end() :]), *runs[1:]]
-
-
-def toc_request(words: str) -> TocRequest:
-    """What the [TOC] marker's *words* ask for.
-
-    제목, 개요 and 스타일="..." all name the 제목 list (at the first of them). It collects 개요 paragraphs
-    unless styles are named; with them, the paragraphs of those styles, and 개요 ones too if 개요 is named.
-    Each style is named once, from 스타일="A;B".
-    """
-    names = (name.strip() for match in _TOC_STYLES.finditer(words) for name in match[1].split(";"))
-    styles = list(dict.fromkeys(name for name in names if name))
-    split = _TOC_WORD.findall(words)
-    kinds = ("제목" if word == TOC_OUTLINE or _TOC_STYLES.fullmatch(word) else word for word in split)
-    return TocRequest(
-        kinds=[kind for kind in dict.fromkeys(kinds) if kind != TOC_NO_LINKS],
-        styles=styles,
-        outline=TOC_OUTLINE in split or not styles,
-        links=TOC_NO_LINKS not in split,
-    )
 
 
 def _lines(inline: SyntaxTreeNode) -> list[tuple[int, list[SyntaxTreeNode]]]:
