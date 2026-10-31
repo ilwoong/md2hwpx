@@ -14,6 +14,9 @@ from PIL import Image
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import MISSING_IMAGE, ConversionError, caption_numbering, convert, unusable_images
 
+HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"  # Hancom paragraph XML
+HH = "{http://www.hancom.co.kr/hwpml/2011/head}"  # Hancom header XML
+
 
 def _page_body() -> tuple[int, int, int, int]:
     """The template's 본문 left margin, body width, body height and text width (as convert.py computes them)."""
@@ -32,9 +35,8 @@ BODY_LEFT, BODY_WIDTH, BODY_HEIGHT, TEXT_WIDTH = _page_body()
 
 def _text(element) -> str:
     """The text in *element* as Hancom shows it: a running number (hp:autoNum) as its cached value."""
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     return "".join(
-        e.get("num") if e.tag == f"{hp}autoNum" else "".join(e.itertext()) for e in element.iter(f"{hp}t", f"{hp}autoNum")
+        e.get("num") if e.tag == f"{HP}autoNum" else "".join(e.itertext()) for e in element.iter(f"{HP}t", f"{HP}autoNum")
     )
 
 
@@ -105,7 +107,7 @@ def test_convert_code_block(tmp_path):
     table = doc.tables.all[0]
     assert (table.row_count, table.column_count) == (1, 1)
     # A line of space above and below, none at the sides, as a table.
-    margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
+    margin = table.element.find(f"{HP}outMargin").attrib
     assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
     paragraphs = table.cell(0, 0).paragraphs
     assert [p.text for p in paragraphs] == ["def f():", '    """doc', '    string"""', "", "    return 1"]
@@ -203,7 +205,7 @@ def test_convert_table(tmp_path):
     # The shading keeps the table's border: a fill matched on colour alone would drop all four sides.
     assert all(borders(cell) == ("SOLID",) * 4 for cell in header + body)
     # A line of space above and below, none at the sides.
-    margin = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}outMargin").attrib
+    margin = table.element.find(f"{HP}outMargin").attrib
     assert margin == {"left": "0", "right": "0", "top": "1400", "bottom": "1400"}
     # The header row repeats on each page the table runs on to.
     assert table.element.get("repeatHeader") == "1"
@@ -218,14 +220,14 @@ def test_convert_table(tmp_path):
         assert doc.styles.font_face(paragraph.char_pr_id_ref, "HANGUL") == "휴먼명조"
     # Cell padding, as Hancom's own tables have it: 1.8 mm at the sides, 0.5 mm above and below. The cells
     # leave hasMargin off, so Hancom takes the table's inMargin.
-    padding = table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}inMargin").attrib
+    padding = table.element.find(f"{HP}inMargin").attrib
     assert padding == {"left": "510", "right": "510", "top": "141", "bottom": "141"}
     for cell in header + body:
         assert cell.element.get("hasMargin") != "1"
         # The stored row height holds the padding plus one line of text (1800), or the padding would have
         # no room to show in.
         assert cell.height == 2082
-    assert table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}sz").get("height") == str(2082 * 3)
+    assert table.element.find(f"{HP}sz").get("height") == str(2082 * 3)
     assert doc.paragraphs[-1].text == "뒤 문단"
 
 
@@ -244,7 +246,7 @@ def test_convert_tables_flow_across_pages(tmp_path):
     for table in tables:
         assert not table.treat_as_char
         # From the paragraph, so a table in a list item keeps its indent.
-        assert table.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}pos").get("horzRelTo") == "PARA"
+        assert table.element.find(f"{HP}pos").get("horzRelTo") == "PARA"
     assert not [f for f in lint_layout(out.read_bytes()).findings if f.code == "TABLE_TALLER_THAN_PAGE"]
 
 
@@ -264,8 +266,7 @@ def test_convert_caption_numbers_restart_in_each_chapter(tmp_path):
     doc = HwpxDocument.open(out)
     # The number is the chapter (level 1 heading) and the object's own count within it.
     assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1-1] 첫 표", "[표 1-2] 둘째 표", "[표 2-1] 장2 표1"]
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pictures = [_text(pic.find(f"{hp}caption")) for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
+    pictures = [_text(pic.find(f"{HP}caption")) for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
     assert pictures == ["[그림 1-1] 첫 그림", "[그림 2-1] 장2 그림1"]
 
 
@@ -291,9 +292,8 @@ def test_convert_captions(tmp_path):
     assert _text(doc.tables.all[1].caption.element) == "[표 2] 둘째 표"
     code_caption = doc.tables.all[2].caption
     assert (code_caption.side, _text(code_caption.element)) == ("TOP", "[표 3] 코드 캡션")
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic"))
-    pic_caption = pic.find(f"{hp}caption")
+    pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{HP}pic"))
+    pic_caption = pic.find(f"{HP}caption")
     assert pic_caption.get("side") == "BOTTOM"
     assert _text(pic_caption) == "[그림 1] 그림 캡션"
     assert [p.text for p in doc.paragraphs if p.text] == ["[표] 표가 뒤따르지 않음", "문단"]
@@ -304,9 +304,9 @@ def test_convert_captions(tmp_path):
         assert (int(p.style_id_ref), int(p.para_pr_id_ref), int(p.char_pr_id_ref)) == (
             style.id, style.para_pr_id_ref, style.char_pr_id_ref
         )
-    pic_p = pic_caption.find(f".//{hp}p")
+    pic_p = pic_caption.find(f".//{HP}p")
     assert (pic_p.get("styleIDRef"), pic_p.get("paraPrIDRef")) == (str(style.id), str(style.para_pr_id_ref))
-    assert pic_p.find(f"{hp}run").get("charPrIDRef") == str(style.char_pr_id_ref)
+    assert pic_p.find(f"{HP}run").get("charPrIDRef") == str(style.char_pr_id_ref)
 
 
 def test_convert_alt_text_captions(tmp_path):
@@ -325,9 +325,8 @@ def test_convert_alt_text_captions(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
-    captions = [pic.find(f"{hp}caption") for pic in pics]
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{HP}pic")]
+    captions = [pic.find(f"{HP}caption") for pic in pics]
     assert [c is not None and _text(c) for c in captions] == [
         "[그림 1] 대체 텍스트 제목",
         "[그림 2] 줄로 쓴 제목",
@@ -336,7 +335,7 @@ def test_convert_alt_text_captions(tmp_path):
     ]
     assert captions[0].get("side") == "BOTTOM"
     italic = [
-        run.get("charPrIDRef") for run in captions[3].iter(f"{hp}run") if "".join(run.itertext()) == "기울임"
+        run.get("charPrIDRef") for run in captions[3].iter(f"{HP}run") if "".join(run.itertext()) == "기울임"
     ]
     assert italic and "italic" in doc.styles.char_property(italic[0]).child_attributes
     assert "헤딩 헤딩 안 그림" in [p.text for p in doc.paragraphs]
@@ -376,8 +375,7 @@ def test_convert_picture_sizes(tmp_path):
         (400 * 75, 300 * 75),
         (300 * 75, 150 * 75),
     ]
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    margins = [pic.find(f"{hp}outMargin").attrib for p in doc.paragraphs for pic in p.element.iter(f"{hp}pic")]
+    margins = [pic.find(f"{HP}outMargin").attrib for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
     assert margins == [{"left": "0", "right": "0", "top": "1400", "bottom": "1400"}] * len(images)
 
 
@@ -432,10 +430,9 @@ def test_convert_reduced_picture_is_centred(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     alignments = []
     for paragraph in doc.paragraphs:
-        if list(paragraph.element.iter(f"{hp}pic")):
+        if list(paragraph.element.iter(f"{HP}pic")):
             alignments.append(doc.styles.paragraph_property(paragraph.para_pr_id_ref).align.horizontal)
     assert alignments == ["CENTER", "JUSTIFY", "CENTER"]
     # The pictures' own size is not touched by the alignment.
@@ -523,7 +520,6 @@ def test_convert_table_row_heights(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     table = doc.tables.all[0]
     # The two cells of the row share the row's height, which holds the taller one's wrapped lines.
     assert table.cell(0, 0).height == table.cell(0, 1).height
@@ -532,7 +528,7 @@ def test_convert_table_row_heights(tmp_path):
     assert lines > 1
     assert wrapped.height >= lines * 1800 + 141 * 2
     assert table.cell(1, 0).height == wrapped.height  # the short cell takes its row's height too
-    assert table.element.find(f"{hp}sz").get("height") == str(
+    assert table.element.find(f"{HP}sz").get("height") == str(
         table.cell(0, 0).height + table.cell(1, 0).height
     )
 
@@ -540,7 +536,7 @@ def test_convert_table_row_heights(tmp_path):
     code = doc.tables.all[1].cell(0, 0)
     assert len(code.paragraphs) == 12
     assert code.height == 12 * 1260 + 141 * 2
-    assert doc.tables.all[1].element.find(f"{hp}sz").get("height") == str(code.height)
+    assert doc.tables.all[1].element.find(f"{HP}sz").get("height") == str(code.height)
     # One line of code is one code line high, not one line of the cells' 바탕글.
     md.write_text("```\none\n```\n", encoding="utf-8")
     convert(md, TEMPLATE, out)
@@ -586,10 +582,9 @@ def test_convert_lists(tmp_path):
     # One numbering for the whole "3." list, sub-level included; the later list starts a new one.
     assert len(set(numbering[5:9])) == 1
     assert numbering[10] != numbering[5]
-    hh = "{http://www.hancom.co.kr/hwpml/2011/head}"
     header = doc.oxml.headers[0].element
-    first_list = header.find(f".//{hh}numbering[@id='{numbering[5]}']")
-    assert first_list.find(f"{hh}paraHead[@level='1']").get("start") == "3"
+    first_list = header.find(f".//{HH}numbering[@id='{numbering[5]}']")
+    assert first_list.find(f"{HH}paraHead[@level='1']").get("start") == "3"
 
 
 def test_convert_inline_formatting(tmp_path):
@@ -725,13 +720,11 @@ def test_convert_hard_line_breaks(tmp_path):
     out = tmp_path / "breaks.hwpx"
 
     convert(md, TEMPLATE, out)
-
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     paragraphs = HwpxDocument.open(out).paragraphs[1:]
 
     def lines(p):
         # hp:lineBreak inside hp:t marks a line break; text() reads it as "\n".
-        return sum(1 for _ in p.element.iter(f"{hp}lineBreak")) + 1, p.text.replace("\n", "|")
+        return sum(1 for _ in p.element.iter(f"{HP}lineBreak")) + 1, p.text.replace("\n", "|")
 
     assert lines(paragraphs[0]) == (4, "공백 두 칸|백슬래시|굵게|이어짐 끝")
     assert lines(paragraphs[1]) == (2, "항목|둘째 줄")
@@ -754,18 +747,17 @@ def test_convert_footnotes(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 
     def sequence(p):
         """Runs' text and footnotes (as their text in braces) in document order."""
         items = []
-        for run in p.element.findall(f"{hp}run"):
+        for run in p.element.findall(f"{HP}run"):
             for child in run:
-                if child.tag == f"{hp}t" and child.text:
+                if child.tag == f"{HP}t" and child.text:
                     items.append(child.text)
-                elif child.tag == f"{hp}ctrl" and child.find(f"{hp}footNote") is not None:
-                    note = child.find(f"{hp}footNote")
-                    items.append("{" + "".join(note.find(f".//{hp}subList").itertext()) + "}")
+                elif child.tag == f"{HP}ctrl" and child.find(f"{HP}footNote") is not None:
+                    note = child.find(f"{HP}footNote")
+                    items.append("{" + "".join(note.find(f".//{HP}subList").itertext()) + "}")
         return items
 
     first = doc.paragraphs[1]
@@ -787,16 +779,15 @@ def test_convert_blank_page(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     blank = doc.tables.all[0]
     # A 1x1 table just big enough for the wording, centred on a page of its own — and not in the TOC.
     assert blank.cell(0, 0).text == "이 면은 여백으로 사용됨"
-    position = blank.element.find(f"{hp}pos")
+    position = blank.element.find(f"{HP}pos")
     assert (position.get("treatAsChar"), position.get("vertRelTo"), position.get("vertAlign")) == ("0", "PAGE", "CENTER")
     assert (position.get("horzRelTo"), position.get("horzAlign")) == ("PAGE", "CENTER")
     assert blank.element.get("numberingType") == "NONE"
     assert blank.cell(0, 0).margins.to_dict() == {"left": 5660, "right": 5660, "top": 1415, "bottom": 1415}
-    width = int(blank.element.find(f"{hp}sz").get("width"))
+    width = int(blank.element.find(f"{HP}sz").get("width"))
     assert width >= 5660 * 2 + round(estimate_text_width("이 면은 여백으로 사용됨", 11))
     # The wording is set in 바탕글 (휴먼명조) at the blank page's 11pt, and stays on one line: the table is
     # sized to the count plus a spare character, so the last character cannot tip over to a second line.
@@ -833,13 +824,12 @@ def test_convert_table_of_contents(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     texts = [p.text for p in doc.paragraphs[1:]]
     # The TOC field sits where the first marker was; the second marker adds nothing.
     assert texts[:6] == ["문서", "차례", "1. 문서\t1", "2. 소개\t1", "3. 사용법\t1", "4. 세부\t1"]
     # level 4 is not listed in the TOC; level 1 headings get no empty paragraph before them.
     assert texts[6:] == ["", "", "소개", "본문", "", "", "사용법", "", "세부", "", "4수준"]
-    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{HP}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
     assert len(begins) == 1
     command = "".join(begins[0].itertext())
     assert "ContentsLevel:int:3" in command
@@ -869,13 +859,12 @@ def test_convert_toc_lists_in_the_order_named(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     # A field per list, in the order named (a repeat is dropped); only the 제목 list keeps heading entries.
     assert [p.text for p in doc.paragraphs[2:]][:8] == [
         "<그림 차례>", "", "<제목 차례>", "1. 장\t1", "2. 절\t1", "", "<표 차례>", "",
     ]
-    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
-    commands = [p.text for b in begins for p in b.iter(f"{hp}stringParam") if p.get("name") == "Command"]
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{HP}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    commands = [p.text for b in begins for p in b.iter(f"{HP}stringParam") if p.get("name") == "Command"]
     assert [c.split()[0].rsplit(":", 1)[1] for c in commands] == ["4", "17", "2"]  # ContentsMake:uint:N
     for command in commands:
         # As Hancom writes it: "set:N:" with N the length of the rest less one.
@@ -898,9 +887,8 @@ def test_convert_toc_without_links(tmp_path, marker, makes):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{hp}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
-    commands = [p.text for b in begins for p in b.iter(f"{hp}stringParam") if p.get("name") == "Command"]
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{HP}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    commands = [p.text for b in begins for p in b.iter(f"{HP}stringParam") if p.get("name") == "Command"]
     # 링크없음 is not a list: it turns the links off in every field the marker makes.
     assert [c.split()[0].rsplit(":", 1)[1] for c in commands] == makes
     assert all("ContentsHyperlink:bool:0" in c for c in commands)
@@ -924,14 +912,13 @@ def test_convert_heading_page_breaks_come_from_the_template(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hh = "{http://www.hancom.co.kr/hwpml/2011/head}"
     # The converter breaks no page at a heading itself ...
     assert not [p for p in doc.paragraphs if p.element.get("pageBreak") == "1"]
     # ... the bundled template's 개요 1 paragraph shape does ("문단 앞에서 항상 쪽 나눔"); 개요 2 does not.
     # The first heading is on the first page already: its break is off, or that page would be left empty.
-    shapes = {p.get("id"): p for p in doc.parts.headers[0].element.iter(f"{hh}paraPr")}
+    shapes = {p.get("id"): p for p in doc.parts.headers[0].element.iter(f"{HH}paraPr")}
     breaks = {
-        p.text: shapes[p.element.get("paraPrIDRef")].find(f"{hh}breakSetting").get("pageBreakBefore")
+        p.text: shapes[p.element.get("paraPrIDRef")].find(f"{HH}breakSetting").get("pageBreakBefore")
         for p in doc.paragraphs if p.text
     }
     assert breaks == {"첫 장": "0", "첫째 절": "0", "둘째 절": "0", "둘째 장": "1", "셋째 장": "1"}
@@ -957,8 +944,7 @@ def test_convert_page_breaks(tmp_path):
 
 def _new_numbers(paragraph) -> list[str]:
     """The numTypes *paragraph* starts over (hp:newNum), each at 1."""
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    news = list(paragraph.element.iter(f"{hp}newNum"))
+    news = list(paragraph.element.iter(f"{HP}newNum"))
     assert all(n.get("num") == "1" for n in news)
     return [n.get("numType") for n in news]
 
@@ -976,14 +962,13 @@ def test_convert_caption_numbers_are_hancoms_own(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    tables = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}tbl")]
-    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    tables = [e for p in doc.paragraphs for e in p.element.iter(f"{HP}tbl")]
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{HP}pic")]
     # The caption's number is an hp:autoNum, as Hancom writes it, holding the count as its cached value.
-    auto = tables[0].find(f"{hp}caption").find(f".//{hp}autoNum")
+    auto = tables[0].find(f"{HP}caption").find(f".//{HP}autoNum")
     assert (auto.get("numType"), auto.get("num")) == ("TABLE", "1")
-    assert auto.find(f"{hp}autoNumFormat").get("type") == "DIGIT"
-    assert pics[1].find(f"{hp}caption").find(f".//{hp}autoNum").get("numType") == "PICTURE"
+    assert auto.find(f"{HP}autoNumFormat").get("type") == "DIGIT"
+    assert pics[1].find(f"{HP}caption").find(f".//{HP}autoNum").get("numType") == "PICTURE"
     # Hancom counts every table and picture: those without a caption are kept out of the count.
     assert [t.get("numberingType") for t in tables] == ["TABLE", "NONE"]
     assert [p.get("numberingType") for p in pics] == ["NONE", "PICTURE"]
@@ -1006,11 +991,10 @@ def test_convert_numbers_captions_through_the_document(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{HP}pic")]
     # No chapter number, and a chapter does not start the count over; [새 번호] still does.
     assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1] 하나", "[표 2] 둘", "[표 1] 다시 하나"]
-    assert [_text(pic.find(f"{hp}caption")) for pic in pics] == ["[그림 1] 하나", "[그림 2] 둘"]
+    assert [_text(pic.find(f"{HP}caption")) for pic in pics] == ["[그림 1] 하나", "[그림 2] 둘"]
     headings = [p for p in doc.paragraphs if p.text in ("첫 장", "둘째 장")]
     assert [_new_numbers(h) for h in headings] == [[], []]
 
@@ -1053,14 +1037,13 @@ def test_convert_restarts_numbers(tmp_path):
     convert(md, TEMPLATE, out)
 
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     # The count starts over within the chapter; the chapter number stays.
     assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1-1] 첫째", "[표 1-1] 둘째"]
     second = next(p for p in doc.paragraphs if p.element.get("pageBreak") == "1")
     assert _new_numbers(second) == ["EQUATION", "PAGE", "PICTURE", "TABLE"]
     # The restarts come before the table the paragraph holds, so it is numbered after them.
-    tags = [e.tag for e in second.element.iter(f"{hp}newNum", f"{hp}tbl")]
-    assert tags[-1] == f"{hp}tbl"
+    tags = [e.tag for e in second.element.iter(f"{HP}newNum", f"{HP}tbl")]
+    assert tags[-1] == f"{HP}tbl"
     # An unknown word leaves the line as text; a restart with nothing after it is dropped.
     assert doc.paragraphs[-1].text == "[새 번호 장]"
     assert _new_numbers(doc.paragraphs[-1]) == []
@@ -1116,10 +1099,8 @@ def test_convert_hides_the_page_number(tmp_path):
     out = tmp_path / "hide.hwpx"
 
     convert(md, TEMPLATE, out)
-
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
     paragraphs = HwpxDocument.open(out).paragraphs[1:]
-    hidden = {p.text: p.element.find(f".//{hp}pageHiding") for p in paragraphs if p.element.find(f".//{hp}pageHiding") is not None}
+    hidden = {p.text: p.element.find(f".//{HP}pageHiding") for p in paragraphs if p.element.find(f".//{HP}pageHiding") is not None}
     # The cover and the TOC (its title paragraph) hide theirs; a plain break and one at the end hide nothing.
     assert list(hidden) == ["표지", "차례"]
     # The cover is the first page as it is: no break before it, but it still hides its number.
@@ -1129,8 +1110,8 @@ def test_convert_hides_the_page_number(tmp_path):
     toc = paragraphs[1]
     assert _new_numbers(toc) == ["PAGE"]
     # Up front, before the TOC field the paragraph holds.
-    first = next(e for e in toc.element.iter() if e.tag in (f"{hp}pageHiding", f"{hp}fieldBegin"))
-    assert first.tag == f"{hp}pageHiding"
+    first = next(e for e in toc.element.iter() if e.tag in (f"{HP}pageHiding", f"{HP}fieldBegin"))
+    assert first.tag == f"{HP}pageHiding"
 
 
 def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
@@ -1239,10 +1220,9 @@ def test_convert_missing_image_is_a_placeholder(tmp_path):
         images = [hwpx.read(n) for n in hwpx.namelist() if n.startswith("BinData/")]
     assert images == [MISSING_IMAGE.read_bytes()]
     doc = HwpxDocument.open(out)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic"))
-    assert _text(pic.find(f"{hp}caption")) == "[그림 1] 없는 그림"
-    assert int(pic.find(f"{hp}curSz").get("width")) == BODY_WIDTH // 2
+    pic = next(e for p in doc.paragraphs for e in p.element.iter(f"{HP}pic"))
+    assert _text(pic.find(f"{HP}caption")) == "[그림 1] 없는 그림"
+    assert int(pic.find(f"{HP}curSz").get("width")) == BODY_WIDTH // 2
 
 
 def _image(width: int, height: int, image_format: str) -> bytes:
@@ -1273,9 +1253,8 @@ def test_convert_other_image_formats_become_png(tmp_path):
     assert len(images) == 4 and all(i.startswith(b"\x89PNG") for i in images)
     assert _png(40, 20) in images
     assert all(Image.open(io.BytesIO(i)).size == (40, 20) for i in images)
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pics = [e for p in HwpxDocument.open(out).paragraphs for e in p.element.iter(f"{hp}pic")]
-    assert [(int(p.find(f"{hp}curSz").get("width")), int(p.find(f"{hp}curSz").get("height"))) for p in pics] == [
+    pics = [e for p in HwpxDocument.open(out).paragraphs for e in p.element.iter(f"{HP}pic")]
+    assert [(int(p.find(f"{HP}curSz").get("width")), int(p.find(f"{HP}curSz").get("height"))) for p in pics] == [
         (40 * 75, 20 * 75)
     ] * 4  # 96 DPI
 
@@ -1336,11 +1315,10 @@ def test_convert_image_inside_text(tmp_path):
 
     doc = HwpxDocument.open(out)
     assert [p.text for p in doc.paragraphs[1:]] == ["앞 문장", "", "뒤 문장", ""]
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{hp}pic")]
+    pics = [e for p in doc.paragraphs for e in p.element.iter(f"{HP}pic")]
     assert len(pics) == 2
-    assert pics[0].find(f"{hp}caption") is None
-    assert _text(pics[1].find(f"{hp}caption")) == "[그림 1] 캡션"
+    assert pics[0].find(f"{HP}caption") is None
+    assert _text(pics[1].find(f"{HP}caption")) == "[그림 1] 캡션"
 
 
 def test_convert_emphasis_and_formatted_footnotes(tmp_path):
@@ -1361,15 +1339,14 @@ def test_convert_emphasis_and_formatted_footnotes(tmp_path):
 
     paragraph = doc.paragraphs[1]
     assert [marks(r) for r in paragraph.runs if r.text][:3] == [("a", {"bold", "italic"}), (" b", {"italic"}), (" 끝", set())]
-    hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
-    note = next(paragraph.element.iter(f"{hp}footNote"))
-    body = note.find(f".//{hp}p")
-    runs = [(r.find(f"{hp}t"), r.get("charPrIDRef")) for r in body.findall(f"{hp}run")]
+    note = next(paragraph.element.iter(f"{HP}footNote"))
+    body = note.find(f".//{HP}p")
+    runs = [(r.find(f"{HP}t"), r.get("charPrIDRef")) for r in body.findall(f"{HP}run")]
     texts = [("".join(t.itertext()), "bold" in doc.styles.char_property(c).child_attributes) for t, c in runs if t is not None]
     assert texts[0] == ("굵은", True)
     assert "둘째 문단" in "".join(note.itertext())
-    assert body.find(f".//{hp}lineBreak") is not None  # the second paragraph starts a new line
-    assert any(b.get("type") == "HYPERLINK" for b in note.iter(f"{hp}fieldBegin"))
+    assert body.find(f".//{HP}lineBreak") is not None  # the second paragraph starts a new line
+    assert any(b.get("type") == "HYPERLINK" for b in note.iter(f"{HP}fieldBegin"))
 
 
 def test_convert_pictures_in_list_items(tmp_path):

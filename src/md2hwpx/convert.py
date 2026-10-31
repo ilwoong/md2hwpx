@@ -50,6 +50,7 @@ _HP_P = f"{_HP}p"
 _ALIGN = {"text-align:left": "LEFT", "text-align:center": "CENTER", "text-align:right": "RIGHT"}
 # The template that comes with the package: used when no other is given.
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent / "template.hwpx"
+HEADING_STYLE = "개요 {}"  # .format(level)
 BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
@@ -115,6 +116,15 @@ class _Piece(NamedTuple):
     runs: list[Run] | None = None
     image: SyntaxTreeNode | None = None
     text: str = ""  # a blank page's wording, or the TOC or restart marker's words (see _MARKERS)
+
+
+class _Caption(NamedTuple):
+    """A numbered caption waiting for the table, code block or picture it goes on."""
+
+    runs: list[Run]  # "[표 2-1] " and the title
+    before: str  # the text before the number, "[표 2-"
+    number: int  # the object's count, which Hancom's own number (see _auto_number) starts from
+    num_type: str  # that number's numType (a NUMBERS value)
 
 
 @dataclass
@@ -310,11 +320,10 @@ class _Writer:
         self.notes = {
             note.meta["id"]: note for block in root.children if block.type == "footnote_block" for note in block.children
         }
-        self.caption: list[Run] | None = None  # for the next table, code block or picture
+        self.caption: _Caption | None = None  # for the next table, code block or picture
         # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
         self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "[새 번호 표]" / "[새 번호 그림]"
-        self.caption_number: tuple[str, int, str] | None = None  # the caption's (text before it, number, numType)
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
         self.toc_links = True  # entries are hyperlinks, unless the [TOC] marker says 링크없음
@@ -377,7 +386,7 @@ class _Writer:
             if run.note is not None and not footnotes:
                 continue
             last = merged[-1] if merged else None
-            if last and last.note is None and run.note is None and last[1:] == run[1:]:
+            if last and last.note is None and run.note is None and (last.marks, last.url) == (run.marks, run.url):
                 merged[-1] = last._replace(text=last.text + run.text)
             else:
                 merged.append(run)
@@ -462,13 +471,13 @@ class _Writer:
             # Hancom numbers every table and picture, captioned or not: keep this one out of the count.
             obj.element.set("numberingType", "NONE")
             return
-        style = self.caption_style
-        caption = obj.set_caption(_plain(self.caption), side=side, char_pr_id_ref=style.char_pr_id_ref)
-        for paragraph in caption.paragraphs:
+        style, caption = self.caption_style, self.caption
+        made = obj.set_caption(_plain(caption.runs), side=side, char_pr_id_ref=style.char_pr_id_ref)
+        for paragraph in made.paragraphs:
             paragraph.style_id_ref = style.id
             paragraph.para_pr_id_ref = style.para_pr_id_ref
-            self.write_runs(paragraph, self.caption, footnotes=False)
-        _auto_number(caption.paragraphs[0], *self.caption_number)
+            self.write_runs(paragraph, caption.runs, footnotes=False)
+        _auto_number(made.paragraphs[0], caption.before, caption.number, caption.num_type)
         self.caption = None
 
     def take_caption(self, runs: list[Run], following: str | None) -> bool:
@@ -493,9 +502,9 @@ class _Writer:
         The count becomes Hancom's own number (see _auto_number), which starts over where the count does.
         """
         self.numbers[kind] += 1
+        number = self.numbers[kind]
         before = f"[{kind} {self.chapter}-" if self.chapter and self.by_chapter else f"[{kind} "
-        self.caption_number = (before, self.numbers[kind], NUMBERS[kind])
-        self.caption = [Run(f"{before}{self.numbers[kind]}] "), *title]
+        self.caption = _Caption([Run(f"{before}{number}] "), *title], before, number, NUMBERS[kind])
 
     def restart(self, names: Iterable[str]) -> None:
         """Start the numbers *names* (keys of NUMBERS) over at 1 from the next paragraph."""
@@ -529,7 +538,7 @@ class _Writer:
         runs = _runs(node.children[0].children)
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
-            self.heading_styles[depth] = self.doc.styles.resolve(f"개요 {depth}")
+            self.heading_styles[depth] = self.doc.styles.resolve(HEADING_STYLE.format(depth))
         has_content = self.has_content()  # before the empty paragraph below adds to it
         if depth > 1:
             # An empty 본문 paragraph before a sub-heading: the template's 개요 styles carry no

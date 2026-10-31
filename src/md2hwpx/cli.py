@@ -16,6 +16,9 @@ from md2hwpx.convert import (
 )
 from md2hwpx.diagram import DiagramError, render_diagrams
 
+# What convert_input raises for an input it cannot convert. BadZipFile: a template that is not HWPX (a zip).
+CONVERSION_ERRORS = (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile)
+
 
 def _natural_key(path: Path) -> list:
     # "2.md" before "10.md": digit runs compare as numbers.
@@ -96,8 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         output = _output_path(args.input, args.output)
         unusable = convert_input(args.input, template, output)
-    # BadZipFile: a template that is not HWPX (a zip).
-    except (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile) as error:
+    except CONVERSION_ERRORS as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
     for image in unusable:

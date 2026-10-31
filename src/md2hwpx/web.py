@@ -16,12 +16,10 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
-from hwpx.errors import HwpxError
 
 from md2hwpx import oauth
-from md2hwpx.cli import convert_input, image_warning, input_files
-from md2hwpx.convert import DEFAULT_TEMPLATE, ConversionError, image_paths
-from md2hwpx.diagram import DiagramError
+from md2hwpx.cli import CONVERSION_ERRORS, convert_input, image_warning, input_files
+from md2hwpx.convert import DEFAULT_TEMPLATE, image_paths
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 MAX_UPLOAD = 50 * 1024 * 1024  # bytes: all uploads of a request, and a zip's extracted files
@@ -223,7 +221,7 @@ def convert(
         output = work / "output.hwpx"
         try:
             unusable = convert_input(input_path, template_path, output)
-        except (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile) as error:
+        except CONVERSION_ERRORS as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None
         data = output.read_bytes()
