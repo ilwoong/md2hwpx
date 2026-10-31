@@ -12,7 +12,9 @@ from hwpx.layout import lint_layout
 from PIL import Image
 
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
-from md2hwpx.convert import MISSING_IMAGE, ConversionError, caption_numbering, convert, unusable_images
+from md2hwpx.convert import (
+    MISSING_IMAGE, ConversionError, caption_numbering, convert, paragraph_styles, unknown_styles, unusable_images,
+)
 
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"  # Hancom paragraph XML
 HH = "{http://www.hancom.co.kr/hwpml/2011/head}"  # Hancom header XML
@@ -1022,6 +1024,52 @@ def test_caption_numbering_from_front_matter(tmp_path):
     # Files that disagree: a document has one way, so neither is chosen.
     with pytest.raises(ConversionError, match=r"chapter\.md 는 'chapter', .*document\.md 는 'document'"):
         caption_numbering([chapter, plain, document])
+
+
+def _style_names(doc) -> dict[str, str]:
+    """Each non-empty paragraph's text -> the name of its style."""
+    styles = {st.id: st.name for st in doc.styles.values()}
+    return {p.text: styles[int(p.style_id_ref)] for p in doc.paragraphs if p.text}
+
+
+def test_convert_custom_style_div(tmp_path):
+    md = tmp_path / "styled.md"
+    md.write_text(
+        "앞\n\n"
+        '::: {custom-style="요약문-본문"}\n가\n\n나\n\n> 인용\n\n## 절\n\n- 항목\n:::\n\n'
+        '::::: {custom-style="요약문-본문"}\n바깥\n\n::: {custom-style="표준"}\n안\n:::\n\n다시 바깥\n:::::\n\n'
+        '::: {custom-style="없는 스타일"}\n없음\n:::\n\n'
+        "::: note\n그냥 글\n:::\n\n뒤\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "styled.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    # Its text paragraphs (in a quote too) take the style; a heading or a list item keeps its own.
+    # Inside another div the inner one wins; a style the template lacks leaves them 본문, and any other
+    # ":::" block is text as it was.
+    assert _style_names(doc) == {
+        "앞": "본문", "가": "요약문-본문", "나": "요약문-본문", "인용": "요약문-본문", "절": "개요 2", "항목": "본문",
+        "바깥": "요약문-본문", "안": "표준", "다시 바깥": "요약문-본문", "없음": "본문",
+        "::: note 그냥 글 :::": "본문", "뒤": "본문",
+    }
+    # The style's paragraph shape comes along, as for 본문.
+    style = doc.styles.resolve("요약문-본문")
+    assert next(p for p in doc.paragraphs if p.text == "가").para_pr_id_ref == str(style.para_pr_id_ref)
+
+
+def test_unknown_styles(tmp_path):
+    markdown = (
+        "---\nk: v\n---\n"
+        '::: {custom-style="본문"}\n가\n:::\n\n'
+        '::: {custom-style="없는 스타일"}\n나\n:::\n\n'
+        '```\n::: {custom-style="코드 안"}\n```\n'
+    )
+    # Line numbers count the front matter; a div in a code block is not one.
+    assert unknown_styles(markdown, {"본문"}) == [(8, "없는 스타일")]
+    assert "요약문-본문" in paragraph_styles(TEMPLATE) and "본문" in paragraph_styles(TEMPLATE)
 
 
 def test_convert_restarts_numbers(tmp_path):

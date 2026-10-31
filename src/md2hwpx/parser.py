@@ -4,12 +4,15 @@ import re
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline
+from mdit_py_plugins.container import container_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 
 # "{width=50% height="30mm"}": attributes right after an image, as pandoc writes them.
 _ATTRIBUTES = re.compile(r"\{([^{}\n]*)\}")
 _ATTRIBUTE = re.compile(r'([A-Za-z][\w-]*)=(?:"([^"]*)"|([^\s"]+))')
 _IMAGE_ATTRIBUTES = ("width", "height")
+# pandoc's fenced div that names a paragraph style: "::: {custom-style="이름"}" ... ":::".
+_CUSTOM_STYLE = re.compile(r'\{\s*custom-style="([^"]*)"\s*\}')
 
 
 def _image_attributes(state: StateInline, silent: bool) -> bool:
@@ -27,6 +30,18 @@ def _image_attributes(state: StateInline, silent: bool) -> bool:
     return True
 
 
-# CommonMark with GFM tables and strikethrough, footnotes, and image attributes. Raw HTML stays text.
-PARSER = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"]).use(footnote_plugin)
+def custom_style(info: str) -> str | None:
+    """The style a custom-style div's opening line (its "info") names, or None if it names none."""
+    match = _CUSTOM_STYLE.fullmatch(info.strip())
+    return match[1] if match else None
+
+
+# CommonMark with GFM tables and strikethrough, footnotes, image attributes and custom-style divs
+# ("container_div" nodes; any other ":::" block stays text). Raw HTML stays text.
+PARSER = (
+    MarkdownIt("commonmark", {"html": False})
+    .enable(["table", "strikethrough"])
+    .use(footnote_plugin)
+    .use(container_plugin, "div", validate=lambda params, *_: custom_style(params) is not None)
+)
 PARSER.inline.ruler.push("image_attributes", _image_attributes)

@@ -176,6 +176,21 @@ def test_cli_warns_about_missing_images_with_location(tmp_path, monkeypatch, cap
     assert len(HwpxDocument.open(tmp_path / "book.hwpx").media.picture_references()) == 2
 
 
+def test_cli_warns_about_unknown_styles(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text('![](gone.png)\n\n::: {custom-style="없는 스타일"}\n글\n:::\n', encoding="utf-8")
+
+    assert main([str(md), "-t", str(TEMPLATE)]) == 0
+
+    # In line order with the image warnings; the HWPX is made, the paragraph in 본문.
+    assert capsys.readouterr().err.splitlines() == [
+        f"md2hwpx: 경고: {md}:1: 이미지 파일이 없어 대체 이미지를 넣었습니다: {tmp_path / 'gone.png'}",
+        f"md2hwpx: 경고: {md}:3: 템플릿에 '없는 스타일' 문단 스타일이 없어 본문 스타일로 넣었습니다",
+    ]
+    assert (tmp_path / "doc.hwpx").is_file()
+
+
 def test_cli_warns_about_inline_and_reference_images(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     md = tmp_path / "doc.md"

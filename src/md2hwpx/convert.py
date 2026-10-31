@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -19,7 +19,7 @@ from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
-from md2hwpx.parser import PARSER
+from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
@@ -284,6 +284,11 @@ def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
     return pieces
 
 
+def _paragraph_styles(doc: HwpxDocument) -> dict[str, Style]:
+    """The document's paragraph styles by name: what a custom-style div can name."""
+    return {style.name: style for style in doc.styles.values() if style.type == "PARA"}
+
+
 class _Writer:
     """Writes the block tree of a Markdown document into an HWPX document."""
 
@@ -297,6 +302,8 @@ class _Writer:
         self.plain_style = doc.styles.resolve(PLAIN_STYLE)
         self.caption_style = doc.styles.resolve(CAPTION_STYLE)
         self.heading_styles: dict[int, Style] = {}
+        self.paragraph_styles = _paragraph_styles(doc)
+        self.text_style = self.body_style  # of text paragraphs: 본문, or the custom-style div's they are in
         # add_table / add_picture take only the style id from style=, so pass its paragraph shape too.
         self.body = {"style": self.body_style, "para_pr_id_ref": self.body_style.para_pr_id_ref}
         # A picture is laid out as a character in its paragraph, so it takes the plain 바탕글 style:
@@ -450,7 +457,7 @@ class _Writer:
             run.char_pr_id_ref = paragraph.char_pr_id_ref
 
     def text_paragraph(self, runs: list[Run], quote: int, indent: int):
-        paragraph = self.doc.add_paragraph(_plain(runs), style=self.body_style)
+        paragraph = self.doc.add_paragraph(_plain(runs), style=self.text_style)
         self.write_runs(paragraph, runs)
         self.place(paragraph, quote, indent)
         return paragraph
@@ -580,6 +587,13 @@ class _Writer:
                 self.list_items(node, quote, indent, level + 1, numbering)
             elif node.type == "blockquote":
                 self.blocks(node.children, quote + 1, indent, level)
+            elif node.type == "container_div":
+                # Its text paragraphs take the style it names; one the template lacks leaves them 본문
+                # (the caller warns about it, see unknown_styles). Inside another div, this one's style wins.
+                outer = self.text_style
+                self.text_style = self.paragraph_styles.get(custom_style(node.info), self.body_style)
+                self.blocks(node.children, quote, indent, level, numbering)
+                self.text_style = outer
 
     def pieces(self, pieces: list[_Piece], following: str | None, quote: int, indent: int) -> None:
         """A paragraph's pieces become text paragraphs, pictures, captions, the TOC position and page breaks.
@@ -889,10 +903,14 @@ def _walk(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
         yield from _walk(child)
 
 
+def _blank_front_matter(markdown: str) -> str:
+    """*markdown* with its front matter as blank lines, so line numbers still count it."""
+    return _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
+
+
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
     """(line number, path) of each image outside code blocks, its path taken from *base_dir*."""
-    # Front matter becomes blank lines, so line numbers still count it.
-    markdown = _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
+    markdown = _blank_front_matter(markdown)
     lines = markdown.splitlines()
     images: list[tuple[int, Path]] = []
     for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
@@ -918,6 +936,21 @@ def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]
         except ImageError as error:
             unusable.append((number, path, str(error)))
     return unusable
+
+
+def paragraph_styles(template_path: Path) -> set[str]:
+    """The names of the template's paragraph styles, which a custom-style div can name."""
+    return set(_paragraph_styles(HwpxDocument.open(template_path)))
+
+
+def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str]]:
+    """(line number, name) of each custom-style div that names a paragraph style not in *styles*
+    (see paragraph_styles): the conversion leaves its paragraphs 본문."""
+    return [
+        (token.map[0] + 1, name)
+        for token in PARSER.parse(_blank_front_matter(markdown))
+        if token.type == "container_div_open" and (name := custom_style(token.info)) not in styles
+    ]
 
 
 def read_markdown(md_path: Path) -> str:
