@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +11,6 @@ from urllib.parse import unquote
 from hwpx import HwpxDocument
 from hwpx.oxml import Style
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
-from hwpx.tools.toc_author import add_native_toc, outline_heading_paragraphs
 from markdown_it.tree import SyntaxTreeNode
 from pygments.lexers import TextLexer, get_lexer_by_name
 from pygments.styles import get_style_by_name
@@ -21,11 +19,11 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    Piece, Run, TocRequest, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text,
-    strip_runs, toc_request,
+    Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
+from md2hwpx.toc import TocRequest, add_toc, toc_entries, toc_request
 
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 _HP_P = f"{_HP}p"
@@ -46,17 +44,6 @@ QUOTE_INDENT = 1000  # HWPUNIT added to the left margin per quote depth
 QUOTE_BAR = {"border_color": "#A6A6A6", "border_width": "0.7 mm"}  # left bar of a quote
 QUOTE_BAR_GAP = 850  # HWPUNIT between the quote bar and the text
 RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic break
-TOC_HEADING = "차례"  # the title of a TOC of all lists in one field (a plain [TOC])
-TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
-# The TOC field's ContentsMake bits for the 표, 그림 and 수식 lists, as Hancom writes them with only that list
-# chosen. A plain [TOC] keeps python-hwpx's 31, all of them in one field.
-TOC_KINDS = {"표": 2, "그림": 4, "수식": 8}
-# The 제목 list's bits, as Hancom writes them: the list itself (1), and where it collects its entries from,
-# 개요 paragraphs (16, "개요 문단으로 모으기") and the styles named in ContentsStyles (32, "스타일로 모으기"):
-# 17 with only 개요 paragraphs.
-TOC_TITLE_LIST, TOC_BY_OUTLINE, TOC_BY_STYLE = 1, 16, 32
-_TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
-_TOC_NO_STYLES = "ContentsStyles:wstring:0:"  # as python-hwpx writes the TOC command: no styles
 # Hancom's running numbers (hp:newNum / hp:autoNum numType) a "[새 번호]" line can start over.
 NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
@@ -502,16 +489,6 @@ class _Writer:
         # A page break, restart or hiding asked for here goes on the TOC's title.
         self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
 
-    def toc_entries(self) -> list:
-        """The paragraphs the 제목 list collects, in document order: 개요 ones down to TOC_LEVEL (if it
-        collects them) and those of its styles. Hancom collects them again when it rebuilds the TOC."""
-        outline = (
-            {p.element.get("styleIDRef") for p, level, _ in outline_heading_paragraphs(self.doc) if level <= TOC_LEVEL}
-            if self.toc.outline else set()
-        )
-        styled = {str(self.paragraph_styles[name].id) for name in self.toc.styles if name in self.paragraph_styles}
-        return [p for p in self.doc.paragraphs if p.text.strip() and p.element.get("styleIDRef") in outline | styled]
-
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
         try:
@@ -717,31 +694,9 @@ class _Writer:
             if index < len(paragraphs):
                 start.apply(paragraphs[index])
 
-        headings = self.toc_entries()
+        headings = toc_entries(self.doc, self.toc, self.paragraph_styles)
         if self.toc_at is not None and headings:
-            # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
-            if not self.toc.kinds:
-                add_native_toc(
-                    self.doc, at_index=self.toc_at, title=TOC_HEADING, level=TOC_LEVEL, hyperlink=self.toc.links,
-                    headings=headings, dirty=True,
-                )
-            # A field per list: Hancom orders the lists within one field itself. Each goes in at the
-            # same place, so they are added last first.
-            for kind in reversed(self.toc.kinds):
-                made = add_native_toc(
-                    self.doc, at_index=self.toc_at, title=f"<{kind} 차례>", level=TOC_LEVEL,
-                    hyperlink=self.toc.links, headings=headings, dirty=True,
-                )
-                paragraphs = self.doc.paragraphs[self.toc_at : self.toc_at + 1 + made["entryCount"]]
-                if kind == "제목":
-                    make = TOC_TITLE_LIST | (TOC_BY_OUTLINE if self.toc.outline else 0)
-                    make |= TOC_BY_STYLE if self.toc.styles else 0
-                    _set_toc_command(paragraphs[0], made["tocFieldId"], make, self.toc.styles)
-                else:
-                    _set_toc_command(paragraphs[0], made["tocFieldId"], TOC_KINDS[kind])
-                    # Its entries are the headings: drop them, Hancom lists the captions when it rebuilds.
-                    for entry in paragraphs[1:]:
-                        entry.element.getparent().remove(entry.element)
+            add_toc(self.doc, self.toc_at, self.toc, headings)
             self.toc_start.apply(self.doc.paragraphs[self.toc_at])
 
 
@@ -777,19 +732,6 @@ def _auto_number(paragraph, before: str, number: int, num_type: str) -> None:
     after.text = rest
     text.addnext(ctrl)
     ctrl.addnext(after)
-
-
-def _set_toc_command(paragraph, field_id: str, make: int, styles: Iterable[str] = ()) -> None:
-    """Set the ContentsMake bits (the lists it makes, and where from) and the ContentsStyles (the styles
-    "스타일로 모으기" collects) of TOC field *field_id*, which opens in *paragraph*."""
-    begin = next(b for b in paragraph.element.iter(f"{_HP}fieldBegin") if b.get("id") == field_id)
-    command = next(p for p in begin.iter(f"{_HP}stringParam") if p.get("name") == "Command")
-    params = _TOC_MAKE.sub(f"ContentsMake:uint:{make}", command.text.split(":", 3)[3])
-    # As Hancom writes them: each name ends in ";", after the count of characters.
-    style_list = "".join(f"{name};" for name in styles)
-    params = params.replace(_TOC_NO_STYLES, f"ContentsStyles:wstring:{len(style_list)}:{style_list}", 1)
-    # "TableOfContents:set:N:...": Hancom writes N as the length of what follows less one.
-    command.text = f"TableOfContents:set:{len(params) - 1}:{params}"
 
 
 def paragraph_styles(template_path: Path) -> set[str]:

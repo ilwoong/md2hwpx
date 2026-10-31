@@ -12,7 +12,8 @@ from markdown_it.tree import SyntaxTreeNode
 
 from md2hwpx.images import ImageError, picture_data
 from md2hwpx.parser import PARSER, custom_style
-from md2hwpx.pieces import marker_lines, toc_request
+from md2hwpx.pieces import marker_lines
+from md2hwpx.toc import toc_request
 
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
