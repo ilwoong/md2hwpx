@@ -227,6 +227,46 @@ def test_git_clone(tmp_path, monkeypatch):
     assert "protocol.allow=never" in command and "core.symlinks=false" in command
 
 
+def test_git_commit(tmp_path, monkeypatch):
+    # clone --branch takes no commit: the commit is fetched alone into a new repository and checked out.
+    commit = "661269C46C5859FD1A3B2476C6D792B0988975E3"
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if "checkout" in command:
+            root = Path(command[command.index("-C") + 1])
+            (root / "guide.md").write_text("# 안내\n", encoding="utf-8")
+        return web.subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    response = client.post("/convert", data={"source": "git", "repo": "https://example.com/manual.git", "ref": commit})
+
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["안내"]
+    init, fetch, checkout = commands
+    assert init[-3:-1] == ["init", "--quiet"]
+    assert fetch[fetch.index("fetch"):] == ["fetch", "--depth", "1", "--quiet", "--", "https://example.com/manual.git", commit.lower()]
+    assert checkout[-3:] == ["checkout", "--quiet", "FETCH_HEAD"]
+    assert all("protocol.allow=never" in c and "core.symlinks=false" in c for c in commands)
+
+
+@pytest.mark.parametrize("ref, hint", [("661269c", True), ("20261031", True), ("main", False)])
+def test_git_short_commit_asks_for_the_full_hash(monkeypatch, ref, hint):
+    # A server does not fetch an abbreviated hash; a tag named like one ("20261031") is still tried as a tag.
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return web.subprocess.CompletedProcess(command, 128, "", f"fatal: Remote branch {ref} not found")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    response = client.post("/convert", data={"source": "git", "repo": "https://example.com/manual.git", "ref": ref})
+
+    assert commands[0][commands[0].index("--branch") + 1] == ref
+    assert _error(response).startswith(f"git 저장소를 받지 못했습니다: fatal: Remote branch {ref} not found")
+    assert _error(response).endswith("\n커밋은 전체 해시(40자)로 지정하세요.") == hint
+
+
 def test_symlinks_are_removed(tmp_path):
     (tmp_path / "doc.md").write_text("x", encoding="utf-8")
     os.symlink("/etc/hostname", tmp_path / "link.png")

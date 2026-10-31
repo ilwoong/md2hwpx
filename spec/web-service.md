@@ -46,7 +46,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `files` | `source=files`: md 와 이미지 파일들 (여러 개). 파일 이름만 쓰고 폴더는 버린다 |
 | `archive` | `source=zip`: zip 파일 |
 | `repo` | `source=git`: `http://` 또는 `https://` 저장소 주소 (폐쇄망의 http 저장소 포함) |
-| `ref` | `source=git`: 브랜치 또는 태그 (선택, 비우면 기본 브랜치) |
+| `ref` | `source=git`: 브랜치, 태그 또는 커밋의 전체 해시 40자 (선택, 비우면 기본 브랜치) |
 | `path` | `zip`·`git`: 변환할 md 파일 또는 폴더의 상대 경로 (선택) |
 | `template` | 템플릿 HWPX (선택, 비우면 내장 템플릿 `src/md2hwpx/template.hwpx`) |
 
@@ -71,7 +71,11 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - `zip`: root 에 압축을 푼다.
   - UTF-8 플래그가 없는 항목 이름은 cp949 로 읽는다 (한국어 Windows 의 zip). cp949 로 읽을 수 없으면 zipfile 기본(cp437)대로 둔다.
   - 암호가 걸렸거나 zip 이 아니면 오류.
-- `git`: `git clone --depth 1 [--branch <ref>]` 로 root 에 받고 `.git` 을 지운다. 제한 시간 120 초.
+- `git`: `git clone --depth 1 [--branch <ref>]` 로 root 에 받고 `.git` 을 지운다. 제한 시간 120 초 (git 명령마다).
+  - `ref` 가 16진수 40자면 커밋이다. `clone --branch` 는 커밋을 받지 못하므로 `git init` → `git fetch --depth 1 -- <repo> <해시>`
+    → `git checkout FETCH_HEAD` 로 그 커밋 하나만 받는다. 서버는 짧은 해시로 받기를 허용하지 않으므로 커밋은 전체 해시로 지정한다.
+  - 받기에 실패했고 `ref` 가 짧은 해시 모양(16진수 4~39자)이면 오류 끝에 `커밋은 전체 해시(40자)로 지정하세요.` 를 붙인다.
+    그 모양을 미리 거부하지 않는 것은 `20261031` 처럼 숫자로 된 태그·브랜치도 있기 때문이다.
   `GIT_TERMINAL_PROMPT=0` 이라 인증이 필요한 저장소는 기다리지 않고 실패한다.
   로그인한 서버의 저장소면 사용자 토큰으로 받는다 (아래 "GitLab·Gitea 로그인").
 
@@ -154,7 +158,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 |------|------|
 | 파일 입력 | md + 이미지 → 그림이 든 HWPX, 한글 파일 이름 헤더, 없는 이미지의 대체 이미지와 경고 헤더(올린 이름 기준), 없는 스타일의 경고 헤더, 경고 없으면 헤더 없음, md 없음 |
 | zip 입력 | 폴더 하나를 압축한 zip 의 이름 순 합치기와 하위 폴더 이미지, `.md` 로 끝나는 폴더 제외, `path` 로 파일 고르기, cp949 이름, zip 아님 |
-| git 입력 | clone 명령의 `--branch`, `--`, 프로토콜·심볼릭 링크 설정 (테스트는 `subprocess.run` 을 대신함), `.git` 제거 |
+| git 입력 | clone 명령의 `--branch`, `--`, 프로토콜·심볼릭 링크 설정 (테스트는 `subprocess.run` 을 대신함), `.git` 제거, 커밋 해시의 init·fetch·checkout 명령, 짧은 해시 모양 ref 실패 시 전체 해시 안내 |
 | 보안 | root 밖 이미지 3가지, zip slip, root 밖 `path`, http(s) 아닌 주소 4가지, 옵션 모양의 `ref`, 심볼릭 링크 제거, 업로드 크기 제한 |
 | 로그인 | 설정한 서버만 목록에 나옴, 로그인 이동 주소(client_id·redirect_uri·scope·state), 쿠키 속성, `state` 없음·다름 거부, 사용자 거절, 토큰 요청 형식과 토큰 없는 응답, 로그아웃, 브라우저마다 세션 |
 | 로그인 clone | 토큰을 환경 변수 헤더로 넘기고 명령줄에 없음, 다른 서버·이름이 이어지는 주소·사용자명 속임·다른 scheme 에는 안 보냄, 로그인 안 했으면 안내, 만료 토큰 안 씀. 가짜 GitLab(OAuth + 토큰을 요구하는 smart HTTP git)과 uvicorn 으로 로그인부터 변환까지 |

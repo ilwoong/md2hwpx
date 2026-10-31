@@ -111,7 +111,7 @@ docker compose up -d --build    # http://localhost:8000
 ./build-images.sh && docker compose up -d
 ```
 
-- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `http://`·`https://` git 저장소 주소(브랜치·태그 선택, 폐쇄망 http 저장소 포함).
+- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `http://`·`https://` git 저장소 주소(브랜치·태그·커밋 선택, 폐쇄망 http 저장소 포함).
   zip·git 은 변환할 md 파일이나 폴더의 경로를 지정할 수 있습니다.
 - 템플릿 HWPX 를 함께 올리면 그 템플릿으로 변환합니다.
 - 폐쇄망 GitLab·Gitea 의 비공개 저장소는 페이지에서 그 서버에 로그인(OAuth2)해 받습니다.
