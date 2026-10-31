@@ -26,13 +26,16 @@ _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\
 # "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
 # written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
 _CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
-# Lines of their own in a paragraph: table of contents marker, and page break as pandoc writes it.
+# Lines of their own in a paragraph: table of contents, page break as pandoc writes it, number restart,
+# page hiding and blank page markers.
 _MARKERS = {
     # "[TOC]", or "[TOC 그림 표 제목]": the lists to make, in that order. "링크없음" leaves out the links.
     "toc": re.compile(r"\[TOC((?:[ \t]+(?:제목|표|그림|수식|링크없음))*)[ \t]*\]", re.IGNORECASE),
-    # "\newpage", or "\newpage 쪽 표 그림 수식": those numbers start over on the new page.
-    # "쪽숨김" hides the new page's page number, header and footer.
-    "page_break": re.compile(r"\\(?:newpage|pagebreak)((?:[ \t]+(?:쪽숨김|쪽|표|그림|수식))*)[ \t]*"),
+    "page_break": re.compile(r"\\(?:newpage|pagebreak)[ \t]*"),
+    # "[새 번호 쪽 표 그림 수식]": those numbers start over at 1 from the next paragraph (Hancom's 새 번호로 시작).
+    "restart": re.compile(r"\[새 번호((?:[ \t]+(?:쪽|표|그림|수식))+)[ \t]*\]"),
+    # "[감추기]": the next paragraph's page shows no page number, header or footer (Hancom's 감추기).
+    "hide_page": re.compile(r"\[감추기\]"),
     # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
     "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
 }
@@ -62,9 +65,8 @@ TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
 TOC_KINDS = {"제목": 17, "표": 2, "그림": 4, "수식": 8}
 TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
 _TOC_MAKE = re.compile(r"ContentsMake:uint:\d+")
-# Hancom's running numbers (hp:newNum / hp:autoNum numType) a "\newpage" line can start over.
+# Hancom's running numbers (hp:newNum / hp:autoNum numType) a "[새 번호]" line can start over.
 NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
-HIDE_PAGE = "쪽숨김"  # on a "\newpage" line: that page shows no page number, header or footer
 CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
 # A picture is laid out as a character in its paragraph, so it follows that paragraph's alignment: one
 # narrower than the body is centred rather than left at the margin.
@@ -103,12 +105,12 @@ class Run(NamedTuple):
 
 
 class _Piece(NamedTuple):
-    """Part of a paragraph: text "runs", an "image", or a "toc" / "page_break" / "blank_page" marker line."""
+    """Part of a paragraph: text "runs", an "image", or a marker line (a key of _MARKERS)."""
 
     kind: str
     runs: list[Run] | None = None
     image: SyntaxTreeNode | None = None
-    text: str = ""  # a blank page's wording, or the TOC or page break marker's words (see _MARKERS)
+    text: str = ""  # a blank page's wording, or the TOC or restart marker's words (see _MARKERS)
 
 
 @dataclass
@@ -252,7 +254,7 @@ def _pieces(inline: SyntaxTreeNode) -> list[_Piece]:
         if found:
             flush()
             marker, match = found
-            # The blank page marker carries a wording, the TOC and page break markers their words, in their one group.
+            # The blank page marker carries a wording, the TOC and restart markers their words, in their one group.
             pieces.append(_Piece(marker, text=match.group(1).strip() if match.groups() else ""))
             continue
         if runs:
@@ -305,7 +307,7 @@ class _Writer:
         self.caption: list[Run] | None = None  # for the next table, code block or picture
         # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
-        self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "\newpage 표" / "\newpage 그림"
+        self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "[새 번호 표]" / "[새 번호 그림]"
         self.caption_number: tuple[str, int, str] | None = None  # the caption's (text before it, number, numType)
         self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
         self.toc_kinds: list[str] = []  # the lists the [TOC] marker names, in order (none: all in one field)
@@ -581,12 +583,11 @@ class _Writer:
                     # A page break, restart or hiding asked for here goes on the TOC's title.
                     self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
             elif piece.kind == "page_break":
-                # At the very start it only carries its restarts and hiding: the first page is new already.
                 self.new_page()
-                words = piece.text.split()
-                self.restart(w for w in words if w != HIDE_PAGE)
-                if HIDE_PAGE in words:
-                    self.page_start().hide = True
+            elif piece.kind == "restart":
+                self.restart(piece.text.split())
+            elif piece.kind == "hide_page":
+                self.page_start().hide = True
             elif piece.kind == "blank_page":
                 self.blank_page(piece.text)
             elif piece.kind == "image":

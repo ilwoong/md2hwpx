@@ -1040,12 +1040,12 @@ def test_convert_caption_numbers_are_hancoms_own(tmp_path):
     assert _new_numbers(doc.paragraphs[1]) == ["PICTURE", "TABLE"]
 
 
-def test_convert_page_break_restarts_numbers(tmp_path):
+def test_convert_restarts_numbers(tmp_path):
     md = tmp_path / "restart.md"
     md.write_text(
         "# 장\n\n[표] 첫째\n\n| a |\n|---|\n| 1 |\n\n"
-        "\\newpage 쪽 표 그림 수식\n[표] 둘째\n\n| b |\n|---|\n| 2 |\n\n"
-        "\\newpage 장\n\n\\newpage 쪽\n",
+        "\\newpage\n[새 번호 쪽 표 그림 수식]\n[표] 둘째\n\n| b |\n|---|\n| 2 |\n\n"
+        "[새 번호 장]\n\n[새 번호 쪽]\n",
         encoding="utf-8",
     )
     out = tmp_path / "restart.hwpx"
@@ -1062,13 +1062,39 @@ def test_convert_page_break_restarts_numbers(tmp_path):
     tags = [e.tag for e in second.element.iter(f"{hp}newNum", f"{hp}tbl")]
     assert tags[-1] == f"{hp}tbl"
     # An unknown word leaves the line as text; a restart with nothing after it is dropped.
-    assert doc.paragraphs[-1].text == "\\newpage 장"
+    assert doc.paragraphs[-1].text == "[새 번호 장]"
     assert _new_numbers(doc.paragraphs[-1]) == []
 
 
-def test_convert_page_break_before_toc_restarts_numbers_at_the_toc(tmp_path):
+def test_convert_restarts_numbers_without_a_page_break(tmp_path):
+    md = tmp_path / "restart.md"
+    md.write_text("앞\n\n[새 번호 쪽]\n\n뒤\n", encoding="utf-8")
+    out = tmp_path / "restart.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    paragraphs = HwpxDocument.open(out).paragraphs[1:]
+    assert [p.text for p in paragraphs] == ["앞", "뒤"]
+    assert _new_numbers(paragraphs[1]) == ["PAGE"]
+    assert paragraphs[1].element.get("pageBreak") != "1"
+
+
+def test_convert_page_break_takes_no_words(tmp_path):
+    md = tmp_path / "words.md"
+    md.write_text("앞\n\n\\newpage 쪽숨김 쪽\n", encoding="utf-8")
+    out = tmp_path / "words.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    # The words that went after "\newpage" are "[새 번호]" and "[감추기]" now: the line stays text.
+    last = HwpxDocument.open(out).paragraphs[-1]
+    assert last.text == "\\newpage 쪽숨김 쪽"
+    assert last.element.get("pageBreak") != "1" and _new_numbers(last) == []
+
+
+def test_convert_restart_before_toc_restarts_numbers_at_the_toc(tmp_path):
     md = tmp_path / "toc.md"
-    md.write_text("표지\n\n\\newpage 쪽\n[TOC]\n\n# 장\n", encoding="utf-8")
+    md.write_text("표지\n\n\\newpage\n[새 번호 쪽]\n[TOC]\n\n# 장\n", encoding="utf-8")
     out = tmp_path / "toc.hwpx"
 
     convert(md, TEMPLATE, out)
@@ -1080,10 +1106,11 @@ def test_convert_page_break_before_toc_restarts_numbers_at_the_toc(tmp_path):
     assert _new_numbers(heading) == ["PICTURE", "TABLE"]
 
 
-def test_convert_page_break_hides_the_page_number(tmp_path):
+def test_convert_hides_the_page_number(tmp_path):
     md = tmp_path / "hide.md"
     md.write_text(
-        "\\newpage 쪽숨김\n표지\n\n\\newpage 쪽숨김 쪽\n[TOC]\n\n# 장\n\n\\newpage\n\n본문\n\n\\newpage 쪽숨김\n",
+        "[감추기]\n표지\n\n\\newpage\n[감추기]\n[새 번호 쪽]\n[TOC]\n\n# 장\n\n\\newpage\n\n본문\n\n"
+        "\\newpage\n[감추기]\n",
         encoding="utf-8",
     )
     out = tmp_path / "hide.hwpx"
