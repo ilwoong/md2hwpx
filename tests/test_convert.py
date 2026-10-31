@@ -916,74 +916,25 @@ def test_convert_toc_with_unknown_list_stays_text(tmp_path):
     assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["장", "[TOC 목록]"]
 
 
-def test_convert_level_1_heading_starts_a_new_page(tmp_path):
+def test_convert_heading_page_breaks_come_from_the_template(tmp_path):
     md = tmp_path / "chapters.md"
-    md.write_text(
-        "# 첫 장\n\n본문\n\n## 절\n\n### 소절\n\n# 둘째 장\n\n본문\n\n# 셋째 장\n",
-        encoding="utf-8",
-    )
+    md.write_text("# 첫 장\n\n## 첫째 절\n\n## 둘째 절\n\n# 둘째 장\n\n# 셋째 장\n", encoding="utf-8")
     out = tmp_path / "chapters.hwpx"
 
     convert(md, TEMPLATE, out)
 
-    paragraphs = HwpxDocument.open(out).paragraphs[1:]
-    # Only the level 1 headings that are not the first thing in the document start a page.
-    assert [p.text for p in paragraphs if p.element.get("pageBreak") == "1"] == ["둘째 장", "셋째 장"]
-    assert paragraphs[0].text == "첫 장" and paragraphs[0].element.get("pageBreak") != "1"
-
-
-def test_convert_level_1_heading_after_toc_starts_a_new_page(tmp_path):
-    md = tmp_path / "toc.md"
-    md.write_text("[TOC]\n\n# 첫 장\n\n본문\n", encoding="utf-8")
-    out = tmp_path / "toc.hwpx"
-
-    convert(md, TEMPLATE, out)
-
-    paragraphs = HwpxDocument.open(out).paragraphs[1:]
-    # The TOC is the document's first page, so the first chapter opens the next one.
-    assert [p.text for p in paragraphs if p.element.get("pageBreak") == "1"] == ["첫 장"]
-
-
-def test_convert_level_2_heading_page_breaks(tmp_path):
-    md = tmp_path / "sections.md"
-    md.write_text(
-        "# 첫 장\n\n본문\n\n## 첫째 절\n\na\n\n## 둘째 절\n\nb\n\n### 소절\n\n# 둘째 장\n\n본문\n\n## 첫 절\n\nc\n\n## 둘째 절\n\nd\n",
-        encoding="utf-8",
-    )
-    out = tmp_path / "sections.hwpx"
-
-    convert(md, TEMPLATE, out)
-
     doc = HwpxDocument.open(out)
-    styles = {st.id: st.name for st in doc.styles.values()}
-    starts = [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"]
-    # The first level 2 heading of each chapter stays put; the ones after it open a page.
-    assert starts == ["둘째 절", "둘째 장", "둘째 절"]
-    assert [p.text for p in doc.paragraphs[1:] if styles[int(p.style_id_ref)] == "개요 2"] == [
-        "첫째 절", "둘째 절", "첫 절", "둘째 절"
-    ]
-
-
-def test_convert_level_2_heading_before_chapter_starts_a_new_page(tmp_path):
-    md = tmp_path / "preface.md"
-    md.write_text("서문\n\n## 앞 절 1\n\na\n\n## 앞 절 2\n\n# 첫 장\n\n## 장 절 1\n", encoding="utf-8")
-    out = tmp_path / "preface.hwpx"
-
-    convert(md, TEMPLATE, out)
-
-    starts = [p.text for p in HwpxDocument.open(out).paragraphs[1:] if p.element.get("pageBreak") == "1"]
-    # Not in a chapter, the first level 2 heading opens a page too; a chapter's first one stays put.
-    assert starts == ["앞 절 1", "앞 절 2", "첫 장"]
-
-
-def test_convert_level_2_heading_at_document_start_stays_on_first_page(tmp_path):
-    md = tmp_path / "start.md"
-    md.write_text("## 앞 절\n\na\n", encoding="utf-8")
-    out = tmp_path / "start.hwpx"
-
-    convert(md, TEMPLATE, out)
-
-    assert not [p for p in HwpxDocument.open(out).paragraphs if p.element.get("pageBreak") == "1"]
+    hh = "{http://www.hancom.co.kr/hwpml/2011/head}"
+    # The converter breaks no page at a heading itself ...
+    assert not [p for p in doc.paragraphs if p.element.get("pageBreak") == "1"]
+    # ... the bundled template's 개요 1 paragraph shape does ("문단 앞에서 항상 쪽 나눔"); 개요 2 does not.
+    # The first heading is on the first page already: its break is off, or that page would be left empty.
+    shapes = {p.get("id"): p for p in doc.parts.headers[0].element.iter(f"{hh}paraPr")}
+    breaks = {
+        p.text: shapes[p.element.get("paraPrIDRef")].find(f"{hh}breakSetting").get("pageBreakBefore")
+        for p in doc.paragraphs if p.text
+    }
+    assert breaks == {"첫 장": "0", "첫째 절": "0", "둘째 절": "0", "둘째 장": "1", "셋째 장": "1"}
 
 
 def test_convert_page_breaks(tmp_path):
