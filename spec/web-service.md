@@ -23,7 +23,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `src/md2hwpx/web.py` | FastAPI 앱 (`md2hwpx.web:app`) |
 | `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
-| `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다 |
+| `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs |
 | `.env.example` | 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
 의존성은 `pyproject.toml` 의 `web` 그룹(`fastapi`, `uvicorn`, `python-multipart`)이다.
@@ -64,6 +64,8 @@ docker run --rm -p 8000:8000 md2hwpx-web
 ## 입력 처리
 
 요청마다 임시 폴더를 만들고, 그 안의 `input/` 을 맨 위 폴더(root)로 삼는다. 응답 후 지운다.
+`compose.yaml` 은 `/tmp` 를 tmpfs 로 마운트해 임시 폴더가 메모리에만 있게 한다: 변환 중 프로세스가 강제로 끝나
+지우지 못한 폴더도 컨테이너가 다시 시작되면 남지 않는다.
 
 - `files`: 올린 파일을 root 에 나란히 저장한다. 이미지는 파일 이름으로 찾으므로 `![](a.png)` 처럼 써야 한다.
 - `zip`: root 에 압축을 푼다.
