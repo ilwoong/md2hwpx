@@ -27,6 +27,8 @@ MARKERS = {
     "hide_page": re.compile(r"\[감추기\]"),
     # "[여백면]" or "[여백면] 문구": a page kept as margin, with that text centred on it.
     "blank_page": re.compile(r"\[\s*여백면\s*\]\s*(.*)"),
+    # "[빈 줄]" or "[빈 줄 3]": that many empty paragraphs (one without a number), at most 10.
+    "blank_lines": re.compile(r"\[빈 줄((?:[ \t]+(?:10|\d))?)[ \t]*\]"),
 }
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
 TOC_NO_LINKS = "링크없음"  # in the [TOC] marker: entries are not hyperlinks to what they list
@@ -170,7 +172,8 @@ def _marker(line: list[SyntaxTreeNode]) -> tuple[str, str] | None:
     text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
     for name, pattern in MARKERS.items():
         if match := pattern.fullmatch(text):
-            # The blank page marker carries a wording, the TOC and restart markers their words, in their one group.
+            # The blank page marker carries a wording, the TOC and restart markers their words and the blank
+            # lines marker its count, in their one group.
             return name, match.group(1).strip() if match.groups() else ""
     return None
 

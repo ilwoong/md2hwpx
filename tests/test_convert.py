@@ -803,6 +803,30 @@ def test_convert_blank_page(tmp_path):
     assert starts == ["", "이어지는 본문", "", "끝"]
 
 
+def test_convert_blank_lines(tmp_path):
+    md = tmp_path / "lines.md"
+    md.write_text(
+        "가\n\n[빈 줄 3]\n\n나\n[빈 줄]\n다\n\n> 인용\n>\n> [빈 줄 2]\n\n[빈 줄 0]\n\n[빈 줄 셋]\n\n[빈 줄 11]\n\n"
+        "[빈 줄 10]\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "lines.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    paragraphs = doc.paragraphs[1:]
+    # [빈 줄 N] gives N empty paragraphs, [빈 줄] one, [빈 줄 0] none; any other word, or N over 10, stays text.
+    assert [p.text for p in paragraphs] == [
+        "가", "", "", "", "나", "", "다", "인용", "", "", "[빈 줄 셋]", "[빈 줄 11]", *[""] * 10
+    ]
+    body = doc.styles.resolve("본문")
+    assert all(int(p.style_id_ref) == body.id for p in paragraphs)
+    # In a quote they are placed like its paragraphs: indented, with the bar.
+    margin = [int(doc.styles.paragraph_property(p.para_pr_id_ref).margin.left) for p in paragraphs[7:10]]
+    assert margin[1:] == [margin[0]] * 2 and margin[0] > BODY_LEFT
+
+
 def test_convert_blank_page_first(tmp_path):
     md = tmp_path / "blank.md"
     md.write_text("[여백면] 첫 면\n\n본문\n", encoding="utf-8")

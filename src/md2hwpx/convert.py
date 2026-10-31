@@ -490,6 +490,9 @@ class _Writer:
                 self.page_start().hide = True
             elif piece.kind == "blank_page":
                 self.blank_page(piece.text)
+            elif piece.kind == "blank_lines":
+                for _ in range(int(piece.text or 1)):
+                    self.text_paragraph([], quote, indent)
             elif piece.kind == "image":
                 self.picture(piece.image, quote, indent)
             else:
