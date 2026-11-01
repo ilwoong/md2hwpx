@@ -180,3 +180,29 @@ def test_convert_hides_the_page_number(tmp_path):
     # Up front, before the TOC field the paragraph holds.
     first = next(e for e in toc.element.iter() if e.tag in (f"{HP}pageHiding", f"{HP}fieldBegin"))
     assert first.tag == f"{HP}pageHiding"
+
+
+def test_convert_markers_in_code_are_text(tmp_path):
+    markers = ["[TOC]", "\\newpage", "[새 번호 쪽 표]", "[감추기]", "[여백면] 문구", "[빈 줄 3]"]
+    lines = "\n".join(markers)
+    indented = "\n".join(f"    {m}" for m in markers)
+    inline = "\n\n".join(f"`{m}`" for m in markers)
+    md = tmp_path / "code.md"
+    md.write_text(f"본문\n\n```\n{lines}\n```\n\n{indented}\n\n{inline}\n", encoding="utf-8")
+    out = tmp_path / "code.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    # In a fenced or indented code block, or in inline code, a marker is only text: the code blocks hold
+    # it as written, and inline code is a paragraph of its own.
+    assert [t.cell(0, 0).text for t in doc.tables.all] == [lines, lines]
+    texts = [p.text for p in doc.paragraphs[1:]]
+    assert texts[-len(markers):] == markers
+    # Nothing a marker does: no TOC field, page break, number restart or page hiding, no extra paragraphs.
+    assert len(texts) == 1 + 2 + len(markers)  # 본문, a paragraph per code block, the inline code
+    element = doc.sections[0].element
+    assert not any(b.get("type") == "TABLEOFCONTENTS" for b in element.iter(f"{HP}fieldBegin"))
+    assert [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"] == []
+    assert next(element.iter(f"{HP}newNum"), None) is None
+    assert next(element.iter(f"{HP}pageHiding"), None) is None
