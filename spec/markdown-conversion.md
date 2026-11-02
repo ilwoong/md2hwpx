@@ -228,7 +228,7 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
   장이 바뀌면 표·그림 번호를 모두 1부터 다시 매긴다 (표와 그림은 따로 센다).
   첫 수준 1 헤딩 앞에 나오는 개체는 장이 없으므로 `[표 1]`, `[그림 1]` 처럼 장 번호 없이 매긴다.
   캡션이 없는 개체는 번호를 세지 않는다. 한/글은 캡션이 없는 표·그림도 세므로 그런 개체는
-  `numberingType="NONE"` 으로 둔다.
+  `numberingType="NONE"` 으로 둔다. 그래서 표·그림 차례에도 들어가지 않는다.
   - `M` 은 한/글 자동 번호(`hp:autoNum numType="TABLE"|"PICTURE"`, 형식 `DIGIT`)다. 한/글이 캡션에
     번호를 넣을 때와 같은 모양이고, `num` 에는 변환기가 센 값을 미리 넣는다. `[표 N-` 와 `]` 는 글자다.
   - 장마다 다시 매기는 것은 수준 1 헤딩 문단의 "새 번호로 시작"(`hp:newNum num="1"`, `TABLE`·`PICTURE`)이다.
