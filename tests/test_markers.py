@@ -36,6 +36,12 @@ def test_convert_blank_page(tmp_path):
     assert doc.tables.all[1].cell(0, 0).text == ""
     starts = [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"]
     assert starts == ["", "이어지는 본문", "", "끝"]
+    # A blank page hides its page number, but keeps its header and footer.
+    for table in doc.tables.all:
+        hiding = table.paragraph.element.find(f".//{HP}pageHiding")
+        assert (hiding.get("hideHeader"), hiding.get("hideFooter"), hiding.get("hidePageNum")) == ("0", "0", "1")
+    hidden = [p.text for p in doc.paragraphs[1:] if p.element.find(f".//{HP}pageHiding") is not None]
+    assert hidden == ["", ""]
 
 
 def test_convert_blank_lines(tmp_path):
