@@ -23,8 +23,8 @@ def test_convert_table_of_contents(tmp_path):
     texts = [p.text for p in doc.paragraphs[1:]]
     # The TOC field sits where the first marker was; the second marker adds nothing.
     assert texts[:6] == ["문서", "차례", "1. 문서\t1", "2. 소개\t1", "3. 사용법\t1", "4. 세부\t1"]
-    # level 4 is not listed in the TOC; level 1 headings get no empty paragraph before them.
-    assert texts[6:] == ["", "", "소개", "본문", "", "", "사용법", "", "세부", "", "4수준"]
+    # level 4 is not listed in the TOC; no heading gets an empty paragraph before it.
+    assert texts[6:] == ["", "소개", "본문", "", "사용법", "세부", "4수준"]
     begins = [b for p in doc.paragraphs for b in p.element.iter(f"{HP}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
     assert len(begins) == 1
     command = "".join(begins[0].itertext())
