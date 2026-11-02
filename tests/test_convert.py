@@ -28,7 +28,6 @@ def test_convert(tmp_path):
     assert texts == [
         ("제목", "개요 1"),
         ("첫 줄 둘째 줄", "본문"),
-        ("", "본문"),  # before the sub-heading, not before the level 1 one
         ("소제목", "개요 2"),
         ("", "바탕글"),  # picture: laid out as a character, so no 본문 first-line indent
         ("", "본문"),  # code block table anchor
@@ -204,8 +203,8 @@ def test_convert_keeps_dashes_that_are_not_front_matter(tmp_path):
     # Not removed as front matter: after a blank line "---" is a thematic break (an empty paragraph),
     # right under a line it underlines a level 2 heading (CommonMark setext heading).
     doc = HwpxDocument.open(tmp_path / "doc.hwpx")
-    assert [p.text for p in doc.paragraphs[1:]] == ["본문", "", "", "title: x"]
-    assert int(doc.paragraphs[4].style_id_ref) == doc.styles.resolve("개요 2").id
+    assert [p.text for p in doc.paragraphs[1:]] == ["본문", "", "title: x"]
+    assert int(doc.paragraphs[3].style_id_ref) == doc.styles.resolve("개요 2").id
     assert [p.text for p in HwpxDocument.open(tmp_path / "unclosed.hwpx").paragraphs[1:]] == ["", "title: x"]
 
 
@@ -458,7 +457,6 @@ def test_convert_commonmark_blocks(tmp_path):
     paragraphs = doc.paragraphs[1:]
     assert [(p.text, styles[int(p.style_id_ref)]) for p in paragraphs] == [
         ("제목 하나", "개요 1"),
-        ("", "본문"),  # before the level 2 setext heading
         ("제목 둘", "개요 2"),
         ("문단", "본문"),
         ("", "본문"),  # thematic break after a blank line
@@ -467,7 +465,7 @@ def test_convert_commonmark_blocks(tmp_path):
         ("", "바탕글"),  # the referenced picture
     ]
     assert doc.tables.all[0].cell(0, 0).text == "들여쓴 코드"
-    assert [link["url"] for link in paragraphs[6].hyperlinks] == ["https://example.com"]
+    assert [link["url"] for link in paragraphs[5].hyperlinks] == ["https://example.com"]
     assert len(doc.media.picture_references()) == 1
 
 
@@ -513,13 +511,11 @@ def test_convert_lists_after_headings(tmp_path):
         return int(doc.styles.paragraph_property(style.para_pr_id_ref).margin.left)
 
     # A heading keeps its 개요 style's own indent; its level is not a list level: the lists still start at level 1.
-    # The empty 본문 paragraph goes before a sub-heading only, so the leading "## 절" gets none.
+    # No empty paragraph goes before a heading: the gap above is the 개요 style's to give.
     assert [_paragraph_info(doc, p) for p in doc.paragraphs[1:]] == [
-        ("", "NONE", BODY_LEFT),  # before the level 2 heading
         ("절", "OUTLINE", heading_left(2)),
         ("하나", "BULLET", BODY_LEFT),
         ("둘", "BULLET", BODY_LEFT + 1000),
-        ("", "NONE", BODY_LEFT),  # before the level 3 heading
         ("소절", "OUTLINE", heading_left(3)),
         ("번호", "NUMBER", BODY_LEFT),
     ]

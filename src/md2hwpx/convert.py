@@ -406,11 +406,7 @@ class _Writer:
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
             self.heading_styles[depth] = self.doc.styles.resolve(HEADING_STYLE.format(depth))
-        has_content = self.has_content()  # before the empty paragraph below adds to it
-        if depth > 1:
-            # An empty 본문 paragraph before a sub-heading: the template's 개요 styles carry no
-            # space above, so the gap from what came before is that paragraph's own line.
-            self.doc.add_paragraph(style=self.body_style)
+        has_content = self.has_content()  # before the heading adds to it
         if depth == 1:
             self.chapter += 1
             if self.by_chapter:
