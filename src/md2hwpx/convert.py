@@ -193,10 +193,10 @@ class _Writer:
         # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
         self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "[새 번호 표]" / "[새 번호 그림]"
-        self.toc_at: int | None = None  # paragraph index of the first [TOC] marker
-        self.toc = TocRequest(kinds=[], styles=[], outline=True, links=True)  # what the [TOC] marker asks for
+        # Each [TOC] marker: its paragraph index, what it asks for, and what its position asked for (a page
+        # break, restart or hiding), done by the TOC's title.
+        self.tocs: list[tuple[int, TocRequest, _PageStart]] = []
         self.page_starts: dict[int, _PageStart] = {}  # paragraph index -> what it does about its page
-        self.toc_start = _PageStart()  # what the [TOC] marker's position asked for, done by the TOC's title
         # Paragraphs already there when the conversion starts (see has_content).
         self._first_content = self.paragraph_count()
 
@@ -230,8 +230,8 @@ class _Writer:
         return self._paragraphs_before + len(self._section.element.findall(_HP_P))
 
     def has_content(self) -> bool:
-        """Whether anything is written yet. The [TOC] marker counts, though its paragraphs go in only in finish()."""
-        return self.paragraph_count() > self._first_content or self.toc_at is not None
+        """Whether anything is written yet. A [TOC] marker counts, though its paragraphs go in only in finish()."""
+        return self.paragraph_count() > self._first_content or bool(self.tocs)
 
     def page_start(self) -> _PageStart:
         """What the next paragraph does about its page."""
@@ -458,8 +458,7 @@ class _Writer:
         """
         for k, piece in enumerate(pieces):
             if piece.kind == "toc":
-                if self.toc_at is None:
-                    self.toc_marker(piece.text)
+                self.toc_marker(piece.text)
             elif piece.kind == "page_break":
                 self.new_page()
             elif piece.kind == "restart":
@@ -480,11 +479,10 @@ class _Writer:
                     self.text_paragraph(piece.runs, quote, indent)
 
     def toc_marker(self, words: str) -> None:
-        """Keep the TOC's place, at the first [TOC] marker, and what its *words* ask for (see toc_request)."""
-        self.toc_at = self.paragraph_count()
-        self.toc = toc_request(words)
+        """Keep a TOC's place, at a [TOC] marker, and what its *words* ask for (see toc_request)."""
+        at = self.paragraph_count()
         # A page break, restart or hiding asked for here goes on the TOC's title.
-        self.toc_start = self.page_starts.pop(self.toc_at, _PageStart())
+        self.tocs.append((at, toc_request(words), self.page_starts.pop(at, _PageStart())))
 
     def picture(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         image_path = self.base_dir / unquote(node.attrs["src"])
@@ -692,10 +690,14 @@ class _Writer:
             if index < len(paragraphs):
                 start.apply(paragraphs[index])
 
-        headings = toc_entries(self.doc, self.toc, self.paragraph_styles)
-        if self.toc_at is not None and headings:
-            add_toc(self.doc, self.toc_at, self.toc, headings)
-            self.toc_start.apply(self.doc.paragraphs[self.toc_at])
+        # Collected before any TOC goes in, and added last first, so the indexes still hold. Markers at the same
+        # place keep their order: the later one goes in first, and the earlier one ahead of it.
+        tocs = [(at, request, start, toc_entries(self.doc, request, self.paragraph_styles))
+                for at, request, start in self.tocs]
+        for at, request, start, headings in reversed(tocs):
+            if headings:
+                add_toc(self.doc, at, request, headings)
+                start.apply(self.doc.paragraphs[at])
 
 
 def _new_numbers(paragraph, num_types: Iterable[str]) -> None:

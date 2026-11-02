@@ -12,7 +12,7 @@ from md2hwpx.source import unknown_styles
 def test_convert_table_of_contents(tmp_path):
     md = tmp_path / "toc.md"
     md.write_text(
-        "# 문서\n\n[TOC]\n\n## 소개\n\n본문\n\n```\n코드\n```\n\n## 사용법\n\n### 세부\n\n#### 4수준\n\n[toc]\n",
+        "# 문서\n\n[TOC]\n\n## 소개\n\n본문\n\n```\n코드\n```\n\n## 사용법\n\n### 세부\n\n#### 4수준\n",
         encoding="utf-8",
     )
     out = tmp_path / "toc.hwpx"
@@ -21,7 +21,7 @@ def test_convert_table_of_contents(tmp_path):
 
     doc = HwpxDocument.open(out)
     texts = [p.text for p in doc.paragraphs[1:]]
-    # The TOC field sits where the first marker was; the second marker adds nothing.
+    # The TOC field sits where the marker was.
     assert texts[:6] == ["문서", "차례", "1. 문서\t1", "2. 소개\t1", "3. 사용법\t1", "4. 세부\t1"]
     # level 4 is not listed in the TOC; no heading gets an empty paragraph before it.
     assert texts[6:] == ["", "소개", "본문", "", "사용법", "세부", "4수준"]
@@ -69,6 +69,25 @@ def test_convert_toc_lists_in_the_order_named(tmp_path):
     assert all(b.get("dirty") == "1" for b in begins)
     # The break before the marker lands on the first list's title.
     assert doc.paragraphs[2].element.get("pageBreak") == "1"
+
+
+def test_convert_toc_at_each_marker(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("[TOC 제목]\n\n\\newpage\n[TOC 표]\n\n\\newpage\n[TOC 그림]\n\n# 장\n\n본문\n\n[toc 표]\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    # A TOC at each marker, in the order written, the last one after the body.
+    assert [p.text for p in doc.paragraphs[1:]] == [
+        "<제목 차례>", "1. 장\t1", "", "<표 차례>", "", "<그림 차례>", "", "장", "본문", "<표 차례>", "",
+    ]
+    begins = [b for p in doc.paragraphs for b in p.element.iter(f"{HP}fieldBegin") if b.get("type") == "TABLEOFCONTENTS"]
+    commands = [p.text for b in begins for p in b.iter(f"{HP}stringParam") if p.get("name") == "Command"]
+    assert [c.split()[0].rsplit(":", 1)[1] for c in commands] == ["17", "2", "4", "2"]  # ContentsMake:uint:N
+    # Each break before a marker lands on its own TOC's title; the first page needs none.
+    assert [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"] == ["<표 차례>", "<그림 차례>"]
 
 
 def _toc_commands(doc) -> list[str]:
