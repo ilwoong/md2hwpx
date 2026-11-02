@@ -93,13 +93,14 @@ class _PageStart:
     page_break: bool = False
     restarts: set[str] = field(default_factory=set)  # numTypes (NUMBERS values) that start over at 1 there
     hide: bool = False  # the page shows no page number, header or footer
+    hide_number: bool = False  # the page shows no page number (a blank page): its header and footer stay
 
     def apply(self, paragraph) -> None:
         if self.page_break:
             paragraph.element.set("pageBreak", "1")
         _new_numbers(paragraph, self.restarts)
-        if self.hide:
-            _hide_page(paragraph)
+        if self.hide or self.hide_number:
+            _hide_page(paragraph, header_footer=self.hide)
 
 
 def _blank_page_width(text: str, size: int) -> int:
@@ -533,6 +534,7 @@ class _Writer:
         width = _blank_page_width(text, BLANK_PAGE_FONT_SIZE) + margin["left"] + margin["right"]
         height = line + margin["top"] + margin["bottom"]
         self.new_page()  # on a page of its own: the table's paragraph comes next
+        self.page_start().hide_number = True  # a page kept as margin shows no page number
         table = self.doc.add_table(1, 1)
         size = table.element.find(f"{_HP}sz")
         size.set("width", str(width))
@@ -709,10 +711,11 @@ def _new_numbers(paragraph, num_types: Iterable[str]) -> None:
         first_run.addprevious(ctrl.element.getparent())
 
 
-def _hide_page(paragraph) -> None:
-    """Hide the page number, header and footer on *paragraph*'s page only (hp:pageHiding)."""
+def _hide_page(paragraph, header_footer: bool = True) -> None:
+    """Hide the page number, and the header and footer unless *header_footer* is false, on *paragraph*'s
+    page only (hp:pageHiding)."""
     first_run = paragraph.element.find(f"{_HP}run")
-    ctrl = paragraph.add_page_hiding(header=True, footer=True, page_num=True)
+    ctrl = paragraph.add_page_hiding(header=header_footer, footer=header_footer, page_num=True)
     first_run.addprevious(ctrl.element.getparent())  # with the paragraph's other page controls, up front
 
 
