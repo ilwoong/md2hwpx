@@ -19,7 +19,7 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    REFERENCE_MARK, Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, strip_runs,
+    Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, resolve_references, strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
@@ -197,6 +197,8 @@ class _Writer:
         self.names: dict[str, str | None] = {}
         # The references left as they are written, by name: "missing" (no caption is named so) or "duplicate".
         self.unresolved: dict[str, str] = {}
+        # Tables, with their cell texts, sized in finish(): a reference in a cell reads its number only then.
+        self.tables: list[tuple[object, list[list[str]]]] = []
         # Each [TOC] marker: its paragraph index, what it asks for, and what its position asked for (a page
         # break, restart or hiding), done by the TOC's title.
         self.tocs: list[tuple[int, TocRequest, _PageStart]] = []
@@ -572,7 +574,7 @@ class _Writer:
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
         texts = [[plain_text(runs) for runs in row] for row in cells]
-        table.set_column_widths(column_widths(texts, self.body_width, self.plain_size))
+        self.tables.append((table, texts))  # sized in finish()
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
             for c, runs in enumerate(row):
@@ -594,7 +596,6 @@ class _Writer:
                         self.border_fill(fill_color=HEADER_FILL, active_borders=TABLE_SIDES, **TABLE_BORDER),
                     )
                 self.write_runs(paragraph, runs)
-        fit_rows(table, self.doc, self.plain_line_height)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
         table = self.add_table(1, 1, quote, indent)
@@ -689,28 +690,31 @@ class _Writer:
 
     # --- document ---------------------------------------------------------------------------
 
+    def number(self, name: str) -> str:
+        """What a "[@name]" reference reads, now that all captions are numbered: the number of the caption
+        named so, or "[@name]" as written if no caption is, or two are (see self.unresolved)."""
+        if self.names.get(name) is None:
+            self.unresolved[name] = "duplicate" if name in self.names else "missing"
+            return f"[@{name}]"
+        return self.names[name]
+
     def references(self) -> None:
-        """Write each "[@name]" reference as the number of the caption it names, now that all are numbered:
-        one named by no caption, or by two, stays "[@name]" (see self.unresolved)."""
-
-        def number(match) -> str:
-            name = match[1]
-            if self.names.get(name) is None:
-                self.unresolved[name] = "duplicate" if name in self.names else "missing"
-                return f"[@{name}]"
-            return self.names[name]
-
+        """Write each "[@name]" reference in the document as what it reads (see number)."""
         for text in self._section.element.iter(f"{_HP}t"):
             # A line break or tab in the text is an element: the text goes on in its tail.
             for holder, attribute in [(text, "text"), *((child, "tail") for child in text)]:
-                value = getattr(holder, attribute)
-                if value and "\ue000" in value:
-                    setattr(holder, attribute, REFERENCE_MARK.sub(number, value))
+                if getattr(holder, attribute):
+                    setattr(holder, attribute, resolve_references(getattr(holder, attribute), self.number))
 
     def finish(self) -> None:
         """Page breaks, references and the table of contents, which go in once all paragraphs are there."""
         # Before the TOC copies the headings, which may hold references.
         self.references()
+        # Once their cells read their references' numbers, not the names.
+        for table, texts in self.tables:
+            texts = [[resolve_references(text, self.number) for text in row] for row in texts]
+            table.set_column_widths(column_widths(texts, self.body_width, self.plain_size))
+            fit_rows(table, self.doc, self.plain_line_height)
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs
         for index, start in self.page_starts.items():
