@@ -4,7 +4,7 @@ into pieces at its images and at the lines that are this project's markers ([TOC
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
 from markdown_it.tree import SyntaxTreeNode
@@ -14,9 +14,9 @@ from markdown_it.tree import SyntaxTreeNode
 _CAPTION = re.compile(r"^\[(표|그림)(?:[ \t]+#([^\s\[\]]+))?\][ \t]*")
 # "[@이름]" in text: the number of the table or picture whose caption is named so, "표 2-1".
 REFERENCE = re.compile(r"\[@([^\s\[\]]+)\]")
-# A reference as the runs hold it, until the converter knows every caption's number.
-_REFERENCE_MARK = "\ue000{}\ue001"
-REFERENCE_MARK = re.compile("\ue000([^\ue001]*)\ue001")
+# A reference as the runs hold it, until the converter knows every caption's number (see resolve_references):
+# its name between two private use characters, which no text has.
+_REFERENCE_MARK = re.compile("\ue000([^\ue001]*)\ue001")
 # Lines of their own in a paragraph: table of contents, page break as pandoc writes it, number restart,
 # page hiding and blank page markers.
 MARKERS = {
@@ -63,8 +63,8 @@ def inline_runs(
     runs: list[Run] = []
     for node in nodes:
         if node.type == "text":
-            # A reference is held as a mark (see REFERENCE_MARK), which the converter replaces.
-            runs.append(Run(REFERENCE.sub(lambda m: _REFERENCE_MARK.format(m[1]), node.content), marks, url))
+            # A reference is held as a mark (see _REFERENCE_MARK) the converter writes as its number.
+            runs.append(Run(REFERENCE.sub(lambda m: f"\ue000{m[1]}\ue001", node.content), marks, url))
         elif node.type == "softbreak":
             runs.append(Run(" ", marks, url))
         elif node.type == "hardbreak":
@@ -80,6 +80,11 @@ def inline_runs(
         elif node.type == "footnote_ref":
             runs.append(Run("", marks, url, note=node.meta["id"]))
     return runs
+
+
+def resolve_references(text: str, number: Callable[[str], str]) -> str:
+    """*text* with each reference inline_runs held in it written as *number*(its name)."""
+    return _REFERENCE_MARK.sub(lambda m: number(m[1]), text)
 
 
 def plain_text(runs: list[Run]) -> str:

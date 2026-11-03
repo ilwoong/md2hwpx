@@ -245,3 +245,24 @@ def test_references_lines():
 
     # Front matter counts, a table cell's line is its row's, code is not text.
     assert references(markdown) == [(4, "a"), (5, "b"), (5, "a"), (9, "c")]
+
+
+def test_convert_table_with_references_sized_by_their_numbers(tmp_path):
+    md = tmp_path / "refs.md"
+    # A long name in a cell; the second table holds the same text typed out.
+    md.write_text(
+        "[표 #성능-처리량-실험결과-요약표] 결과\n| 항목 | 참조 |\n|---|---|\n| 처리량 측정값 | [@성능-처리량-실험결과-요약표] |\n\n"
+        "| 항목 | 참조 |\n|---|---|\n| 처리량 측정값 | 표 1 |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "refs.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    referenced, typed = HwpxDocument.open(out).tables.all
+    def sizes(table):
+        return [(c.element.find(f"{HP}cellSz").get("width"), c.element.find(f"{HP}cellSz").get("height"))
+                for row in range(2) for c in (table.cell(row, 0), table.cell(row, 1))]
+
+    assert referenced.cell(1, 1).text == "표 1"
+    assert sizes(referenced) == sizes(typed)
