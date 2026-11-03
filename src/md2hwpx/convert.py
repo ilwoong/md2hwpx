@@ -197,8 +197,9 @@ class _Writer:
         self.names: dict[str, str | None] = {}
         # The references left as they are written, by name: "missing" (no caption is named so) or "duplicate".
         self.unresolved: dict[str, str] = {}
-        # Tables, with their cell texts, sized in finish(): a reference in a cell reads its number only then.
-        self.tables: list[tuple[object, list[list[str]]]] = []
+        # Tables, with their width and cell texts, sized in finish(): a reference in a cell reads its number
+        # only then.
+        self.tables: list[tuple[object, int, list[list[str]]]] = []
         # Each [TOC] marker: its paragraph index, what it asks for, and what its position asked for (a page
         # break, restart or hiding), done by the TOC's title.
         self.tocs: list[tuple[int, TocRequest, _PageStart]] = []
@@ -329,11 +330,21 @@ class _Writer:
         self.place(paragraph, quote, indent)
         return paragraph
 
+    @staticmethod
+    def indent_width(quote: int, indent: int) -> int:
+        """How far a paragraph at quote depth *quote* and *indent* is indented, in HWPUNIT (see place)."""
+        return quote * QUOTE_INDENT + indent
+
+    def width_at(self, quote: int, indent: int) -> int:
+        """The body width left for a table or picture at quote depth *quote* and *indent*: it ends where the
+        body does, however far its paragraph is indented."""
+        return self.body_width - self.indent_width(quote, indent)
+
     def place(self, paragraph, quote: int, indent: int, bar: bool = True) -> None:
         """Indent *paragraph* by its quote depth and *indent*, with the quote bar on the left."""
         if not quote and not indent:
             return
-        layout: dict = {"margins": {"left": self.body_left + quote * QUOTE_INDENT + indent}}
+        layout: dict = {"margins": {"left": self.body_left + self.indent_width(quote, indent)}}
         if quote and bar:
             line = self.border_fill(active_borders=["LEFT"], **QUOTE_BAR)
             # connect: one bar along consecutive quote paragraphs
@@ -391,7 +402,7 @@ class _Writer:
 
     def add_table(self, rows: int, columns: int, quote: int, indent: int):
         """A new table (a code block is one too) that runs on to the next pages, placed like a paragraph."""
-        table = self.doc.add_table(rows, columns, **self.body)
+        table = self.doc.add_table(rows, columns, width=self.width_at(quote, indent), **self.body)
         # Hancom never breaks a table laid out as a character (python-hwpx's default): rows past the page
         # are left off. Placed from the paragraph, not the column, it keeps the paragraph's indent.
         table.set_treat_as_char(False)
@@ -504,11 +515,12 @@ class _Writer:
             alt = strip_runs(inline_runs(node.children))
             if alt:
                 self.number_caption("그림", alt)
+        max_width = self.width_at(quote, indent)
         max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
         width, height = picture_size(
             image_path,
             data,
-            self.body_width,
+            max_width,
             max_height,
             length(node.attrs.get("width"), self.body_width),
             length(node.attrs.get("height"), self.body_height),
@@ -519,7 +531,7 @@ class _Writer:
         # A picture narrower than the body sits at the left margin and leaves a gap at the right; centred,
         # the gap is shared. The picture is laid out as a character, so the paragraph's own alignment is
         # what moves it. A picture that fills the body has nothing to centre, and keeps its style.
-        if width is not None and width < self.body_width - indent:
+        if width is not None and width < max_width:
             picture.paragraph.para_pr_id_ref = self.para_format(
                 picture.paragraph.para_pr_id_ref, alignment=PICTURE_REDUCED_ALIGN
             )
@@ -574,7 +586,7 @@ class _Writer:
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
         texts = [[plain_text(runs) for runs in row] for row in cells]
-        self.tables.append((table, texts))  # sized in finish()
+        self.tables.append((table, self.width_at(quote, indent), texts))  # sized in finish()
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
             for c, runs in enumerate(row):
@@ -711,9 +723,9 @@ class _Writer:
         # Before the TOC copies the headings, which may hold references.
         self.references()
         # Once their cells read their references' numbers, not the names.
-        for table, texts in self.tables:
+        for table, width, texts in self.tables:
             texts = [[resolve_references(text, self.number) for text in row] for row in texts]
-            table.set_column_widths(column_widths(texts, self.body_width, self.plain_size))
+            table.set_column_widths(column_widths(texts, width, self.plain_size))
             fit_rows(table, self.doc, self.plain_line_height)
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs
