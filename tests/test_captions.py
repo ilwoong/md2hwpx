@@ -7,8 +7,8 @@ from hwpx import HwpxDocument
 
 from helpers import HP, _new_numbers, _png, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
-from md2hwpx.convert import convert
-from md2hwpx.source import ConversionError, caption_numbering
+from md2hwpx.convert import convert, convert_markdown
+from md2hwpx.source import ConversionError, caption_numbering, references
 
 
 def test_convert_caption_numbers_restart_in_each_chapter(tmp_path):
@@ -175,3 +175,73 @@ def test_caption_numbering_from_front_matter(tmp_path):
     # Files that disagree: a document has one way, so neither is chosen.
     with pytest.raises(ConversionError, match=r"chapter\.md 는 'chapter', .*document\.md 는 'document'"):
         caption_numbering([chapter, plain, document])
+
+
+def test_convert_references_read_caption_numbers(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png())
+    md = tmp_path / "refs.md"
+    md.write_text(
+        "# 1장\n\n앞의 [[@구조]] 와 [@결과] 를 본다.\n\n"
+        "[표 #결과] 실험 결과\n| [@결과] 셀 |\n|---|\n| 1 |\n\n"
+        "# 2장 [@구조]\n\n[표] 이름 없는 표\n| b |\n|---|\n\n"
+        "[그림 #구조] 시스템 구조\n![](a.png)\n\n"
+        "**굵은 [@구조]**, `[@구조]` 코드, [링크 [@결과]](http://x)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "refs.hwpx"
+
+    assert convert_markdown(md.read_text(encoding="utf-8"), tmp_path, TEMPLATE, out) == {}
+
+    doc = HwpxDocument.open(out)
+    texts = [p.text for p in doc.paragraphs if p.text]
+    # Ahead of the caption too; the brackets around one stay as written, inline code stays code.
+    assert "앞의 [그림 2-1] 와 표 1-1 를 본다." in texts
+    assert "2장 그림 2-1" in texts
+    assert "굵은 그림 2-1, [@구조] 코드, 링크 표 1-1" in texts
+    # The name is not part of the caption.
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1-1] 실험 결과", "[표 2-1] 이름 없는 표"]
+    assert doc.tables.all[0].cell(0, 0).text == "표 1-1 셀"
+    pictures = [_text(pic.find(f"{HP}caption")) for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
+    assert pictures == ["[그림 2-1] 시스템 구조"]
+
+
+def test_convert_references_numbered_through_the_document(tmp_path):
+    md = tmp_path / "refs.md"
+    md.write_text(
+        "---\ncaption-numbering: document\n---\n# 1장\n\n[표] 첫 표\n| a |\n|---|\n\n"
+        "# 2장\n\n[표 #둘째] 둘째 표\n| b |\n|---|\n\n[@둘째] 참고\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "refs.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    assert "표 2 참고" in [p.text for p in HwpxDocument.open(out).paragraphs]
+
+
+def test_convert_unresolved_references_stay_as_written(tmp_path):
+    md = tmp_path / "refs.md"
+    md.write_text(
+        "[표 #같음] 하나\n| a |\n|---|\n\n[표 #같음] 둘\n| b |\n|---|\n\n"
+        "[표 #글] 뒤에 표가 없어 글로 남는 줄\n\n"
+        "[@같음], [@없음], [@글]\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "refs.hwpx"
+
+    unresolved = convert_markdown(md.read_text(encoding="utf-8"), tmp_path, TEMPLATE, out)
+
+    assert unresolved == {"같음": "duplicate", "없음": "missing", "글": "missing"}
+    texts = [p.text for p in HwpxDocument.open(out).paragraphs]
+    assert "[@같음], [@없음], [@글]" in texts
+    assert "[표 #글] 뒤에 표가 없어 글로 남는 줄" in texts
+
+
+def test_references_lines():
+    markdown = (
+        "---\ntitle: x\n---\n[@a] 와\n[@b], [@a]\n\n| h |\n|---|\n| [@c] |\n\n"
+        "`[@코드]`\n\n```\n[@코드]\n```\n"
+    )
+
+    # Front matter counts, a table cell's line is its row's, code is not text.
+    assert references(markdown) == [(4, "a"), (5, "b"), (5, "a"), (9, "c")]

@@ -14,8 +14,12 @@ from hwpx.errors import HwpxError
 
 from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, paragraph_styles
 from md2hwpx.diagram import DiagramError, render_diagrams
-from md2hwpx.source import ConversionError, caption_numbering, read_markdown, unknown_styles, unusable_images
+from md2hwpx.source import (
+    ConversionError, caption_numbering, read_markdown, references, unknown_styles, unusable_images,
+)
 
+# Why a "[@name]" reference was left as written (see convert_markdown), as a Korean clause.
+_UNRESOLVED = {"missing": "없어", "duplicate": "여럿이라"}
 # What convert_input raises for an input it cannot convert. BadZipFile: a template that is not HWPX (a zip).
 CONVERSION_ERRORS = (OSError, DiagramError, HwpxError, ConversionError, zipfile.BadZipFile)
 
@@ -48,9 +52,10 @@ class ConversionWarning(NamedTuple):
         return f"{self.file}:{self.line}: {self.message}" + (f": {self.path}" if self.path is not None else "")
 
 
-def _warnings(md: Path, styles: set[str]) -> list[ConversionWarning]:
+def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[ConversionWarning]:
     """What the HWPX is made despite in *md*, in line order: images shown as a placeholder (see
-    unusable_images) and styles the template lacks that custom-style divs or [TOC] name (see unknown_styles)."""
+    unusable_images), styles the template lacks that custom-style divs or [TOC] name (see unknown_styles)
+    and the references left as written, *unresolved* (see convert_markdown)."""
     markdown = md.read_text(encoding="utf-8")
     found = [
         ConversionWarning(md, line, f"{why} 대체 이미지를 넣었습니다", image)
@@ -59,6 +64,12 @@ def _warnings(md: Path, styles: set[str]) -> list[ConversionWarning]:
     found += [
         ConversionWarning(md, line, f"템플릿에 '{name}' 문단 스타일이 없어 {result}")
         for line, name, result in unknown_styles(markdown, styles)
+    ]
+    found += [
+        ConversionWarning(
+            md, line, f"'#{name}' 이름의 표·그림이 {_UNRESOLVED[unresolved[name]]} [@{name}] 를 그대로 두었습니다"
+        )
+        for line, name in references(markdown) if name in unresolved
     ]
     return sorted(found, key=lambda w: w.line)
 
@@ -70,14 +81,13 @@ def convert_input(input_path: Path, template: Path, output: Path) -> list[Conver
     files = input_files(input_path)
     numbering = caption_numbering(files)
     styles = paragraph_styles(template)
-    warnings = [w for f in files for w in _warnings(f, styles)]
     # A blank line between files keeps the last block of one file from running into the next.
     markdown = "\n\n".join(read_markdown(f) for f in files)
     # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
     with tempfile.TemporaryDirectory() as image_dir:
         markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
-        convert_markdown(markdown, base_dir, template, output, numbering)
-    return warnings
+        unresolved = convert_markdown(markdown, base_dir, template, output, numbering)
+    return [w for f in files for w in _warnings(f, styles, unresolved)]
 
 
 def _output_path(input_path: Path, output: Path | None) -> Path:

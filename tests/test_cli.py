@@ -202,3 +202,20 @@ def test_cli_warns_about_inline_and_reference_images(tmp_path, monkeypatch, caps
         f"md2hwpx: 경고: {md}:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: {tmp_path / 'inline.png'}",
         f"md2hwpx: 경고: {md}:5: 이미지 파일이 없어 대체 이미지를 넣었습니다: {tmp_path / 'ref image.png'}",
     ]
+
+
+def test_cli_warns_about_unresolved_references(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "doc"
+    folder.mkdir()
+    # A name from another file of the folder is found.
+    (folder / "1.md").write_text("[표 #같음] 하나\n| a |\n|---|\n\n[표 #결과] 결과\n| b |\n|---|\n", encoding="utf-8")
+    (folder / "2.md").write_text("[@결과] 참고\n\n[표 #같음] 둘\n| c |\n|---|\n\n[@같음] 과\n[@없음]\n", encoding="utf-8")
+
+    assert main([str(folder)]) == 0
+
+    md = folder / "2.md"
+    assert capsys.readouterr().err.splitlines() == [
+        f"md2hwpx: 경고: {md}:7: '#같음' 이름의 표·그림이 여럿이라 [@같음] 를 그대로 두었습니다",
+        f"md2hwpx: 경고: {md}:8: '#없음' 이름의 표·그림이 없어 [@없음] 를 그대로 두었습니다",
+    ]
