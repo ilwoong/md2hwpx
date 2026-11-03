@@ -253,3 +253,19 @@ def test_convert_pictures_in_list_items(tmp_path):
         ("", "NONE", BODY_LEFT + 1000),  # ... and the picture follows
     ]
     assert len(doc.media.picture_references()) == 2
+
+
+def test_convert_indented_picture_fits_the_body(tmp_path):
+    (tmp_path / "wide.png").write_bytes(_png(2000, 10))
+    (tmp_path / "half.png").write_bytes(_png(10, 10))
+    md = tmp_path / "indented.md"
+    md.write_text("- 항목\n\n  ![](wide.png)\n\n> ![](half.png){width=50%}\n", encoding="utf-8")
+    out = tmp_path / "indented.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    pictures = [(p, pic) for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
+    widths = [int(pic.find(f"{HP}sz").get("width")) for _, pic in pictures]
+    # Too wide for the body less its indent, it comes down to that; a width asked for is still of the body.
+    assert widths == [BODY_WIDTH - 1000, BODY_WIDTH // 2]

@@ -4,7 +4,7 @@ from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
 
-from helpers import HP, TEXT_WIDTH
+from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
 
@@ -221,3 +221,29 @@ def test_convert_table_row_heights(tmp_path):
     md.write_text("```\none\n```\n", encoding="utf-8")
     convert(md, TEMPLATE, out)
     assert HwpxDocument.open(out).tables.all[0].cell(0, 0).height == 1260 + 141 * 2
+
+
+def test_convert_indented_tables_fit_the_body(tmp_path):
+    md = tmp_path / "indented.md"
+    long = "아주 긴 열 제목을 넣어 표가 본문 폭을 채우게 함"
+    md.write_text(
+        f"| {long} | {long} |\n|---|---|\n\n"
+        f"- 항목\n\n  | {long} | {long} |\n  |---|---|\n\n  ```\n  x\n  ```\n\n"
+        f"  - 둘째 수준\n\n    > | {long} | {long} |\n    > |---|---|\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "indented.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    placed = []
+    for paragraph in doc.paragraphs:
+        for table in paragraph.element.iter(f"{HP}tbl"):
+            left = int(doc.styles.paragraph_property(paragraph.para_pr_id_ref).margin.left) - BODY_LEFT
+            cells = table.find(f"{HP}tr").findall(f"{HP}tc")
+            placed.append((left, int(table.find(f"{HP}sz").get("width")),
+                           sum(int(c.find(f"{HP}cellSz").get("width")) for c in cells)))
+    # Each table, its cells too, ends at the body's right edge however far its paragraph is indented.
+    assert [left for left, _, _ in placed] == [0, 1000, 1000, 3000]
+    assert all(left + width == BODY_WIDTH and cells == width for left, width, cells in placed)
