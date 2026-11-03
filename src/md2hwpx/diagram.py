@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 from md2hwpx.parser import PARSER
 
 LANGS = ("mermaid", "plantuml")
+DIAGRAM_TIMEOUT = 60  # seconds for one diagram
 
 
 class DiagramError(Exception):
@@ -48,9 +50,22 @@ def find_diagram_blocks(markdown: str) -> list[DiagramBlock]:
 
 
 def _run(cmd: list[str], code: str) -> subprocess.CompletedProcess[bytes]:
+    """Run *cmd* on *code*, for at most DIAGRAM_TIMEOUT seconds.
+
+    In a process group of its own, so a timeout ends what it started too: mmdc's Chromium would outlive it.
+    """
     if shutil.which(cmd[0]) is None:
         raise DiagramError(f"'{cmd[0]}' not found in PATH")
-    return subprocess.run(cmd, input=code.encode("utf-8"), capture_output=True)
+    with subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+    ) as process:
+        try:
+            out, err = process.communicate(code.encode("utf-8"), timeout=DIAGRAM_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise DiagramError(f"{cmd[0]} timed out after {DIAGRAM_TIMEOUT} s") from None
+    return subprocess.CompletedProcess(cmd, process.returncode, out, err)
 
 
 def _check(result: subprocess.CompletedProcess[bytes], out_path: Path, tool: str) -> None:
