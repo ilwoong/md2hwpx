@@ -9,7 +9,7 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 
 - 포함: CommonMark 전체(헤딩, 문단, 강제 줄바꿈, 코드블록, 목록, 인용문, 수평선, 이미지, 링크, 강조, 이스케이프,
   참조식 링크, 임의 깊이의 블록 중첩)와 GFM 표·취소선, 각주, 그리고 이 프로젝트의 표기
-  (표·그림 캡션, 그림 크기 속성, `[TOC]` 차례, `\newpage` 쪽 나누기, `[새 번호]` 번호 새로 시작, `[감추기]` 쪽 감추기, `[여백면]` 여백 면, `[빈 줄]` 빈 문단), pandoc 의 `custom-style` 펜스 div.
+  (표·그림 캡션과 번호 참조, 그림 크기 속성, `[TOC]` 차례, `\newpage` 쪽 나누기, `[새 번호]` 번호 새로 시작, `[감추기]` 쪽 감추기, `[여백면]` 여백 면, `[빈 줄]` 빈 문단), pandoc 의 `custom-style` 펜스 div.
 - 제외: 원시 HTML (글자 그대로 들어간다).
 - 다이어그램 코드블록은 변환 전에 [diagram-rendering.md](diagram-rendering.md) 의
   `render_diagrams` 로 이미지 링크로 바꿔 둔다. `convert` 는 다이어그램을 렌더링하지 않는다.
@@ -237,6 +237,29 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 위치: 표·코드블록은 위(`TOP`), 그림은 아래(`BOTTOM`).
 - 캡션 문단에는 `표그림 제목` 스타일의 스타일·문단 모양·글자 모양을 적용한다.
 
+### 번호 참조
+
+```markdown
+[표 #결과] 실험 결과
+| 항목 | 값 |
+|---|---|
+
+결과는 [[@결과]] 와 같다.     → 결과는 [표 2-1] 와 같다.
+```
+
+- 캡션 줄을 `[표 #이름] 제목` / `[그림 #이름] 제목` 으로 쓰면 그 표·그림에 이름이 붙는다. 이름은 캡션 문구에 들어가지 않는다.
+  이름에는 공백과 `[`, `]` 를 쓸 수 없다. `[`·`]` 와 `표`·`그림` 사이, `#이름` 앞의 공백은 위 캡션 줄과 같다.
+- 글 안의 `[@이름]` 은 그 캡션의 번호 글자(`표 2-1`, `caption-numbering: document` 면 `표 7`)로 바뀐다.
+  캡션 문구에서 `[`·`]` 를 뺀 것이다. 바깥에 괄호 등을 쓰면 그대로 남는다 (`[[@결과]]` → `[표 2-1]`).
+- 문단·헤딩·목록·인용문·표 셀·캡션·각주·링크 글자 안 어디서든 쓸 수 있고, 뒤에 나오는 표·그림도 참조한다.
+  인라인 코드·코드블록 안은 글자 그대로다. 글자 그대로 쓰려면 인라인 코드로 쓴다 (`\[@이름]` 이스케이프는 참조로 읽는다).
+- 번호는 변환할 때 정해진 글자다 (한/글 상호 참조 필드가 아니다). 한/글에서 표·그림을 더하거나 옮겨도 바뀌지 않는다.
+- 다음 경우는 `[@이름]` 을 글자 그대로 두고 경고한다 (아래 "명령줄"):
+  - 그 이름의 캡션이 없다. 뒤에 표·그림이 오지 않아 글로 남은 캡션 줄의 이름도 없는 것으로 친다.
+  - 그 이름의 캡션이 둘 이상이다. 어느 쪽인지 고르지 않는다.
+- 변환은 글을 쓸 때 참조를 표시(사용자 영역 문자 U+E000·U+E001 로 감싼 이름)로 두고, 모든 문단을 쓴 뒤
+  차례를 넣기 전에 구역의 `hp:t` 글자에서 바꾼다. 그래서 차례에 모이는 헤딩도 바뀐 글자다.
+
 ### 목록
 
 - 항목의 첫 문단의 첫 글 조각이 글머리표·번호 문단이 된다 (첫 문단이 그림으로 시작하면 빈 번호 문단).
@@ -442,13 +465,14 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None
 def convert_markdown(
     markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
-) -> None
+) -> dict[str, str]
 def paragraph_styles(template_path: Path) -> set[str]
 
 # md2hwpx.source
 def read_markdown(md_path: Path) -> str
 def caption_numbering(md_paths: Iterable[Path]) -> str
 def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str, str]]
+def references(markdown: str) -> list[tuple[int, str]]
 ```
 
 - `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
@@ -464,6 +488,10 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
   custom-style div 와 `[TOC]` 표지의 (줄, 이름, 결과) 목록이다 (위 "문단 스타일 지정", "제목 차례를 모으는 방식").
   결과는 경고 문장 끝에 붙는 말(`본문 스타일로 넣었습니다`, `차례에 모을 수 없습니다`)이다.
   변환과 같은 기준이라 경고한 div 와 `본문` 으로 들어간 div 가 같다.
+- `convert_markdown` 은 글자 그대로 둔 `[@이름]` 참조를 `{이름: 이유}` 로 돌려준다 (위 "번호 참조").
+  이유는 `missing`(그 이름의 캡션이 없음) 또는 `duplicate`(둘 이상). 모두 바꿨으면 빈 dict 다.
+  `references` 는 코드 밖 `[@이름]` 참조의 (줄, 이름) 목록이다. 표 셀 안이면 그 행의 줄이다.
+  명령줄은 둘을 맞춰 경고한다. 폴더 입력은 파일을 이어 붙여 변환하므로 다른 파일의 이름도 참조한다.
 - 저장하기 전에 python-hwpx `doc.validate()` (header·section XML 스키마 검증)를 실행한다.
   오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
   경고(warning)는 저장을 막지 않는다.
@@ -517,12 +545,14 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
   경고 목록을 `ConversionWarning`(입력 파일, 줄, 내용, 이미지 경로 또는 None) 으로 돌려준다 (아래 경고). `str()` 이 이것을 한 줄로 만든다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
-- 변환 전에 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div·`[TOC]` 의 스타일을 확인한다.
+- 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div·`[TOC]` 의 스타일을,
+  `references` 와 `convert_markdown` 의 결과로 글자 그대로 둔 번호 참조를 확인한다.
   넣을 수 없는 이미지는 대체 이미지로, 없는 스타일의 div 는 `본문` 으로 변환하고, 저장한 뒤 모두 stderr 에 쓴다.
   종료 코드는 0 이다. 입력 파일 순서, 파일 안에서는 줄 순서다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
   - `md2hwpx: 경고: <입력 파일>:<줄>: <이유> 대체 이미지를 넣었습니다: <경로>`
   - `md2hwpx: 경고: <입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 본문 스타일로 넣었습니다`
   - `md2hwpx: 경고: <입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 차례에 모을 수 없습니다`
+  - `md2hwpx: 경고: <입력 파일>:<줄>: '#<이름>' 이름의 표·그림이 없어 [@<이름>] 를 그대로 두었습니다` (`여럿이라`: 둘 이상)
 - 파일 입출력 오류(`OSError`), `DiagramError`, python-hwpx 오류(`HwpxError`), `ConversionError`,
   HWPX(zip) 가 아닌 템플릿(`zipfile.BadZipFile`) 은
   `md2hwpx: <메시지>` 를 stderr 에 쓰고 종료 코드 1 을 돌려준다. 이때 출력 파일은 만들지 않는다.
@@ -554,6 +584,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 인라인 코드 | 헤딩·문단·표 셀·캡션의 코드 조각이 D2Coding, 중첩 백틱, 닫히지 않은 백틱, 머리 행 굵게 유지 |
 | 인라인 서식 | 굵게·기울임·취소선(두 표기), 겹친 서식(`***a** b*` 포함), `file_name`·이스케이프·닫히지 않은 기호는 글자 그대로, 링크 서식과 URL, 표 셀 |
 | 캡션 | 위치(TOP/BOTTOM), `[표 N-M]`/`[그림 N-M]` 번호와 장마다 다시 매김, 장 앞 개체의 `[표 N]` 번호, `표그림 제목` 스타일, 개체 없는 캡션 줄은 문단 유지 |
+| 번호 참조 | `[@이름]` 이 `표 N-M`·`그림 N-M`(문서 번호면 `표 M`), 앞에서 참조, 바깥 괄호 유지, 헤딩·표 셀·굵게·링크 안, 인라인 코드는 글자, 캡션 문구에 이름 없음, 없는 이름·두 번 쓴 이름·글로 남은 캡션 줄은 글자 유지와 결과, `references` 의 줄(front matter·표 셀·코드 제외), 폴더 입력의 다른 파일 이름, 명령줄 경고 |
 | 없는 이미지 | 대체 이미지 파일이 그대로 들어감, 캡션·크기 속성 적용 |
 | 이미지 형식 | BMP·WebP·TIFF 는 원래 크기의 PNG 로, 확장자와 다른 PNG 는 그대로, 깨진 파일은 대체 이미지와 이유, SVG 는 PNG 로 (`rsvg-convert` 있을 때), `rsvg-convert` 없으면 대체 이미지와 이유 |
 | 대체 텍스트 캡션 | `[그림]` 줄 없는 이미지의 대체 텍스트 캡션·번호·서식, `[그림]` 줄 우선, 빈 대체 텍스트는 캡션 없음·번호 안 셈, 헤딩 안 이미지는 글 유지 |

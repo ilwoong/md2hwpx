@@ -12,7 +12,7 @@ from markdown_it.tree import SyntaxTreeNode
 
 from md2hwpx.images import ImageError, picture_data
 from md2hwpx.parser import PARSER, custom_style
-from md2hwpx.pieces import marker_lines
+from md2hwpx.pieces import REFERENCE, marker_lines
 from md2hwpx.toc import toc_request
 
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
@@ -61,6 +61,25 @@ def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
             number = next((i + 1 for i in range(start, end) if raw and raw in lines[i]), start + 1)
             images.append((number, base_dir / unquote(src)))
     return images
+
+
+def references(markdown: str) -> list[tuple[int, str]]:
+    """(line number, name) of each "[@name]" reference outside code, as the conversion finds them."""
+    markdown = _blank_front_matter(markdown)
+    lines = markdown.splitlines()
+    found = []
+    for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
+        if node.type != "inline":
+            continue
+        # A table cell's inline content has no lines of its own: its row's are the nearest.
+        start, end = next(n.map for n in (node, *_ancestors(node)) if n.map is not None)
+        texts = [n.content for n in _walk(node) if n.type == "text"]
+        line_names = [(i + 1, m[1]) for i in range(start, end) for m in REFERENCE.finditer(lines[i])]
+        for name in (m[1] for text in texts for m in REFERENCE.finditer(text)):
+            # The first line of the block naming it that is not taken yet: a name may come more than once.
+            at = next((k for k, (_, n) in enumerate(line_names) if n == name), None)
+            found.append(line_names.pop(at) if at is not None else (start + 1, name))
+    return found
 
 
 def unusable_images(markdown: str, base_dir: Path) -> list[tuple[int, Path, str]]:

@@ -18,6 +18,7 @@ Markdown 파일을 한/글 문서 형식인 HWPX 파일로 변환하는 Python �
   - pandoc 의 `::: {custom-style="스타일 이름"}` ... `:::` 블록 안의 문단에 템플릿의 그 문단 스타일 적용. 템플릿에 없는 스타일이면 `본문` 으로 넣고 `파일:줄` 위치와 함께 경고
   - 파일 맨 앞의 YAML front matter(`---` ... `---`)는 변환하지 않음. `caption-numbering` 키만 읽음
   - `[표] 제목` / `[그림] 제목` 줄 → `[표 N-M] 제목` / `[그림 N-M] 제목` 캡션 (`표그림 제목` 스타일). `N` 은 장(수준 1 헤딩) 번호, `M` 은 그 장에서의 순번(한/글 자동 번호). `[그림]` 줄이 없으면 이미지의 대체 텍스트가 제목
+  - 캡션 줄을 `[표 #결과] 제목` 처럼 쓰면 글 안의 `[@결과]` 가 그 번호 `표 N-M` 이 됨 (`[[@결과]]` → `[표 N-M]`). 변환할 때 정한 글자이며, 없거나 두 번 쓴 이름은 `파일:줄` 위치와 함께 경고
   - front matter 에 `caption-numbering: document` 를 쓰면 장 번호 없이 문서 전체에서 센 `[표 7] 제목` 캡션. 기본은 `chapter`.
     폴더 입력에서 파일마다 값이 다르면 변환하지 않음
 
@@ -91,6 +92,7 @@ convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"
 다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장되고,
 반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
 이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
+`convert_markdown` 은 글자 그대로 둔 `[@이름]` 참조를 `{이름: 이유}` 로 돌려줍니다.
 `read_markdown` 은 front matter 를 지우므로 캡션 번호 방식은 `caption_numbering` 으로 따로 읽어 넘깁니다 (생략하면 `chapter`).
 `DEFAULT_TEMPLATE` 은 내장 템플릿입니다. 다른 템플릿은 그 경로를 넘깁니다.
 파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.

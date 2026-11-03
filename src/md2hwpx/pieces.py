@@ -10,8 +10,13 @@ from typing import NamedTuple
 from markdown_it.tree import SyntaxTreeNode
 
 # "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
-# written as "[표 N] ..." / "[그림 N] ..." numbered in document order.
-_CAPTION = re.compile(r"^\[(표|그림)\][ \t]*")
+# written as "[표 N] ..." / "[그림 N] ..." numbered in document order. "[표 #이름] ..." names it, for references.
+_CAPTION = re.compile(r"^\[(표|그림)(?:[ \t]+#([^\s\[\]]+))?\][ \t]*")
+# "[@이름]" in text: the number of the table or picture whose caption is named so, "표 2-1".
+REFERENCE = re.compile(r"\[@([^\s\[\]]+)\]")
+# A reference as the runs hold it, until the converter knows every caption's number.
+_REFERENCE_MARK = "\ue000{}\ue001"
+REFERENCE_MARK = re.compile("\ue000([^\ue001]*)\ue001")
 # Lines of their own in a paragraph: table of contents, page break as pandoc writes it, number restart,
 # page hiding and blank page markers.
 MARKERS = {
@@ -58,7 +63,8 @@ def inline_runs(
     runs: list[Run] = []
     for node in nodes:
         if node.type == "text":
-            runs.append(Run(node.content, marks, url))
+            # A reference is held as a mark (see REFERENCE_MARK), which the converter replaces.
+            runs.append(Run(REFERENCE.sub(lambda m: _REFERENCE_MARK.format(m[1]), node.content), marks, url))
         elif node.type == "softbreak":
             runs.append(Run(" ", marks, url))
         elif node.type == "hardbreak":
@@ -108,13 +114,14 @@ def block_kind(node: SyntaxTreeNode | None) -> str | None:
     return node.type
 
 
-def caption_line(runs: list[Run]) -> tuple[str, list[Run]] | None:
-    """("표" or "그림", the title's runs) if *runs* is a "[표] ..." / "[그림] ..." caption line, else None."""
+def caption_line(runs: list[Run]) -> tuple[str, str | None, list[Run]] | None:
+    """("표" or "그림", its name or None, the title's runs) if *runs* is a "[표] ..." / "[그림] ..." caption
+    line, else None."""
     first = runs[0]
     match = _CAPTION.match(first.text) if first == Run(first.text) else None
     if match is None:
         return None
-    return match[1], [first._replace(text=first.text[match.end() :]), *runs[1:]]
+    return match[1], match[2], [first._replace(text=first.text[match.end() :]), *runs[1:]]
 
 
 def _lines(inline: SyntaxTreeNode) -> list[tuple[int, list[SyntaxTreeNode]]]:

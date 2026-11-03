@@ -19,7 +19,7 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, strip_runs,
+    REFERENCE_MARK, Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
@@ -193,6 +193,10 @@ class _Writer:
         # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
         self.numbers = {"표": 0, "그림": 0}  # within that chapter, or since a "[새 번호 표]" / "[새 번호 그림]"
+        # "[표 #이름]" captions by name: what a "[@이름]" reference reads, "표 2-1", or None if two are named so.
+        self.names: dict[str, str | None] = {}
+        # The references left as they are written, by name: "missing" (no caption is named so) or "duplicate".
+        self.unresolved: dict[str, str] = {}
         # Each [TOC] marker: its paragraph index, what it asks for, and what its position asked for (a page
         # break, restart or hiding), done by the TOC's title.
         self.tocs: list[tuple[int, TocRequest, _PageStart]] = []
@@ -354,23 +358,26 @@ class _Writer:
         found = caption_line(runs)
         if found is None:
             return False
-        kind, title = found
+        kind, name, title = found
         captioned = ("table", "fence", "code_block") if kind == "표" else ("image",)
         if following not in captioned:
             return False
-        self.number_caption(kind, title)
+        self.number_caption(kind, title, name)
         return True
 
-    def number_caption(self, kind: str, title: list[Run]) -> None:
+    def number_caption(self, kind: str, title: list[Run], name: str | None = None) -> None:
         """Keep "[표 2-1] *title*" / "[그림 2-1] *title*" as the next caption: the number is the chapter
         (the level 1 heading it is under) and, after it, the object's own count within that chapter.
         Numbered through the document (not by_chapter), it is the count alone: "[표 7] *title*".
 
         The count becomes Hancom's own number (see _auto_number), which starts over where the count does.
+        A *name* lets "[@name]" references read the number, "표 2-1".
         """
         self.numbers[kind] += 1
         number = self.numbers[kind]
         before = f"[{kind} {self.chapter}-" if self.chapter and self.by_chapter else f"[{kind} "
+        if name is not None:
+            self.names[name] = None if name in self.names else f"{before[1:]}{number}"
         self.caption = _Caption([Run(f"{before}{number}] "), *title], before, number, NUMBERS[kind])
 
     def restart(self, names: Iterable[str]) -> None:
@@ -682,8 +689,28 @@ class _Writer:
 
     # --- document ---------------------------------------------------------------------------
 
+    def references(self) -> None:
+        """Write each "[@name]" reference as the number of the caption it names, now that all are numbered:
+        one named by no caption, or by two, stays "[@name]" (see self.unresolved)."""
+
+        def number(match) -> str:
+            name = match[1]
+            if self.names.get(name) is None:
+                self.unresolved[name] = "duplicate" if name in self.names else "missing"
+                return f"[@{name}]"
+            return self.names[name]
+
+        for text in self._section.element.iter(f"{_HP}t"):
+            # A line break or tab in the text is an element: the text goes on in its tail.
+            for holder, attribute in [(text, "text"), *((child, "tail") for child in text)]:
+                value = getattr(holder, attribute)
+                if value and "\ue000" in value:
+                    setattr(holder, attribute, REFERENCE_MARK.sub(number, value))
+
     def finish(self) -> None:
-        """Page breaks and the table of contents, which go in once all paragraphs are there."""
+        """Page breaks, references and the table of contents, which go in once all paragraphs are there."""
+        # Before the TOC copies the headings, which may hold references.
+        self.references()
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs
         for index, start in self.page_starts.items():
@@ -746,9 +773,10 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 
 def convert_markdown(
     markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
-) -> None:
+) -> dict[str, str]:
     """Convert *markdown*, whose image paths are relative to *base_dir*, its captions numbered
-    *caption_numbering* (see the function of that name)."""
+    *caption_numbering* (see the function of that name). Return the "[@name]" references left as they are
+    written, by name: "missing" (no caption is named so) or "duplicate" (two are)."""
     doc = HwpxDocument.open(template_path)
     root = SyntaxTreeNode(PARSER.parse(markdown))
     writer = _Writer(doc, base_dir, root, by_chapter=caption_numbering == "chapter")
@@ -761,3 +789,4 @@ def convert_markdown(
             "변환한 문서가 HWPX 검증에 실패해 저장하지 않았습니다:\n" + "\n".join(str(issue) for issue in report.errors)
         )
     doc.save_to_path(out_path)
+    return writer.unresolved
