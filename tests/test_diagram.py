@@ -1,7 +1,11 @@
+import os
 import shutil
+import time
+from pathlib import Path
 
 import pytest
 
+from md2hwpx import diagram
 from md2hwpx.diagram import (
     DiagramError,
     find_diagram_blocks,
@@ -119,3 +123,28 @@ def test_render_diagrams_keeps_list_and_quote_prefix(tmp_path, monkeypatch):
     lines = result.split("\n")
     assert lines[0] == "1. 단계" and lines[3] == "2. 다음"
     assert lines[2].startswith("   ![](mermaid-") and lines[5].startswith("> ![](mermaid-")
+
+
+def test_render_times_out_and_ends_what_the_tool_started(tmp_path, monkeypatch):
+    # A tool that hangs, with a child of its own (as mmdc starts Chromium) that writes its pid.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    child = tmp_path / "child.pid"
+    tool = bin_dir / "mmdc"
+    tool.write_text(f"#!/bin/sh\nsleep 30 &\necho $! > {child}\nwait\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(diagram, "DIAGRAM_TIMEOUT", 1)
+
+    start = time.monotonic()
+    with pytest.raises(DiagramError, match="mmdc timed out after 1 s"):
+        render_mermaid(MERMAID, tmp_path / "out.png")
+
+    assert time.monotonic() - start < 10
+    # Gone, or a zombie where nothing reaps orphans (a container whose PID 1 is pytest): not running.
+    stat = Path(f"/proc/{int(child.read_text())}/stat")
+    deadline = time.monotonic() + 5
+    while stat.exists() and stat.read_text().rsplit(")", 1)[1].split()[0] != "Z" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    assert not (tmp_path / "out.png").exists()

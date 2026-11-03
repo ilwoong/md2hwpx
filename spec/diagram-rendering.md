@@ -76,6 +76,9 @@ def render_diagrams(markdown: str, out_dir: Path, link_base: Path | None = None)
 
 - `render_*` 는 도구가 0이 아닌 코드로 끝나거나 PNG 를 만들지 못하면 `DiagramError` 를 발생시킨다.
   메시지에는 도구의 stderr 를 포함한다.
+- 다이어그램 하나의 제한 시간은 60 초(`DIAGRAM_TIMEOUT`)다. 넘으면 도구를 끝내고
+  `DiagramError("<도구> timed out after 60 s")` 를 발생시킨다. 도구는 새 프로세스 그룹에서 실행하고 그룹째 끝낸다:
+  `mmdc` 가 띄운 Chromium 이 남으면 출력 파이프가 열려 있어 기다림이 끝나지 않는다.
 - `render_diagrams` 는 치환된 Markdown 문자열을 반환한다. 다이어그램이 없으면 입력을 그대로 반환한다.
 
 ## 검증 기준
@@ -87,4 +90,5 @@ def render_diagrams(markdown: str, out_dir: Path, link_base: Path | None = None)
 | mermaid PNG 생성 | `mmdc` 있을 때만 실행, PNG 시그니처 확인 |
 | plantuml PNG 생성 | `plantuml` 있을 때만 실행, PNG 시그니처 확인 |
 | 문법 오류 시 `DiagramError` | 각 도구로 잘못된 코드 렌더링 |
+| 제한 시간 | 멈추는 가짜 도구(자식 프로세스 포함)로 `DiagramError`, 기다림이 제한 시간 근처에서 끝나고 자식도 끝남 |
 | 치환 결과 | 이미지 링크 줄로 바뀌고 나머지 본문은 유지 |
