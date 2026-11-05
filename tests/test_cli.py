@@ -191,6 +191,33 @@ def test_cli_warns_about_unknown_styles(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "doc.hwpx").is_file()
 
 
+def test_cli_warns_about_column_widths_it_ignores(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text(
+        "---\nk: v\n---\n"
+        "<!-- [cols: 30%, 70%] -->\n| a | b |\n|---|---|\n\n"  # fine
+        "<!-- [cols: 50%] -->\n| a | b |\n|---|---|\n\n"
+        "<!-- [cols: 50, 50] -->\n| a | b |\n|---|---|\n\n"
+        "- 항목\n\n  <!--\n  [cols: 0%, 100%]\n  -->\n  | a | b |\n  |---|---|\n\n"
+        "<!-- [cols: 50%, 50%] -->\n\n문단\n\n"
+        "```\n<!-- [cols: 1%] -->\n```\n",  # in code: text
+        encoding="utf-8",
+    )
+
+    assert main([str(md), "-t", str(TEMPLATE)]) == 0
+
+    # Line numbers count the front matter; the HWPX is made, those tables at their automatic widths.
+    ignored = "md2hwpx: 경고: {}:{}: 열 너비 지정 [cols: …] 은 {} 무시했습니다"
+    assert capsys.readouterr().err.splitlines() == [
+        ignored.format(md, 8, "값 1개가 표의 열 2개와 달라"),
+        ignored.format(md, 12, "값이 모두 0 보다 큰 % 가 아니어서"),
+        ignored.format(md, 18, "값이 모두 0 보다 큰 % 가 아니어서"),
+        ignored.format(md, 24, "바로 뒤에 표가 없어"),
+    ]
+    assert (tmp_path / "doc.hwpx").is_file()
+
+
 def test_cli_warns_about_inline_and_reference_images(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     md = tmp_path / "doc.md"

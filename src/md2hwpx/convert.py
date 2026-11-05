@@ -601,10 +601,8 @@ class _Writer:
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
         texts = [[plain_text(runs) for runs in row] for row in cells]
-        # A "[cols: ...]" comment's percents count only with one for each column.
+        # A "[cols: ...]" comment's percents, one for each column (see parser._table_columns), or None.
         percents = node.meta.get("column_percents")
-        if percents is not None and len(percents) != len(cells[0]):
-            percents = None
         self.tables.append((table, self.width_at(quote, indent), texts, percents))  # sized in finish()
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
