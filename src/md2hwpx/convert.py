@@ -22,7 +22,7 @@ from md2hwpx.pieces import (
     Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, resolve_references, strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
-from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows
+from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows, percent_widths
 from md2hwpx.toc import TocRequest, add_toc, toc_entries, toc_request
 
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
@@ -197,9 +197,9 @@ class _Writer:
         self.names: dict[str, str | None] = {}
         # The references left as they are written, by name: "missing" (no caption is named so) or "duplicate".
         self.unresolved: dict[str, str] = {}
-        # Tables, with their width and cell texts, sized in finish(): a reference in a cell reads its number
-        # only then.
-        self.tables: list[tuple[object, int, list[list[str]]]] = []
+        # Tables, with their width, cell texts and the column percents a "[cols: ...]" comment gave (or None),
+        # sized in finish(): a reference in a cell reads its number only then.
+        self.tables: list[tuple[object, int, list[list[str]], list[float] | None]] = []
         # Each [TOC] marker: its paragraph index, what it asks for, and what its position asked for (a page
         # break, restart or hiding), done by the TOC's title.
         self.tocs: list[tuple[int, TocRequest, _PageStart]] = []
@@ -586,7 +586,11 @@ class _Writer:
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
         texts = [[plain_text(runs) for runs in row] for row in cells]
-        self.tables.append((table, self.width_at(quote, indent), texts))  # sized in finish()
+        # A "[cols: ...]" comment's percents count only with one for each column.
+        percents = node.meta.get("column_percents")
+        if percents is not None and len(percents) != len(cells[0]):
+            percents = None
+        self.tables.append((table, self.width_at(quote, indent), texts, percents))  # sized in finish()
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
             for c, runs in enumerate(row):
@@ -723,9 +727,12 @@ class _Writer:
         # Before the TOC copies the headings, which may hold references.
         self.references()
         # Once their cells read their references' numbers, not the names.
-        for table, width, texts in self.tables:
+        for table, width, texts, percents in self.tables:
             texts = [[resolve_references(text, self.number) for text in row] for row in texts]
-            table.set_column_widths(column_widths(texts, width, self.plain_size))
+            if percents is None:
+                table.set_column_widths(column_widths(texts, width, self.plain_size))
+            else:
+                table.set_column_widths(percent_widths(percents, width))
             fit_rows(table, self.doc, self.plain_line_height)
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs

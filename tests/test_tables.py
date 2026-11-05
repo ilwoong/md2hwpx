@@ -4,7 +4,7 @@ from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
 
-from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH
+from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
 
@@ -247,3 +247,34 @@ def test_convert_indented_tables_fit_the_body(tmp_path):
     # Each table, its cells too, ends at the body's right edge however far its paragraph is indented.
     assert [left for left, _, _ in placed] == [0, 1000, 1000, 3000]
     assert all(left + width == BODY_WIDTH and cells == width for left, width, cells in placed)
+
+
+def test_convert_table_column_percents(tmp_path):
+    md = tmp_path / "percents.md"
+    md.write_text(
+        "[표] 표 제목\n<!-- [cols: 30%, 70%] -->\n| 항목 | 내용 |\n| :--- | :---: |\n| 값 1 | 값 2 |\n\n"
+        "<!--\n[cols: 1%, 3%]\n-->\n\n| a | b |\n|---|---|\n\n"  # on its own lines; scaled to 100
+        "<!-- [cols: 50%] -->\n| 아주 긴 열 제목을 넣어 넓게 | b |\n|---|---|\n\n"  # not one per column
+        "<!-- [cols: 50, 50] -->\n| 아주 긴 열 제목을 넣어 넓게 | b |\n|---|---|\n\n"  # not percents
+        "- 항목\n\n  <!-- [cols: 25%, 75%] -->\n  | a | b |\n  |---|---|\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "percents.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    tables = doc.tables.all
+    widths = [[table.cell(0, c).width for c in range(2)] for table in tables]
+    # The comment leaves the caption on the table and goes into the document as nothing.
+    assert _text(tables[0].caption.element) == "[표 1] 표 제목"
+    assert all("cols" not in p.text for p in doc.paragraphs)
+    first = sum(widths[0])
+    assert first == TEXT_WIDTH
+    assert widths[0] == [round(first * 0.3), first - round(first * 0.3)]
+    assert widths[1] == [round(first * 0.25), first - round(first * 0.25)]
+    # Ignored: the widths come from the text, as without the comment.
+    assert widths[2][0] > widths[2][1] and widths[3] == widths[2]
+    indented = sum(widths[4])
+    assert indented < first and widths[4] == [round(indented * 0.25), indented - round(indented * 0.25)]
+    assert [tables[0].cell(1, c).width for c in range(2)] == widths[0]
