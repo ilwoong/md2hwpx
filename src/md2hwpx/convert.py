@@ -627,35 +627,31 @@ class _Writer:
         cell = table.cell(0, 0)
         cell.set_text("\n".join(code), split_paragraphs=True)
 
-        style = self.code_style
+        # The code's style, paragraph shape and character shape: the 코드블록 style's, or else the cell's own
+        # with D2Coding 9pt at 140%.
+        if self.code_style is not None:
+            style = self.code_style
+            style_id, para_pr, char_base = style.id, style.para_pr_id_ref, style.char_pr_id_ref
+        else:
+            first = cell.paragraphs[0]
+            style_id = first.style_id_ref
+            para_pr = self.para_format(first.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING)
+            char_base = self.char_format(first.char_pr_id_ref, font=CODE_FONT, size=CODE_SIZE)
 
-        def char_pr(base: str | None, color: str | None, bold: bool, italic: bool) -> str:
-            if style is not None:
-                # The style's own font and size; a token only adds its colour, bold and italic.
-                return self.char_format(
-                    style.char_pr_id_ref, color=color and f"#{color}", bold=bold or None, italic=italic or None
-                )
-            return self.char_format(
-                base, font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}", bold=bold, italic=italic
-            )
+        def char_pr(color: str | None, bold: bool, italic: bool) -> str:
+            # A token only adds its colour, bold and italic.
+            return self.char_format(char_base, color=color and f"#{color}", bold=bold or None, italic=italic or None)
 
         for paragraph, runs in zip(cell.paragraphs, _highlight(code, lang)):
-            base = paragraph.char_pr_id_ref
             paragraph.clear_text()
             if not runs:
-                paragraph.add_run("", char_pr_id_ref=char_pr(base, None, False, False))
+                paragraph.add_run("", char_pr_id_ref=char_pr(None, False, False))
             for text, token_style in runs:
                 paragraph.add_run(
-                    text,
-                    char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
+                    text, char_pr_id_ref=char_pr(token_style["color"], token_style["bold"], token_style["italic"])
                 )
-            if style is not None:
-                paragraph.style_id_ref = style.id
-                paragraph.para_pr_id_ref = style.para_pr_id_ref
-            else:
-                paragraph.para_pr_id_ref = self.para_format(
-                    paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING
-                )
+            paragraph.style_id_ref = style_id
+            paragraph.para_pr_id_ref = para_pr
         # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
         fit_rows(table, self.doc, self.code_line_height)
 
