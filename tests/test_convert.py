@@ -519,3 +519,25 @@ def test_convert_lists_after_headings(tmp_path):
         ("소절", "OUTLINE", heading_left(3)),
         ("번호", "NUMBER", BODY_LEFT),
     ]
+
+
+def test_convert_drops_html_comments(tmp_path):
+    md = tmp_path / "comments.md"
+    md.write_text(
+        "<!-- 블록 주석\n여러 줄 -->\n\n# 제목 <!-- 헤딩 주석 -->\n\n앞 <!-- 문단\n안 --> 뒤\n문단\n<!-- 문단을 끊는 주석 -->\n\n"
+        "`<!-- 코드 스팬 -->` <span>html</span>\n\n```\n<!-- 코드블록 -->\n```\n\n    <!-- 들여쓴 코드 -->\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "comments.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    assert [p.text for p in doc.paragraphs[1:]] == [
+        "제목",
+        "앞 뒤 문단",
+        "<!-- 코드 스팬 --> <span>html</span>",  # other raw HTML stays text
+        "",  # code block anchors
+        "",
+    ]
+    assert [t.cell(0, 0).text for t in doc.tables.all] == ["<!-- 코드블록 -->", "<!-- 들여쓴 코드 -->"]
