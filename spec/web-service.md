@@ -36,6 +36,12 @@ docker run --rm -p 8000:8000 md2hwpx-web
 변환 페이지. 입력 방식(파일 / zip / git 저장소)을 고르고, 템플릿을 선택해 올릴 수 있다.
 변환이 끝나면 응답 헤더의 파일 이름으로 내려받고, 실패하면 `detail` 메시지를 보여 준다.
 
+### `GET /template`
+
+기본 템플릿(내장 템플릿 `src/md2hwpx/template.hwpx`, `template` 을 비우고 변환할 때 쓰는 것)을 내려준다.
+`Content-Type: application/hwp+zip`, `Content-Disposition: attachment; filename="template.hwpx"`.
+변환 페이지의 "템플릿 바꾸기" 에 이 주소로 내려받는 링크가 있다.
+
 ### `POST /convert`
 
 `multipart/form-data`.
@@ -163,6 +169,6 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | 보안 | root 밖 이미지 3가지, zip slip, root 밖 `path`, http(s) 아닌 주소 4가지, 옵션 모양의 `ref`, 심볼릭 링크 제거, 업로드 크기 제한 |
 | 로그인 | 설정한 서버만 목록에 나옴, 로그인 이동 주소(client_id·redirect_uri·scope·state), 쿠키 속성, `state` 없음·다름 거부, 사용자 거절, 토큰 요청 형식과 토큰 없는 응답, 로그아웃, 브라우저마다 세션 |
 | 로그인 clone | 토큰을 환경 변수 헤더로 넘기고 명령줄에 없음, 다른 서버·이름이 이어지는 주소·사용자명 속임·다른 scheme 에는 안 보냄, 로그인 안 했으면 안내, 만료 토큰 안 씀. 가짜 GitLab(OAuth + 토큰을 요구하는 smart HTTP git)과 uvicorn 으로 로그인부터 변환까지 |
-| 템플릿 | 올린 템플릿으로 변환, HWPX 가 아닌 템플릿은 오류 |
+| 템플릿 | 올린 템플릿으로 변환, HWPX 가 아닌 템플릿은 오류, `GET /template` 가 내장 템플릿 그대로·내려받기 헤더, 페이지에 그 링크 |
 | 컨테이너 | `docker compose up` 후 세 입력 방식 모두 다이어그램 포함 변환, PlantUML `!include /etc/passwd` 실패, `nobody` 실행 |
 | 페이지 | 헤드리스 Chromium 으로 파일 올려 내려받기, 탭 전환, 오류 메시지 표시 |
