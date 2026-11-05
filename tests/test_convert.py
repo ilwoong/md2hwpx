@@ -3,7 +3,7 @@
 import pytest
 from hwpx import HwpxDocument
 
-from helpers import BODY_LEFT, HH, HP, _paragraph_info, _png
+from helpers import BODY_LEFT, HH, HP, _paragraph_info, _png, _template_with_code_style
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert, paragraph_styles
 from md2hwpx.source import unknown_styles
@@ -86,6 +86,28 @@ def test_convert_inline_code(tmp_path):
     assert runs(table.cell(1, 0).paragraphs[0]) == [("셀", True)]
     # Heading keeps its style and outline level.
     assert int(heading.style_id_ref) == doc.styles.resolve("개요 1").id
+
+
+def test_convert_inline_code_takes_the_code_styles_font(tmp_path):
+    md = tmp_path / "inline.md"
+    md.write_text("`code` 와 글\n\n| `셀` |\n|---|\n", encoding="utf-8")
+    out = tmp_path / "inline.hwpx"
+
+    convert(md, _template_with_code_style(tmp_path), out)
+
+    doc = HwpxDocument.open(out)
+
+    def shape(run):
+        char_pr = run.element.get("charPrIDRef")
+        fonts = [doc.styles.font_face(char_pr, lang) for lang in ("HANGUL", "LATIN")]
+        return run.text, fonts, doc.styles.char_property(char_pr).attributes["height"]
+
+    # The 코드블록 style's font (한컴돋움, 12pt), at the size of the text around it.
+    assert [shape(run) for run in doc.paragraphs[1].runs] == [
+        ("code", ["한컴돋움", "한컴돋움"], "1000"),
+        (" 와 글", ["휴먼명조", "휴먼명조"], "1000"),
+    ]
+    assert shape(doc.tables.all[0].cell(0, 0).paragraphs[0].runs[0])[1] == ["한컴돋움", "한컴돋움"]
 
 
 def test_convert_lists(tmp_path):

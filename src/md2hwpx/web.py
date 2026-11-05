@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from md2hwpx import oauth
 from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files
@@ -199,6 +199,12 @@ def _relative(path: Path, root: Path) -> str:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return INDEX.read_text(encoding="utf-8")
+
+
+@app.get("/template")
+def template() -> FileResponse:
+    """The template a conversion uses when none is uploaded, to download and change."""
+    return FileResponse(DEFAULT_TEMPLATE, media_type=HWPX_TYPE, filename="template.hwpx")
 
 
 @app.post("/convert")

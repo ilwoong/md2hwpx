@@ -1,6 +1,7 @@
 """What the tests share: the template's page body, Hancom XML names, test images and readers of the result."""
 
 import struct
+import zipfile
 import zlib
 
 from hwpx import HwpxDocument
@@ -53,3 +54,15 @@ def _new_numbers(paragraph) -> list[str]:
 def _paragraph_info(doc, p):
     pp = doc.styles.paragraph_property(p.para_pr_id_ref)
     return p.text, pp.heading.type, int(pp.margin.left)
+
+
+def _template_with_code_style(tmp_path):
+    """The bundled template with its 표내부 style (한컴돋움 12pt, 160%) renamed 코드블록."""
+    path = tmp_path / "code-style.hwpx"
+    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item)
+            if item.filename == "Contents/header.xml":
+                data = data.replace('name="표내부"'.encode(), 'name="코드블록"'.encode())
+            dst.writestr(item, data)
+    return path
