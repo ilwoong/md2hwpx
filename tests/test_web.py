@@ -56,6 +56,7 @@ def test_index_page():
     response = client.get("/")
     assert response.status_code == 200
     assert 'action' not in response.text and 'name="source"' in response.text
+    assert "코드블록 스타일이 있으면" in response.text  # the template's optional style is explained
 
 
 def test_files_with_image(tmp_path):

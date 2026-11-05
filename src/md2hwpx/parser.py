@@ -1,5 +1,6 @@
 """The Markdown parser shared by diagram rendering and HWPX conversion."""
 
+import itertools
 import re
 
 from markdown_it import MarkdownIt
@@ -19,6 +20,12 @@ _CUSTOM_STYLE = re.compile(r'\{\s*custom-style="([^"]*)"\s*\}')
 _COMMENT = re.compile(r"<!---?>|<!--.*?-->", re.DOTALL)
 # A comment block that sets the next table's column widths: "<!-- [cols: 30%, 70%] -->".
 _COLUMNS = re.compile(r"<!--\s*\[cols:\s*([^\]]*)\]\s*-->")
+# Why a "[cols: ...]" comment set no widths (see _table_columns), as a Korean clause.
+COLUMN_PROBLEMS = {
+    "values": "값이 모두 0 보다 큰 % 가 아니어서",
+    "no_table": "바로 뒤에 표가 없어",
+    "count": "값 {values}개가 표의 열 {columns}개와 달라",
+}
 _PERCENT = re.compile(r"\s*(\d+(?:\.\d+)?)\s*%\s*")
 
 
@@ -40,7 +47,7 @@ def _image_attributes(state: StateInline, silent: bool) -> bool:
 def _comment_block(state: StateBlock, start: int, end: int, silent: bool) -> bool:
     """Drop an HTML comment block: from a line starting with "<!--" to the line holding "-->" (CommonMark's
     HTML block kind 2, so the rest of that line goes too). A "[cols: ...]" one is kept as a "table_columns"
-    token, for _table_columns."""
+    token, for _table_columns: its percents, or None if they cannot be read."""
     if state.is_code_block(start):
         return False
     pos = state.bMarks[start] + state.tShift[start]
@@ -56,34 +63,55 @@ def _comment_block(state: StateBlock, start: int, end: int, silent: bool) -> boo
         line += 1
         if "-->" in text:
             break
-    percents = _column_percents(state.getLines(start, line, state.blkIndent, False).strip())
-    if percents is not None:
-        state.push("table_columns", "", 0).meta["percents"] = percents
+    match = _COLUMNS.fullmatch(state.getLines(start, line, state.blkIndent, False).strip())
+    if match is not None:
+        token = state.push("table_columns", "", 0)
+        token.meta["percents"] = _column_percents(match[1])
+        token.map = [start, line]
     state.line = line
     return True
 
 
-def _column_percents(comment: str) -> list[float] | None:
-    """The percents of a "<!-- [cols: 30%, 70%] -->" *comment*, or None if it is not one (or one is not
-    above 0)."""
-    match = _COLUMNS.fullmatch(comment)
-    if match is None:
-        return None
-    percents = [_PERCENT.fullmatch(part) for part in match[1].split(",")]
+def _column_percents(values: str) -> list[float] | None:
+    """The percents of a "[cols: ...]" comment's *values* ("30%, 70%"), or None if one is not a percent above 0."""
+    percents = [_PERCENT.fullmatch(part) for part in values.split(",")]
     if not all(percents) or not all(float(p[1]) > 0 for p in percents):
         return None
     return [float(p[1]) for p in percents]
 
 
 def _table_columns(state: StateCore) -> None:
-    """Put a "table_columns" token's percents on the table right after it (meta "column_percents"), and drop
-    the token: what comes before the comment, a caption line, then reads the table as the next block."""
+    """Put a "table_columns" token's percents on the table right after it (meta "column_percents") if there is
+    one value for each of its columns, and drop the token: what comes before the comment, a caption line, then
+    reads the table as the next block.
+
+    Comments that set no widths go in env "column_problems" as (line index, COLUMN_PROBLEMS key, number of
+    values, number of columns), for the warnings (see source.column_problems).
+    """
     tokens = []
     for k, token in enumerate(state.tokens):
         if token.type != "table_columns":
             tokens.append(token)
-        elif k + 1 < len(state.tokens) and state.tokens[k + 1].type == "table_open":
-            state.tokens[k + 1].meta["column_percents"] = token.meta["percents"]
+            continue
+        percents = token.meta["percents"]
+        following = state.tokens[k + 1 :]
+        columns = None
+        if following and following[0].type == "table_open":
+            # The header row's cells: markdown-it gives every row as many.
+            header = itertools.takewhile(lambda t: t.type != "tr_close", following)
+            columns = sum(t.type == "th_open" for t in header)
+        if percents is None:
+            problem = "values"
+        elif columns is None:
+            problem = "no_table"
+        elif len(percents) != columns:
+            problem = "count"
+        else:
+            following[0].meta["column_percents"] = percents
+            continue
+        state.env.setdefault("column_problems", []).append(
+            (token.map[0], problem, len(percents or []), columns)
+        )
     state.tokens = tokens
 
 

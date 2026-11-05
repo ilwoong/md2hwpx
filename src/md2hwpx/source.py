@@ -11,7 +11,7 @@ from urllib.parse import unquote
 from markdown_it.tree import SyntaxTreeNode
 
 from md2hwpx.images import ImageError, picture_data
-from md2hwpx.parser import PARSER, custom_style
+from md2hwpx.parser import COLUMN_PROBLEMS, PARSER, custom_style
 from md2hwpx.pieces import REFERENCE, marker_lines
 from md2hwpx.toc import toc_request
 
@@ -111,6 +111,17 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
                         for name in toc_request(words).styles if name not in styles
                     ]
     return found
+
+
+def column_problems(markdown: str) -> list[tuple[int, str]]:
+    """(line number, why) of each "[cols: ...]" comment that sets no column widths, the table after it
+    (if any) taking them from its text; "why" is a Korean clause (see parser.COLUMN_PROBLEMS)."""
+    env: dict = {}
+    PARSER.parse(_blank_front_matter(markdown), env)
+    return [
+        (line + 1, COLUMN_PROBLEMS[problem].format(values=values, columns=columns))
+        for line, problem, values, columns in env.get("column_problems", [])
+    ]
 
 
 def read_markdown(md_path: Path) -> str:

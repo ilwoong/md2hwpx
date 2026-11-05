@@ -15,7 +15,8 @@ from hwpx.errors import HwpxError
 from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, paragraph_styles
 from md2hwpx.diagram import DiagramError, render_diagrams
 from md2hwpx.source import (
-    ConversionError, caption_numbering, read_markdown, references, unknown_styles, unusable_images,
+    ConversionError, caption_numbering, column_problems, read_markdown, references, unknown_styles,
+    unusable_images,
 )
 
 # Why a "[@name]" reference was left as written (see convert_markdown), as a Korean clause.
@@ -54,8 +55,8 @@ class ConversionWarning(NamedTuple):
 
 def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[ConversionWarning]:
     """What the HWPX is made despite in *md*, in line order: images shown as a placeholder (see
-    unusable_images), styles the template lacks that custom-style divs or [TOC] name (see unknown_styles)
-    and the references left as written, *unresolved* (see convert_markdown)."""
+    unusable_images), styles the template lacks that custom-style divs or [TOC] name (see unknown_styles),
+    "[cols: ...]" comments that set no widths (see column_problems) and the references left as written, *unresolved* (see convert_markdown)."""
     markdown = md.read_text(encoding="utf-8")
     found = [
         ConversionWarning(md, line, f"{why} 대체 이미지를 넣었습니다", image)
@@ -64,6 +65,10 @@ def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[Co
     found += [
         ConversionWarning(md, line, f"템플릿에 '{name}' 문단 스타일이 없어 {result}")
         for line, name, result in unknown_styles(markdown, styles)
+    ]
+    found += [
+        ConversionWarning(md, line, f"열 너비 지정 [cols: …] 은 {why} 무시했습니다")
+        for line, why in column_problems(markdown)
     ]
     found += [
         ConversionWarning(
