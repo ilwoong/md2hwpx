@@ -1,12 +1,10 @@
 """Tables and code blocks (a code block is a 1x1 table): layout, widths, row heights, highlighting."""
 
-import zipfile
-
 from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
 
-from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _text
+from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _template_with_code_style, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
 
@@ -280,18 +278,6 @@ def test_convert_table_column_percents(tmp_path):
     indented = sum(widths[4])
     assert indented < first and widths[4] == [round(indented * 0.25), indented - round(indented * 0.25)]
     assert [tables[0].cell(1, c).width for c in range(2)] == widths[0]
-
-
-def _template_with_code_style(tmp_path):
-    """The bundled template with its 표내부 style (한컴돋움 12pt, 160%) renamed 코드블록."""
-    path = tmp_path / "code-style.hwpx"
-    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
-        for item in src.infolist():
-            data = src.read(item)
-            if item.filename == "Contents/header.xml":
-                data = data.replace('name="표내부"'.encode(), 'name="코드블록"'.encode())
-            dst.writestr(item, data)
-    return path
 
 
 def test_convert_code_block_takes_the_templates_code_style(tmp_path):
