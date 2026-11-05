@@ -4,6 +4,7 @@ import re
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_block import StateBlock
+from markdown_it.rules_core import StateCore
 from markdown_it.rules_inline import StateInline
 from mdit_py_plugins.container import container_plugin
 from mdit_py_plugins.footnote import footnote_plugin
@@ -16,6 +17,9 @@ _IMAGE_ATTRIBUTES = ("width", "height")
 _CUSTOM_STYLE = re.compile(r'\{\s*custom-style="([^"]*)"\s*\}')
 # An HTML comment, as CommonMark reads one: "<!-->", "<!--->" or "<!--" ... "-->".
 _COMMENT = re.compile(r"<!---?>|<!--.*?-->", re.DOTALL)
+# A comment block that sets the next table's column widths: "<!-- [cols: 30%, 70%] -->".
+_COLUMNS = re.compile(r"<!--\s*\[cols:\s*([^\]]*)\]\s*-->")
+_PERCENT = re.compile(r"\s*(\d+(?:\.\d+)?)\s*%\s*")
 
 
 def _image_attributes(state: StateInline, silent: bool) -> bool:
@@ -35,7 +39,8 @@ def _image_attributes(state: StateInline, silent: bool) -> bool:
 
 def _comment_block(state: StateBlock, start: int, end: int, silent: bool) -> bool:
     """Drop an HTML comment block: from a line starting with "<!--" to the line holding "-->" (CommonMark's
-    HTML block kind 2, so the rest of that line goes too)."""
+    HTML block kind 2, so the rest of that line goes too). A "[cols: ...]" one is kept as a "table_columns"
+    token, for _table_columns."""
     if state.is_code_block(start):
         return False
     pos = state.bMarks[start] + state.tShift[start]
@@ -51,8 +56,35 @@ def _comment_block(state: StateBlock, start: int, end: int, silent: bool) -> boo
         line += 1
         if "-->" in text:
             break
+    percents = _column_percents(state.getLines(start, line, state.blkIndent, False).strip())
+    if percents is not None:
+        state.push("table_columns", "", 0).meta["percents"] = percents
     state.line = line
     return True
+
+
+def _column_percents(comment: str) -> list[float] | None:
+    """The percents of a "<!-- [cols: 30%, 70%] -->" *comment*, or None if it is not one (or one is not
+    above 0)."""
+    match = _COLUMNS.fullmatch(comment)
+    if match is None:
+        return None
+    percents = [_PERCENT.fullmatch(part) for part in match[1].split(",")]
+    if not all(percents) or not all(float(p[1]) > 0 for p in percents):
+        return None
+    return [float(p[1]) for p in percents]
+
+
+def _table_columns(state: StateCore) -> None:
+    """Put a "table_columns" token's percents on the table right after it (meta "column_percents"), and drop
+    the token: what comes before the comment, a caption line, then reads the table as the next block."""
+    tokens = []
+    for k, token in enumerate(state.tokens):
+        if token.type != "table_columns":
+            tokens.append(token)
+        elif k + 1 < len(state.tokens) and state.tokens[k + 1].type == "table_open":
+            state.tokens[k + 1].meta["column_percents"] = token.meta["percents"]
+    state.tokens = tokens
 
 
 def _comment_inline(state: StateInline, silent: bool) -> bool:
@@ -77,7 +109,8 @@ def custom_style(info: str) -> str | None:
 
 
 # CommonMark with GFM tables and strikethrough, footnotes, image attributes and custom-style divs
-# ("container_div" nodes; any other ":::" block stays text). HTML comments are dropped; other raw HTML stays text.
+# ("container_div" nodes; any other ":::" block stays text). HTML comments are dropped, a "[cols: ...]" one
+# setting the next table's column widths (its "column_percents" meta); other raw HTML stays text.
 PARSER = (
     MarkdownIt("commonmark", {"html": False})
     .enable(["table", "strikethrough"])
@@ -87,3 +120,4 @@ PARSER = (
 PARSER.inline.ruler.push("image_attributes", _image_attributes)
 PARSER.block.ruler.before("html_block", "comment_block", _comment_block, {"alt": ["paragraph", "reference", "blockquote"]})
 PARSER.inline.ruler.before("html_inline", "comment_inline", _comment_inline)
+PARSER.core.ruler.after("block", "table_columns", _table_columns)

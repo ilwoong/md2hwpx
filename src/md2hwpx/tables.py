@@ -43,7 +43,13 @@ def column_widths(cells: list[list[str]], total: int, size: int) -> list[int]:
     return _share(total, longest_word)
 
 
-def _share(total: int, weights: list[int]) -> list[int]:
+def percent_widths(percents: list[float], total: int) -> list[int]:
+    """The width of each column at *percents* of *total*, adding up to *total*: percents that do not add
+    up to 100 are scaled to."""
+    return _share(total, percents)
+
+
+def _share(total: int, weights: list[float]) -> list[int]:
     """*total* split in proportion to *weights*, the parts adding up to exactly *total*."""
     if not any(weights):
         weights = [1] * len(weights)
