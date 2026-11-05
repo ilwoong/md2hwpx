@@ -131,10 +131,14 @@ def caption_line(runs: list[Run]) -> tuple[str, str | None, list[Run]] | None:
 
 def _lines(inline: SyntaxTreeNode) -> list[tuple[int, list[SyntaxTreeNode]]]:
     """A paragraph's inline content line by line (split at its soft breaks), each line with its offset in
-    the paragraph's source lines: a hard break ends a source line too, though it stays in its line."""
+    the paragraph's source lines: a hard break ends a source line too, though it stays in its line, and so
+    does each line break of a comment ("html_comment"), which is in no line."""
     lines: list[tuple[int, list[SyntaxTreeNode]]] = [(0, [])]
     offset = 0
     for child in inline.children:
+        if child.type == "html_comment":
+            offset += child.content.count("\n")
+            continue
         if child.type in ("softbreak", "hardbreak"):
             offset += 1
         if child.type == "softbreak":

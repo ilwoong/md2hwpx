@@ -89,7 +89,10 @@ def _table_columns(state: StateCore) -> None:
 
 def _comment_inline(state: StateInline, silent: bool) -> bool:
     """Drop an HTML comment inside a paragraph, heading or table cell, with the spaces it leaves doubled
-    ("앞 <!-- x --> 뒤" → "앞 뒤") or trailing ("제목 <!-- x -->" → "제목")."""
+    ("앞 <!-- x --> 뒤" → "앞 뒤") or trailing ("제목 <!-- x -->" → "제목").
+
+    One running over lines leaves an "html_comment" token holding it, which writes nothing: the source lines
+    it took still count where a line's number is worked out from the soft breaks (see pieces._lines)."""
     match = _COMMENT.match(state.src, state.pos)
     if match is None:
         return False
@@ -99,6 +102,8 @@ def _comment_inline(state: StateInline, silent: bool) -> bool:
             state.pos += 1
         if state.pos == state.posMax and not silent:
             state.pending = state.pending.rstrip(" ")
+    if "\n" in match[0] and not silent:
+        state.push("html_comment", "", 0).content = match[0]
     return True
 
 
