@@ -1,5 +1,7 @@
 """Tables and code blocks (a code block is a 1x1 table): layout, widths, row heights, highlighting."""
 
+import zipfile
+
 from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
@@ -247,3 +249,40 @@ def test_convert_indented_tables_fit_the_body(tmp_path):
     # Each table, its cells too, ends at the body's right edge however far its paragraph is indented.
     assert [left for left, _, _ in placed] == [0, 1000, 1000, 3000]
     assert all(left + width == BODY_WIDTH and cells == width for left, width, cells in placed)
+
+
+def _template_with_code_style(tmp_path):
+    """The bundled template with its 표내부 style (한컴돋움 12pt, 160%) renamed 코드블록."""
+    path = tmp_path / "code-style.hwpx"
+    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item)
+            if item.filename == "Contents/header.xml":
+                data = data.replace('name="표내부"'.encode(), 'name="코드블록"'.encode())
+            dst.writestr(item, data)
+    return path
+
+
+def test_convert_code_block_takes_the_templates_code_style(tmp_path):
+    template = _template_with_code_style(tmp_path)
+    md = tmp_path / "code.md"
+    md.write_text("```python\ndef f():\n    return 1\n```\n", encoding="utf-8")
+    out = tmp_path / "code.hwpx"
+
+    convert(md, template, out)
+
+    doc = HwpxDocument.open(out)
+    style = doc.styles.resolve("코드블록")
+    cell = doc.tables.all[0].cell(0, 0)
+    colors = {}
+    for p in cell.paragraphs:
+        assert (p.style_id_ref, p.para_pr_id_ref) == (str(style.id), str(style.para_pr_id_ref))
+        for run in p.runs:
+            char_pr_id = run.element.get("charPrIDRef")
+            assert doc.styles.char_property(char_pr_id).attributes["height"] == "1200"
+            assert doc.styles.font_face(char_pr_id, "HANGUL") == "한컴돋움"
+            colors[run.text] = doc.styles.char_property(char_pr_id)
+    # Highlighting still colours the tokens on top of the style.
+    assert colors["def"].attributes["textColor"] == "#008000" and "bold" in colors["def"].child_attributes
+    # Rows are sized at the style's line height: 12pt at 160%.
+    assert cell.height == 2 * 1920 + 141 * 2

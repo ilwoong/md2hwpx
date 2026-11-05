@@ -35,6 +35,7 @@ HEADING_STYLE = "개요 {}"  # .format(level)
 BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
+CODE_STYLE = "코드블록"  # optional: without it, code blocks use CODE_FONT, CODE_SIZE and CODE_LINE_SPACING
 HEADER_FILL = "#D9D9D9"
 TABLE_BORDER = {"border_color": "#000000", "border_width": "0.12 mm"}  # the template's table border
 TABLE_SIDES = ["LEFT", "RIGHT", "TOP", "BOTTOM"]
@@ -51,6 +52,7 @@ CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 
 # narrower than the body is centred rather than left at the margin.
 PICTURE_REDUCED_ALIGN = "CENTER"
 OBJECT_SPACING = 1400  # HWPUNIT outside a table, code block or picture, above and below: about one 10pt line
+# A code block's shape when the template has no CODE_STYLE.
 CODE_FONT = "D2Coding"
 CODE_SIZE = 9  # pt
 CODE_LINE_SPACING = 140  # %
@@ -165,6 +167,12 @@ class _Writer:
         self.caption_style = doc.styles.resolve(CAPTION_STYLE)
         self.heading_styles: dict[int, Style] = {}
         self.paragraph_styles = _paragraph_styles(doc)
+        # Code blocks take the template's 코드블록 style if it has one, else D2Coding 9pt at 140%.
+        self.code_style = self.paragraph_styles.get(CODE_STYLE)
+        if self.code_style is None:
+            self.code_line_height = _line_height(CODE_SIZE, CODE_LINE_SPACING)
+        else:
+            self.code_line_height = _line_metrics(doc, self.code_style)[1]
         self.text_style = self.body_style  # of text paragraphs: 본문, or the custom-style div's they are in
         # add_table / add_picture take only the style id from style=, so pass its paragraph shape too.
         self.body = {"style": self.body_style, "para_pr_id_ref": self.body_style.para_pr_id_ref}
@@ -615,7 +623,14 @@ class _Writer:
         cell = table.cell(0, 0)
         cell.set_text("\n".join(code), split_paragraphs=True)
 
+        style = self.code_style
+
         def char_pr(base: str | None, color: str | None, bold: bool, italic: bool) -> str:
+            if style is not None:
+                # The style's own font and size; a token only adds its colour, bold and italic.
+                return self.char_format(
+                    style.char_pr_id_ref, color=color and f"#{color}", bold=bold or None, italic=italic or None
+                )
             return self.char_format(
                 base, font=CODE_FONT, size=CODE_SIZE, color=color and f"#{color}", bold=bold, italic=italic
             )
@@ -630,9 +645,15 @@ class _Writer:
                     text,
                     char_pr_id_ref=char_pr(base, token_style["color"], token_style["bold"], token_style["italic"]),
                 )
-            paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING)
+            if style is not None:
+                paragraph.style_id_ref = style.id
+                paragraph.para_pr_id_ref = style.para_pr_id_ref
+            else:
+                paragraph.para_pr_id_ref = self.para_format(
+                    paragraph.para_pr_id_ref, line_spacing_percent=CODE_LINE_SPACING
+                )
         # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
-        fit_rows(table, self.doc, _line_height(CODE_SIZE, CODE_LINE_SPACING))
+        fit_rows(table, self.doc, self.code_line_height)
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""
