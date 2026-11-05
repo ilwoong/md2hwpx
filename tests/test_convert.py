@@ -403,6 +403,19 @@ def test_unknown_styles(tmp_path):
     assert "요약문-본문" in paragraph_styles(TEMPLATE) and "본문" in paragraph_styles(TEMPLATE)
 
 
+def test_unknown_styles_line_numbers_count_comment_lines(tmp_path):
+    # A comment running over lines inside a paragraph takes its source lines with it, not its line breaks.
+    markdown = '글 <!-- 여러\n줄 -->\n[TOC 스타일="없음"]\n\n글 <!-- 한 줄 --> 끝\n[TOC 스타일="둘"] <!-- 뒤\n주석 -->\n'
+    assert unknown_styles(markdown, set()) == [(3, "없음", "차례에 모을 수 없습니다"), (6, "둘", "차례에 모을 수 없습니다")]
+    # The comment still writes nothing, and the TOC marker after it is still one.
+    md = tmp_path / "comment.md"
+    md.write_text("앞 <!-- 여러\n줄 --> 뒤\n[TOC]\n\n# 제목\n", encoding="utf-8")
+    out = tmp_path / "comment.hwpx"
+    convert(md, TEMPLATE, out)
+    texts = [p.text for p in HwpxDocument.open(out).paragraphs[1:]]
+    assert texts[0] == "앞 뒤" and "[TOC]" not in texts
+
+
 def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
     from hwpx.tools.validator import ValidationIssue, ValidationReport
 
