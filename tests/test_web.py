@@ -283,6 +283,15 @@ def test_uploaded_template(tmp_path):
     assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["A"]
 
 
+def test_default_template_download():
+    response = client.get("/template")
+    assert response.status_code == 200
+    assert response.content == TEMPLATE.read_bytes()
+    assert response.headers["content-type"] == "application/hwp+zip"
+    assert response.headers["content-disposition"] == 'attachment; filename="template.hwpx"'
+    assert 'href="template"' in client.get("/").text
+
+
 def test_uploaded_template_that_is_not_hwpx():
     files = [("files", ("doc.md", b"# A\n", "text/markdown")), ("template", ("t.hwpx", b"not a template"))]
     assert _error(client.post("/convert", data={"source": "files"}, files=files))
