@@ -248,6 +248,31 @@ def test_convert_table_row_heights_match_hancom(tmp_path):
     assert heights == [lines * 1800 + 141 * 2 for lines in (1, 2, 1, 2, 1)]
 
 
+def test_convert_row_heights_measure_each_run_in_its_face(tmp_path):
+    md = tmp_path / "runs.md"
+    # Cells with inline code amid their text, and a code block line, with the line counts Hancom laid them
+    # out in (its saved lineseg). The code is D2Coding, half an em to every Latin character: measured in the
+    # cell's first face, or in python-hwpx's guess at a face it has no widths for, they took a line less or more.
+    text = "앞부분 `inline_code(x, y)` 가운데 표의 셀 높이가 실제 줄 수에 맞는지 확인하기 위"
+    more = "한 문장입니다 줄바꿈이 어디서 일어나는지 봅니다 표의 셀 높이가 실제 줄 수에 맞는"
+    md.write_text(
+        "<!-- [cols: 15%, 85%] -->\n| 번호 | 내용 |\n|---|---|\n"
+        f"| 1 | {text} |\n"
+        f"| 2 | {text}한 |\n"
+        f"| 4 | {text}{more} |\n"
+        f"| 7 | {text}{more}지 확인하기 위한 문장입니다 줄바꿈이 어디서 일어나는지 봅니다 표의 셀 높이가 실제 |\n\n"
+        "```\nresult = compute_value(alpha, beta, gamma) + offset * scale  # 한글 주석도 들어갑니다 result = compute_v\n```\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "runs.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    table, code = HwpxDocument.open(out).tables.all
+    assert [table.cell(r, 1).height for r in range(1, 5)] == [lines * 1800 + 141 * 2 for lines in (1, 2, 3, 4)]
+    assert code.cell(0, 0).height == 1260 + 141 * 2
+
+
 def test_convert_indented_tables_fit_the_body(tmp_path):
     md = tmp_path / "indented.md"
     long = "아주 긴 열 제목을 넣어 표가 본문 폭을 채우게 함"
