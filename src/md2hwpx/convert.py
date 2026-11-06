@@ -19,7 +19,8 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    Piece, Run, block_kind, caption_line, inline_runs, paragraph_pieces, plain_text, resolve_references, strip_runs,
+    Piece, Run, block_kind, caption_line, cell_lines, inline_runs, paragraph_pieces, plain_text, resolve_references,
+    strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows, percent_widths
@@ -593,38 +594,41 @@ class _Writer:
 
     def table(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
         rows = [tr for section in node.children for tr in section.children]
+        # Each cell as its lines (see cell_lines), each line the runs of one of its paragraphs.
         cells = [
-            [inline_runs(cell.children[0].children) if cell.children else [] for cell in tr.children] for tr in rows
+            [cell_lines(inline_runs(cell.children[0].children)) if cell.children else [[]] for cell in tr.children]
+            for tr in rows
         ]
         aligns = [_ALIGN.get(cell.attrs.get("style", "")) for cell in rows[0].children]
         table = self.add_table(len(cells), len(cells[0]), quote, indent)
         # The header row's cells ("header") come again at the top of each page the table runs on to.
         table.element.set("repeatHeader", "1")
-        texts = [[plain_text(runs) for runs in row] for row in cells]
+        texts = [["\n".join(plain_text(line) for line in lines) for lines in row] for row in cells]
         # A "[cols: ...]" comment's percents, one for each column (see parser._table_columns), or None.
         percents = node.meta.get("column_percents")
         self.tables.append((table, self.width_at(quote, indent), texts, percents))  # sized in finish()
         self.set_caption(table, "TOP")
         for r, row in enumerate(cells):
-            for c, runs in enumerate(row):
+            for c, lines in enumerate(row):
                 cell = table.cell(r, c)
-                cell.text = plain_text(runs)
-                paragraph = cell.paragraphs[0]
-                # 바탕글 (휴먼명조): a table's text is not body text, and the 본문 style's first-line
-                # indent would shift every cell in from its left edge.
-                self.plain(paragraph)
-                if aligns[c]:
-                    paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
+                cell.set_text(texts[r][c], split_paragraphs=len(lines) > 1)  # a paragraph a line
                 if r == 0:
                     cell.element.set("header", "1")
-                    paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
                     # Shaded, keeping the table's own border: set_cell_shading looks a border fill up by
                     # fill colour alone, and the template's #D9D9D9 one has no borders at all.
                     cell.element.set(
                         "borderFillIDRef",
                         self.border_fill(fill_color=HEADER_FILL, active_borders=TABLE_SIDES, **TABLE_BORDER),
                     )
-                self.write_runs(paragraph, runs)
+                for paragraph, runs in zip(cell.paragraphs, lines):
+                    # 바탕글 (휴먼명조): a table's text is not body text, and the 본문 style's first-line
+                    # indent would shift every cell in from its left edge.
+                    self.plain(paragraph)
+                    if aligns[c]:
+                        paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
+                    if r == 0:
+                        paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
+                    self.write_runs(paragraph, runs)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
         table = self.add_table(1, 1, quote, indent)

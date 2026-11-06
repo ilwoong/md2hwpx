@@ -25,7 +25,8 @@ def _text_width(text: str, size: int) -> int:
 
 
 def column_widths(cells: list[list[str]], total: int, size: int) -> list[int]:
-    """The width of each column of the table whose cell texts are *cells*, in HWPUNIT, adding up to *total*.
+    """The width of each column of the table whose cell texts are *cells* (a cell's lines apart by "\n"), in
+    HWPUNIT, adding up to *total*.
 
     A column is first as wide as its longest cell's text at *size* pt plus the cell padding, so that text
     stays on one line; with room to spare the extra goes to the columns that asked for more. Only when the
@@ -33,11 +34,12 @@ def column_widths(cells: list[list[str]], total: int, size: int) -> list[int]:
     anyway.
     """
     columns = len(cells[0])
-    one_line: list[int] = []  # the widest cell of the column, and the width it wants
+    one_line: list[int] = []  # the widest line of the column, and the width it wants
     longest_word: list[int] = []  # its longest unbreakable word: the narrowest the column can be
     for c in range(columns):
         texts = [row[c] for row in cells]
-        one_line.append(max(_text_width(text, size) for text in texts) + CELL_MARGIN_LR * 2)
+        lines = [line for text in texts for line in text.split("\n")]
+        one_line.append(max(_text_width(line, size) for line in lines) + CELL_MARGIN_LR * 2)
         words = [word for text in texts for word in text.split()]
         longest_word.append(max((_text_width(word, size) for word in words), default=0) + CELL_MARGIN_LR * 2)
 
