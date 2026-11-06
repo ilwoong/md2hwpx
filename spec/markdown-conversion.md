@@ -46,6 +46,7 @@ Markdown 파싱에는 [markdown-it-py](https://github.com/executablebooks/markdo
 
 내장 템플릿(`src/md2hwpx/template.hwpx`)은 `개요 1` 의 문단 모양에 "문단 앞에서 항상 쪽 나눔"
 (`hh:breakSetting pageBreakBefore="1"`)을 켜 두어, 수준 1 헤딩(장)이 새 쪽에서 시작한다. `개요 2` 이하는 켜지 않는다.
+`개요 2`~`개요 6` 은 문단 위 간격을 두어 앞 블록과 띄운다: 16pt, 14pt, 12pt, 10pt, 10pt (`hc:prev` 1600·1400·1200·1000·1000).
 
 ## Front matter
 
