@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import tempfile
@@ -95,14 +96,21 @@ def convert_input(input_path: Path, template: Path, output: Path) -> list[Conver
     return [w for f in files for w in _warnings(f, styles, unresolved)]
 
 
-def _output_path(input_path: Path, output: Path | None) -> Path:
+def _output_path(input_path: Path, output: str | None) -> Path:
     """Where to save: "<input name>.hwpx" in *output* if it is a folder (or the current folder
-    if it is omitted), else *output*; numbered "-1", "-2", ... so no existing file is overwritten."""
+    if it is omitted), else *output*; numbered "-1", "-2", ... so no existing file is overwritten.
+    An *output* ending in "/" is a folder, made with its parents if it is not there yet."""
     name = (input_path.resolve().name if input_path.is_dir() else input_path.stem) + ".hwpx"
     if output is None:
         output = Path(name)
-    elif output.is_dir():
-        output = output / name
+    else:
+        # Path drops the trailing "/", so it is read off the argument as given.
+        folder = output.endswith(("/", os.sep))
+        output = Path(output)
+        if folder:
+            output.mkdir(parents=True, exist_ok=True)
+        if output.is_dir():
+            output = output / name
     candidate, number = output, 0
     while candidate.exists():
         number += 1
@@ -114,8 +122,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="md2hwpx", description="Markdown 파일을 HWPX 파일로 변환한다.")
     parser.add_argument("input", type=Path, help="변환할 Markdown 파일, 또는 .md 파일들이 있는 폴더")
     parser.add_argument(
-        "-o", "--output", type=Path,
-        help="저장할 HWPX 파일 또는 폴더 (기본: 현재 폴더의 '입력 이름.hwpx'). 파일이 있으면 이름 뒤에 -1, -2 ... 를 붙인다",
+        "-o", "--output",
+        help="저장할 HWPX 파일 또는 폴더 (기본: 현재 폴더의 '입력 이름.hwpx'). 끝이 / 이면 폴더이고, 없으면 만든다. "
+        "파일이 있으면 이름 뒤에 -1, -2 ... 를 붙인다",
     )
     parser.add_argument(
         "-t", "--template", type=Path,

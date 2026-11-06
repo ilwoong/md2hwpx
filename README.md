@@ -51,8 +51,9 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 ```sh
 # Docker (다이어그램 렌더링 도구 포함). 어느 폴더에서나 실행할 수 있다.
 /path/to/md2hwpx/md2hwpx.sh docs/guide.md -o docs/
+/path/to/md2hwpx/md2hwpx.sh ~/notes/guide.md -o ~/결과/   # 현재 폴더 밖의 입력·출력
 
-# 위 스크립트가 실행하는 명령 (저장소 루트에서)
+# 스크립트 없이 실행 (저장소 루트에서, 현재 폴더 안의 경로만)
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
     python -m md2hwpx docs/guide.md -o docs/
 
@@ -61,13 +62,14 @@ uv run md2hwpx docs/guide.md          # ./guide.hwpx
 uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 합쳐 ./chapters.hwpx
 ```
 
-- `md2hwpx.sh` 는 현재 폴더를 컨테이너에 마운트하므로 입력·출력·템플릿은 현재 폴더 안에 있어야 한다.
+- `md2hwpx.sh` 는 현재 폴더와 입력·출력·템플릿이 있는 폴더를 컨테이너의 같은 경로에 마운트하므로, 경로는 현재 폴더 밖이어도 된다.
+  입력 문서의 이미지는 입력 폴더(파일이면 그 파일이 있는 폴더) 또는 현재 폴더 안에 있어야 한다.
 - 인자 없이 실행하면 도움말을 보여 준다.
 - 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
   폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
   하위 폴더는 읽지 않는다.
 - `-o`, `--output`: 저장할 HWPX 파일 또는 폴더.
-  - 폴더면 그 폴더에 `입력 이름.hwpx` 로 저장한다.
+  - 폴더면 그 폴더에 `입력 이름.hwpx` 로 저장한다. `/` 로 끝나면 폴더로 보고, 없으면 상위 폴더까지 만든다.
   - 생략하면 현재 작업 폴더에 `입력 이름.hwpx` 로 저장한다.
   - 같은 이름의 파일이 있으면 덮어쓰지 않고 `이름-1.hwpx`, `이름-2.hwpx` ... 로 저장한다.
 - `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`, 그것도 없으면 내장 템플릿

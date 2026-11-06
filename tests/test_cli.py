@@ -71,6 +71,17 @@ def test_cli_output_folder(tmp_path):
     assert (out_dir / "doc.hwpx").is_file()
 
 
+def test_cli_output_new_folder(tmp_path, capsys):
+    md = tmp_path / "doc.md"
+    md.write_text("본문\n", encoding="utf-8")
+    out_dir = tmp_path / "new" / "out"
+
+    # Ending in "/", the output is a folder, made with its parents: not a file named "out".
+    assert main([str(md), "-o", f"{out_dir}/", "-t", str(TEMPLATE)]) == 0
+    assert (out_dir / "doc.hwpx").is_file()
+    assert capsys.readouterr().out.strip() == str(out_dir / "doc.hwpx")
+
+
 def test_cli_does_not_overwrite(tmp_path, capsys):
     md = tmp_path / "doc.md"
     md.write_text("본문\n", encoding="utf-8")
