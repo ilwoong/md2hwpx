@@ -108,6 +108,26 @@ def strip_runs(runs: list[Run]) -> list[Run]:
     return runs
 
 
+# "<br>", "<br/>" or "<br />" in a table cell: its next line, as GitHub shows it (a GFM row is one line).
+_CELL_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
+def cell_lines(runs: list[Run]) -> list[list[Run]]:
+    """A table cell's *runs* cut into its lines at each "<br>", each line without the white space around
+    it. Inline code keeps a "<br>" as text."""
+    lines: list[list[Run]] = [[]]
+    for run in runs:
+        if "code" in run.marks or run.note is not None:
+            lines[-1].append(run)
+            continue
+        for index, part in enumerate(_CELL_BREAK.split(run.text)):
+            if index:
+                lines.append([])
+            if part:
+                lines[-1].append(run._replace(text=part))
+    return [strip_runs(line) for line in lines]
+
+
 def block_kind(node: SyntaxTreeNode | None) -> str | None:
     """The block's type, or "image" for a paragraph that starts with an image (a caption may precede it)."""
     if node is None:

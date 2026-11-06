@@ -7,6 +7,7 @@ from hwpx.layout import lint_layout
 from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _template_with_code_style, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
+from md2hwpx.tables import column_widths
 
 
 def test_convert_code_block(tmp_path):
@@ -142,6 +143,45 @@ def test_convert_table(tmp_path):
         assert cell.height == 2082
     assert table.element.find(f"{HP}sz").get("height") == str(2082 * 3)
     assert doc.paragraphs[-1].text == "뒤 문단"
+
+
+def test_convert_table_cell_line_breaks(tmp_path):
+    md = tmp_path / "lines.md"
+    # "<br>" in a cell, as GitHub shows it: the cell's next paragraph. Inline code keeps it as text.
+    md.write_text(
+        "| 머리<BR/>둘째 | 오른쪽 |\n|---|--:|\n"
+        "| 첫 줄 <br> **둘째** 줄<br />`a<br>b` | 짧음<br>긴 둘째 줄 글자 |\n"
+        "| 빈 줄 사이<br><br>끝 | x |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "lines.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    table = doc.tables.all[0]
+
+    def lines(r, c):
+        return [p.text for p in table.cell(r, c).paragraphs]
+
+    assert lines(0, 0) == ["머리", "둘째"]
+    assert lines(1, 0) == ["첫 줄", "둘째 줄", "a<br>b"]
+    assert lines(1, 1) == ["짧음", "긴 둘째 줄 글자"]
+    assert lines(2, 0) == ["빈 줄 사이", "", "끝"]
+    char = doc.styles.char_property
+    header = table.cell(0, 0).paragraphs
+    # Each line takes the cell's look: the header's bold, the column's alignment, its own runs' marks.
+    assert all("bold" in char(p.char_pr_id_ref).child_attributes for p in header)
+    assert all(doc.styles.paragraph_property(p.para_pr_id_ref).align.horizontal == "RIGHT"
+               for p in table.cell(1, 1).paragraphs)
+    bold_run = next(run for run in table.cell(1, 0).paragraphs[1].runs if run.text == "둘째")
+    assert "bold" in char(bold_run.char_pr_id_ref).child_attributes
+    assert doc.styles.font_face(table.cell(1, 0).paragraphs[2].runs[0].char_pr_id_ref, "LATIN") == "D2Coding"
+    # A row is as tall as its cell of most lines, each a line high.
+    assert [table.cell(r, 0).height for r in range(3)] == [n * 1800 + 141 * 2 for n in (2, 3, 3)]
+    # A column is as wide as its longest line wants, not as the cell's lines run together.
+    narrow, wide = column_widths([["가나\n가나", "가나가나"]], TEXT_WIDTH, 10)
+    assert narrow < wide
 
 
 def test_convert_tables_flow_across_pages(tmp_path):
