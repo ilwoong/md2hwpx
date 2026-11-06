@@ -35,12 +35,12 @@ work=$(pwd -P)
 mounts="$work
 "
 add() {
-    dir=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 0
+    real=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 0
     case $mounts in *"
-$dir
-"*|"$dir
+$real
+"*|"$real
 "*) return 0 ;; esac
-    mounts="$mounts$dir
+    mounts="$mounts$real
 "
 }
 folder() {  # $1 itself if it is a folder, else the folder it is in
