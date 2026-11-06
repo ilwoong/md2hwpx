@@ -102,19 +102,18 @@ def _output_path(input_path: Path, output: str | None) -> Path:
     An *output* ending in "/" is a folder, made with its parents if it is not there yet."""
     name = (input_path.resolve().name if input_path.is_dir() else input_path.stem) + ".hwpx"
     if output is None:
-        output = Path(name)
+        path = Path(name)
     else:
+        path = Path(output)
         # Path drops the trailing "/", so it is read off the argument as given.
-        folder = output.endswith(("/", os.sep))
-        output = Path(output)
-        if folder:
-            output.mkdir(parents=True, exist_ok=True)
-        if output.is_dir():
-            output = output / name
-    candidate, number = output, 0
+        if output.endswith(("/", os.sep)):
+            path.mkdir(parents=True, exist_ok=True)
+        if path.is_dir():
+            path = path / name
+    candidate, number = path, 0
     while candidate.exists():
         number += 1
-        candidate = output.with_name(f"{output.stem}-{number}{output.suffix}")
+        candidate = path.with_name(f"{path.stem}-{number}{path.suffix}")
     return candidate
 
 

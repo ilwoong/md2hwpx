@@ -31,7 +31,7 @@ def test_convert_blank_page(tmp_path):
     run = blank.cell(0, 0).paragraphs[0].runs[0]
     assert doc.styles.char_property(run.element.get("charPrIDRef")).attributes["height"] == "1100"
     assert doc.styles.font_face(run.element.get("charPrIDRef"), "HANGUL") == "휴먼명조"
-    assert measure(blank.cell(0, 0).text, resolve_slot_metrics(blank.cell(0, 0), doc)).lines == 1
+    assert measure(blank.cell(0, 0).text, resolve_slot_metrics(blank.cell(0, 0), doc, safety=1.0)).lines == 1
     # An empty marker still gives a page, and the block after each blank page starts the next page.
     assert doc.tables.all[1].cell(0, 0).text == ""
     starts = [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"]
