@@ -64,8 +64,12 @@ def _cell_height(cell, doc, line_height: int) -> int:
     Count the lines with Hancom's own breaking rules (resolve_slot_metrics + measure), not by characters:
     a run of '-' is half as wide again as a letter, and a cell of a narrow column wraps where a wide one
     does not.
+
+    The whole width (safety=1.0), not python-hwpx's default 93% of it: measured against 93%, text taking
+    93-100% of a line took a line more than Hancom laid it out in, and the row was a line taller. At the
+    whole width the count matched Hancom's on every cell tried.
     """
-    slot = resolve_slot_metrics(cell, doc)
+    slot = resolve_slot_metrics(cell, doc, safety=1.0)
     lines = sum(measure(paragraph.text, slot).lines for paragraph in cell.paragraphs)
     return max(lines, 1) * line_height + CELL_MARGIN_TB * 2
 

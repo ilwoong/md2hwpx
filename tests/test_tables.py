@@ -191,7 +191,8 @@ def test_convert_table_row_heights(tmp_path):
     # needs, or the table takes more room on the page than it says and pushes the next block away.
     md.write_text(
         "| 짧음 | 긴 설명 |\n|---|---|\n"
-        "| a | 이 셀은 좁은 열이라 여러 줄로 접히는 아주 긴 문장을 담고 있습니다. 계속 이어집니다. |\n\n"
+        "| a | 이 셀은 좁은 열이라 여러 줄로 접히는 아주 긴 문장을 담고 있습니다. 계속 이어집니다. "
+        "본문 폭을 넘을 만큼 문장이 더 길게 이어집니다. |\n\n"
         "```py\n" + "".join(f"x{i} = {i}\n" for i in range(12)) + "```\n",
         encoding="utf-8",
     )
@@ -204,7 +205,7 @@ def test_convert_table_row_heights(tmp_path):
     # The two cells of the row share the row's height, which holds the taller one's wrapped lines.
     assert table.cell(0, 0).height == table.cell(0, 1).height
     wrapped = table.cell(1, 1)
-    lines = measure(wrapped.text, resolve_slot_metrics(wrapped, doc)).lines
+    lines = measure(wrapped.text, resolve_slot_metrics(wrapped, doc, safety=1.0)).lines
     assert lines > 1
     assert wrapped.height >= lines * 1800 + 141 * 2
     assert table.cell(1, 0).height == wrapped.height  # the short cell takes its row's height too
@@ -221,6 +222,30 @@ def test_convert_table_row_heights(tmp_path):
     md.write_text("```\none\n```\n", encoding="utf-8")
     convert(md, TEMPLATE, out)
     assert HwpxDocument.open(out).tables.all[0].cell(0, 0).height == 1260 + 141 * 2
+
+
+def test_convert_table_row_heights_match_hancom(tmp_path):
+    md = tmp_path / "hancom.md"
+    # Cells whose text takes 93-100% of their lines' width, with the line counts Hancom laid them out in
+    # (its saved lineseg): measured at 93% of the width they took a line more, and the row was a line taller.
+    md.write_text(
+        "<!-- [cols: 15%, 85%] -->\n| 번호 | 내용 |\n|---|---|\n"
+        "| 2 | 표의 셀 높이가 실제 줄 수에 맞는지 확인하기 위한 문장입니다 줄바꿈이 어디서 일 |\n"
+        "| 6 | 표의 셀 높이가 실제 줄 수에 맞는지 확인하기 위한 문장입니다 줄바꿈이 어디서 일어나는지 봅니다 "
+        "표의 셀 높이가 실제 줄 수에 맞는지 확인하기 위한 문장입니다 줄 |\n"
+        "| 21 | HWPX 셀 높이 check 문장 version 1.2.3 에서 width 와 lines 를 비교합니다 test-case |\n\n"
+        "<!-- [cols: 60%, 40%] -->\n| 번호 | 내용 |\n|---|---|\n"
+        "| 40 | 표의 셀 높이가 실제 줄 수에 맞는지 확인하기 위한 문장입니다 줄바꿈이 어 |\n"
+        "| 49 | HWPX 셀 높이 check 문장 version 1.2. |\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "hancom.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    tables = HwpxDocument.open(out).tables.all
+    heights = [table.cell(r, 1).height for table in tables for r in range(1, table.row_count)]
+    assert heights == [lines * 1800 + 141 * 2 for lines in (1, 2, 1, 2, 1)]
 
 
 def test_convert_indented_tables_fit_the_body(tmp_path):
