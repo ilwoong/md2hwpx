@@ -33,9 +33,13 @@ def _natural_key(path: Path) -> list:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
 
 
-def patterns_text(patterns: Sequence[str]) -> str:
-    """*patterns* as a message names them: "'ch_2*.md', 'a*.md'"."""
-    return ", ".join(f"'{pattern}'" for pattern in patterns)
+class NoInputFiles(FileNotFoundError):
+    """No file to convert in *path* (see input_files). *reason* says why: "folder" (the folder has no .md file),
+    "pattern" (no name matches the patterns) or "draft" (all are drafts); *what* says it, for the message."""
+
+    def __init__(self, path: Path, reason: str, what: str):
+        super().__init__(f"{what}: {path}")
+        self.path, self.reason, self.what = path, reason, what
 
 
 def input_files(path: Path, include_draft: bool = False, patterns: Sequence[str] = ()) -> list[Path]:
@@ -45,18 +49,19 @@ def input_files(path: Path, include_draft: bool = False, patterns: Sequence[str]
     if path.is_dir():
         files = sorted((p for p in path.glob("*.md") if p.is_file()), key=_natural_key)
         if not files:
-            raise FileNotFoundError(f"no .md files in folder: {path}")
+            raise NoInputFiles(path, "folder", "no .md files in folder")
     else:
         files = [path]
     if patterns:
         files = [f for f in files if any(fnmatch.fnmatchcase(f.name, pattern) for pattern in patterns)]
         if not files:
-            raise FileNotFoundError(f"{patterns_text(patterns)} 에 맞는 .md 파일이 없습니다: {path}")
+            named = ", ".join(f"'{pattern}'" for pattern in patterns)
+            raise NoInputFiles(path, "pattern", f"{named} 에 맞는 .md 파일이 없습니다")
     if include_draft:
         return files
     kept = [f for f in files if not is_draft(f)]
     if not kept:
-        raise FileNotFoundError(f"변환할 .md 파일이 모두 draft 입니다 (포함하려면 --include-draft): {path}")
+        raise NoInputFiles(path, "draft", "변환할 .md 파일이 모두 draft 입니다")
     return kept
 
 
@@ -184,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
         output = _output_path(args.input, args.output)
         warnings = convert_input(args.input, template, output, args.include_draft, args.include, args.chapter_start)
     except CONVERSION_ERRORS as error:
+        if isinstance(error, NoInputFiles) and error.reason == "draft":
+            error = f"{error.what} (포함하려면 --include-draft): {error.path}"
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
     for found in warnings:

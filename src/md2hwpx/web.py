@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from md2hwpx import oauth
-from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files, patterns_text
+from md2hwpx.cli import CONVERSION_ERRORS, NoInputFiles, convert_input, input_files
 from md2hwpx.convert import DEFAULT_TEMPLATE
 from md2hwpx.source import image_paths
 
@@ -180,26 +180,16 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
     return root, name
 
 
-def _has_files(input_path: Path, patterns: list[str]) -> bool:
-    """Whether *input_path* has .md files *patterns* match, drafts or not (see input_files)."""
-    try:
-        return bool(input_files(input_path, True, patterns))
-    except FileNotFoundError:
-        return False
-
-
 def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: list[str]) -> None:
     """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX."""
     try:
         files = input_files(input_path, include_draft, patterns)
-    except FileNotFoundError:
-        if not _has_files(input_path, []):
-            message = "변환할 .md 파일이 없습니다"
-        elif not _has_files(input_path, patterns):
-            message = f"{patterns_text(patterns)} 에 맞는 .md 파일이 없습니다"
-        else:
-            message = "변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요)"
-        raise HTTPException(400, f"{message}: {_relative(input_path, root) or '/'}") from None
+    except NoInputFiles as error:
+        what = {
+            "folder": "변환할 .md 파일이 없습니다",
+            "draft": f"{error.what} ('draft 파일도 변환' 을 켜세요)",
+        }.get(error.reason, error.what)
+        raise HTTPException(400, f"{what}: {_relative(input_path, root) or '/'}") from None
     for md in files:
         for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
             if not _inside(image, root):
@@ -240,7 +230,7 @@ def convert(
     A zip or repository leaves out its drafts (see cli.input_files) unless *include_draft*, and converts only the
     files whose names match one of the comma-separated patterns *include*, if any; files uploaded one by one are
     all chosen, drafts too. *chapter_start* is the first chapter's number in captions (empty: 1)."""
-    patterns = [] if source == "files" else [p.strip() for p in include.split(",") if p.strip()]
+    patterns = [p.strip() for p in include.split(",") if p.strip()]
     chapter_start = chapter_start.strip() or "1"
     if not chapter_start.isdigit() or int(chapter_start) < 1:
         raise HTTPException(400, f"시작 장 번호는 1 이상의 정수여야 합니다: {chapter_start}")
@@ -251,13 +241,14 @@ def convert(
         root.mkdir()
         if source == "files":
             name = _save_files(files, root, budget)
+            # The user chose each file: no patterns pick among them, and drafts go in too.
+            patterns, include_draft = [], True
         elif source == "zip":
             name = _extract_zip(archive, root, work, budget)
         elif source == "git":
             name = _clone(repo.strip(), ref.strip(), root, request)
         else:
             raise HTTPException(400, f"알 수 없는 입력 방식입니다: {source}")
-        include_draft = include_draft or source == "files"
         _remove_symlinks(root)
         input_path, name = _input_path(root, path.strip().strip("/"), name)
         _check_images(input_path, root, include_draft, patterns)
