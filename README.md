@@ -55,6 +55,9 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 /path/to/md2hwpx/md2hwpx.sh docs/guide.md -o docs/
 /path/to/md2hwpx/md2hwpx.sh ~/notes/guide.md -o ~/결과/   # 현재 폴더 밖의 입력·출력
 
+# 저장소 없이 이 파일 하나만 복사해 쓰기 (웹 서비스 이미지 md2hwpx-web 의 코드로 변환)
+~/bin/md2hwpx-standalone.sh docs/ --include 'ch_2*.md' --chapter-start 2
+
 # 스크립트 없이 실행 (저장소 루트에서, 현재 폴더 안의 경로만)
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
     python -m md2hwpx docs/guide.md -o docs/
@@ -66,6 +69,10 @@ uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 �
 
 - `md2hwpx.sh` 는 현재 폴더와 입력·출력·템플릿이 있는 폴더를 컨테이너의 같은 경로에 마운트하므로, 경로는 현재 폴더 밖이어도 된다.
   입력 문서의 이미지는 입력 폴더(파일이면 그 파일이 있는 폴더) 또는 현재 폴더 안에 있어야 한다.
+- `md2hwpx-standalone.sh` 는 어디에 복사해도 혼자 동작한다. 코드·다이어그램 도구·내장 템플릿을 모두 `md2hwpx-web:latest` 이미지에서
+  가져오므로(`MD2HWPX_IMAGE` 로 다른 이미지), 그 이미지를 `build-images.sh` 로 빌드해 두어야 한다.
+  템플릿은 스크립트 옆의 `template.hwpx`, 없으면 이미지의 내장 템플릿을 쓴다. 마운트 방식은 `md2hwpx.sh` 와 같다.
+- `--include` 의 패턴은 셸이 펼치지 않게 `'ch_2*.md'` 처럼 따옴표로 감싼다.
 - 인자 없이 실행하면 도움말을 보여 준다.
 - 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
   폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
@@ -220,7 +227,8 @@ samples/        변환 테스트용 샘플 Markdown (결과 HWPX 는 커밋하�
 docker/         Docker 이미지용 실행 스크립트와 설정
 Dockerfile      실행용 Alpine 이미지 (dev: 코드 마운트, web: 웹 서비스)
 compose.yaml    웹 서비스 실행
-md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트
+md2hwpx.sh      Docker 이미지로 변환하는 실행 스크립트 (저장소 코드를 마운트)
+md2hwpx-standalone.sh  복사해 혼자 쓰는 실행 스크립트 (웹 서비스 이미지의 코드로 변환)
 build-images.sh 개발용·웹 서비스 이미지를 latest·날짜 태그로 빌드하는 스크립트
 ```
 

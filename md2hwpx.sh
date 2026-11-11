@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run md2hwpx in the Docker image (with the diagram tools) from any folder:
-#   md2hwpx.sh INPUT [-o OUTPUT] [-t TEMPLATE]
+#   md2hwpx.sh INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include PATTERN ...] [--chapter-start N]
 # The current folder and the folders of INPUT, OUTPUT and TEMPLATE are mounted at their own paths,
 # and the container works in the current folder, so the paths mean what they mean outside it.
 # INPUT's images must be inside its folder (a file's folder, or the folder given) or the current one.
@@ -16,12 +16,14 @@ for arg do
     case $want in
         o) output=$arg want=; continue ;;
         t) template=$arg want=; continue ;;
+        v) want=; continue ;;  # the value of an option that names no path: not INPUT
     esac
     case $arg in
         -o|--output) want=o ;;
         --output=*) output=${arg#*=} ;;
         -o?*) output=${arg#-o} ;;
         -t|--template) want=t ;;
+        --include|--chapter-start) want=v ;;
         --template=*) template=${arg#*=} ;;
         -t?*) template=${arg#-t} ;;
         -*) ;;
