@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from md2hwpx import oauth
-from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files
+from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files, patterns_text
 from md2hwpx.convert import DEFAULT_TEMPLATE
 from md2hwpx.source import image_paths
 
@@ -180,17 +180,26 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
     return root, name
 
 
-def _check_images(input_path: Path, root: Path, include_draft: bool) -> None:
+def _has_files(input_path: Path, patterns: list[str]) -> bool:
+    """Whether *input_path* has .md files *patterns* match, drafts or not (see input_files)."""
+    try:
+        return bool(input_files(input_path, True, patterns))
+    except FileNotFoundError:
+        return False
+
+
+def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: list[str]) -> None:
     """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX."""
     try:
-        files = input_files(input_path, include_draft)
+        files = input_files(input_path, include_draft, patterns)
     except FileNotFoundError:
-        where = _relative(input_path, root) or "/"
-        try:
-            input_files(input_path, include_draft=True)
-        except FileNotFoundError:
-            raise HTTPException(400, f"변환할 .md 파일이 없습니다: {where}") from None
-        raise HTTPException(400, f"변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): {where}") from None
+        if not _has_files(input_path, []):
+            message = "변환할 .md 파일이 없습니다"
+        elif not _has_files(input_path, patterns):
+            message = f"{patterns_text(patterns)} 에 맞는 .md 파일이 없습니다"
+        else:
+            message = "변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요)"
+        raise HTTPException(400, f"{message}: {_relative(input_path, root) or '/'}") from None
     for md in files:
         for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
             if not _inside(image, root):
@@ -223,11 +232,18 @@ def convert(
     path: str = Form(default=""),
     template: UploadFile | None = File(default=None),
     include_draft: bool = Form(default=False),
+    include: str = Form(default=""),
+    chapter_start: str = Form(default=""),
 ) -> Response:
     """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back.
 
-    A zip or repository leaves out its drafts (see cli.input_files) unless *include_draft*; files uploaded one by
-    one are all chosen, drafts too."""
+    A zip or repository leaves out its drafts (see cli.input_files) unless *include_draft*, and converts only the
+    files whose names match one of the comma-separated patterns *include*, if any; files uploaded one by one are
+    all chosen, drafts too. *chapter_start* is the first chapter's number in captions (empty: 1)."""
+    patterns = [] if source == "files" else [p.strip() for p in include.split(",") if p.strip()]
+    chapter_start = chapter_start.strip() or "1"
+    if not chapter_start.isdigit() or int(chapter_start) < 1:
+        raise HTTPException(400, f"시작 장 번호는 1 이상의 정수여야 합니다: {chapter_start}")
     budget = _Budget()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp).resolve()
@@ -244,7 +260,7 @@ def convert(
         include_draft = include_draft or source == "files"
         _remove_symlinks(root)
         input_path, name = _input_path(root, path.strip().strip("/"), name)
-        _check_images(input_path, root, include_draft)
+        _check_images(input_path, root, include_draft, patterns)
 
         template_path = DEFAULT_TEMPLATE
         if template is not None and template.filename:
@@ -252,7 +268,7 @@ def convert(
             budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
-            found = convert_input(input_path, template_path, output, include_draft)
+            found = convert_input(input_path, template_path, output, include_draft, patterns, int(chapter_start))
         except CONVERSION_ERRORS as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None

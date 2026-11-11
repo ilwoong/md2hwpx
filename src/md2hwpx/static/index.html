@@ -23,7 +23,7 @@
   .field { margin-bottom: 14px; }
   .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
   .field small { display: block; color: var(--muted); }
-  input[type=text], input[type=url] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+  input[type=text], input[type=url], input[type=number] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
   input[type=file] { width: 100%; padding: 10px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
   details { margin: 8px 0 20px; }
   summary { cursor: pointer; color: var(--muted); }
@@ -83,9 +83,18 @@
         <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
       </label>
       <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
+      <label class="field"><span>파일 이름 패턴 (선택)</span>
+        <input type="text" name="include" placeholder="ch_2*.md, appendix*.md">
+      </label>
+      <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
       <label><input type="checkbox" name="include_draft"> draft 파일도 변환</label>
       <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
     </div>
+
+    <label class="field"><span>시작 장 번호 (선택)</span>
+      <input type="number" name="chapter_start" min="1" step="1" placeholder="1">
+      <small>캡션의 장 번호를 이 번호부터 셉니다. 예: 2 면 첫 장의 표가 [표 2-1]. 비우면 1.</small>
+    </label>
 
     <details>
       <summary>템플릿 바꾸기</summary>
@@ -168,7 +177,9 @@
     if (source !== "files") {
       data.append("path", form.path.value);
       data.append("include_draft", form.include_draft.checked);
+      data.append("include", form.include.value);
     }
+    data.append("chapter_start", form.chapter_start.value);
     if (form.template.files[0]) data.append("template", form.template.files[0]);
 
     button.disabled = true;

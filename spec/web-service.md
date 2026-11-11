@@ -57,6 +57,8 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `ref` | `source=git`: 브랜치, 태그 또는 커밋의 전체 해시 40자 (선택, 비우면 기본 브랜치) |
 | `path` | `zip`·`git`: 변환할 md 파일 또는 폴더의 상대 경로 (선택) |
 | `template` | 템플릿 HWPX (선택, 비우면 내장 템플릿 `src/md2hwpx/template.hwpx`) |
+| `include` | `zip`·`git`: 쉼표로 나눈 파일 이름 패턴 (선택). 명령줄 `--include` 처럼 이름이 하나에 맞는 `.md` 파일만 변환. 페이지의 "파일 이름 패턴" |
+| `chapter_start` | 캡션의 첫 장 번호, 1 이상의 정수 (선택, 비우면 1). 명령줄 `--chapter-start`. 페이지의 "시작 장 번호" |
 | `include_draft` | `zip`·`git`: `true` 면 front matter 에 `draft: true` 가 있는 파일도 변환 (선택, 기본 `false`). 페이지의 "draft 파일도 변환" |
 
 - 성공: `200`, `Content-Type: application/hwp+zip`,
@@ -96,6 +98,9 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - 초안: `zip`·`git` 은 명령줄처럼 `draft: true` 파일을 빼고 변환한다 ([markdown-conversion.md](markdown-conversion.md) 의 "초안").
   `include_draft` 가 `true` 면 포함한다. 남는 파일이 없으면 `변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): <경로>`.
   `files` 는 올린 파일을 사용자가 고른 것이므로 초안도 늘 변환한다.
+- 파일 이름 패턴: `zip`·`git` 은 `include` 의 패턴에 맞는 파일만 남긴 뒤 초안을 뺀다. `files` 는 패턴을 쓰지 않는다.
+  맞는 파일이 없으면 `'<패턴>' 에 맞는 .md 파일이 없습니다: <경로>`.
+- 시작 장 번호: 1 이상의 정수가 아니면 `시작 장 번호는 1 이상의 정수여야 합니다: <값>`.
 - 내려받는 파일 이름: 대상이 파일이면 확장자를 뺀 이름, 폴더면 `path` 의 마지막 이름,
   `path` 가 없으면 zip 파일 이름 / 저장소 이름 / 처음 올린 md 이름 (없으면 `document`).
 

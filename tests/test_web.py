@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from hwpx import HwpxDocument
 
+from helpers import _text
 from md2hwpx import web
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 
@@ -157,6 +158,32 @@ def test_zip_of_drafts_only():
     archive = _zip({"b.md": b"---\ndraft: true\n---\n# B\n"})
     detail = _error(client.post("/convert", data={"source": "zip"}, files={"archive": ("x.zip", archive)}))
     assert detail == "변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): b.md"
+
+
+def test_zip_include_patterns_and_chapter_start(tmp_path):
+    archive = _zip({
+        "book/ch_1.md": b"# A\n",
+        "book/ch_2.md": "# B\n\n[표] t\n| a |\n|---|\n| 1 |\n".encode(),
+        "book/ch_3.md": b"# C\n",
+    })
+    response = client.post(
+        "/convert",
+        data={"source": "zip", "include": " ch_2*.md, ch_3* ", "chapter_start": "2"},
+        files={"archive": ("x.zip", archive)},
+    )
+    doc = _hwpx(response, tmp_path)
+    assert [p.text for p in doc.paragraphs if p.text in ("A", "B", "C")] == ["B", "C"]
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 2-1] t"]
+
+    detail = _error(client.post("/convert", data={"source": "zip", "include": "x*"}, files={"archive": ("x.zip", archive)}))
+    assert detail == "'x*' 에 맞는 .md 파일이 없습니다: book"
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "a"])
+def test_chapter_start_must_be_a_number(value):
+    files = [("files", ("a.md", b"# A\n"))]
+    detail = _error(client.post("/convert", data={"source": "files", "chapter_start": value}, files=files))
+    assert detail == f"시작 장 번호는 1 이상의 정수여야 합니다: {value}"
 
 
 def test_files_convert_drafts(tmp_path):

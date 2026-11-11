@@ -159,10 +159,11 @@ def _paragraph_styles(doc: HwpxDocument) -> dict[str, Style]:
 class _Writer:
     """Writes the block tree of a Markdown document into an HWPX document."""
 
-    def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode, by_chapter: bool):
+    def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode, by_chapter: bool, chapter_start: int = 1):
         self.doc = doc
         self.base_dir = base_dir
         self.by_chapter = by_chapter  # captions are numbered within each chapter, else through the document
+        self.chapter_start = chapter_start  # the number of the first chapter in captions
         # Styles are resolved once: python-hwpx looks a style name up by walking all of header.xml,
         # which grows with every character and paragraph shape the conversion adds.
         self.body_style = doc.styles.resolve(BODY_STYLE)
@@ -404,7 +405,7 @@ class _Writer:
         """
         self.numbers[kind] += 1
         number = self.numbers[kind]
-        before = f"[{kind} {self.chapter}-" if self.chapter and self.by_chapter else f"[{kind} "
+        before = f"[{kind} {self.chapter_start + self.chapter - 1}-" if self.chapter and self.by_chapter else f"[{kind} "
         if name is not None:
             self.names[name] = None if name in self.names else f"{before[1:]}{number}"
         self.caption = _Caption([Run(f"{before}{number}] "), *title], before, number, NUMBERS[kind])
@@ -821,14 +822,16 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 
 
 def convert_markdown(
-    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
+    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter",
+    chapter_start: int = 1,
 ) -> dict[str, str]:
     """Convert *markdown*, whose image paths are relative to *base_dir*, its captions numbered
-    *caption_numbering* (see the function of that name). Return the "[@name]" references left as they are
-    written, by name: "missing" (no caption is named so) or "duplicate" (two are)."""
+    *caption_numbering* (see the function of that name), the first chapter as *chapter_start*. Return the
+    "[@name]" references left as they are written, by name: "missing" (no caption is named so) or "duplicate"
+    (two are)."""
     doc = HwpxDocument.open(template_path)
     root = SyntaxTreeNode(PARSER.parse(markdown))
-    writer = _Writer(doc, base_dir, root, by_chapter=caption_numbering == "chapter")
+    writer = _Writer(doc, base_dir, root, by_chapter=caption_numbering == "chapter", chapter_start=chapter_start)
     writer.blocks(root.children)
     writer.finish()
 

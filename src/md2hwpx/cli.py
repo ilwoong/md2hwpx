@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import re
 import sys
 import tempfile
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -31,15 +33,25 @@ def _natural_key(path: Path) -> list:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
 
 
-def input_files(path: Path, include_draft: bool = False) -> list[Path]:
-    """The Markdown file, or every .md file directly in the folder, in name order; drafts (see is_draft)
-    only if *include_draft*."""
+def patterns_text(patterns: Sequence[str]) -> str:
+    """*patterns* as a message names them: "'ch_2*.md', 'a*.md'"."""
+    return ", ".join(f"'{pattern}'" for pattern in patterns)
+
+
+def input_files(path: Path, include_draft: bool = False, patterns: Sequence[str] = ()) -> list[Path]:
+    """The Markdown file, or every .md file directly in the folder, in name order: only those whose name
+    matches one of *patterns* (shell style, "ch_2*.md") if any are given, and drafts (see is_draft) only if
+    *include_draft*."""
     if path.is_dir():
         files = sorted((p for p in path.glob("*.md") if p.is_file()), key=_natural_key)
         if not files:
             raise FileNotFoundError(f"no .md files in folder: {path}")
     else:
         files = [path]
+    if patterns:
+        files = [f for f in files if any(fnmatch.fnmatchcase(f.name, pattern) for pattern in patterns)]
+        if not files:
+            raise FileNotFoundError(f"{patterns_text(patterns)} 에 맞는 .md 파일이 없습니다: {path}")
     if include_draft:
         return files
     kept = [f for f in files if not is_draft(f)]
@@ -88,12 +100,14 @@ def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[Co
 
 
 def convert_input(
-    input_path: Path, template: Path, output: Path, include_draft: bool = False
+    input_path: Path, template: Path, output: Path, include_draft: bool = False, patterns: Sequence[str] = (),
+    chapter_start: int = 1,
 ) -> list[ConversionWarning]:
-    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*, drafts only if
-    *include_draft* (see input_files), and return what the HWPX is made despite (see _warnings)."""
+    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*: those *patterns*
+    match, drafts only if *include_draft* (see input_files), the first chapter numbered *chapter_start* in
+    captions. Return what the HWPX is made despite (see _warnings)."""
     base_dir = input_path if input_path.is_dir() else input_path.parent
-    files = input_files(input_path, include_draft)
+    files = input_files(input_path, include_draft, patterns)
     numbering = caption_numbering(files)
     styles = paragraph_styles(template)
     # A blank line between files keeps the last block of one file from running into the next.
@@ -101,7 +115,7 @@ def convert_input(
     # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
     with tempfile.TemporaryDirectory() as image_dir:
         markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
-        unresolved = convert_markdown(markdown, base_dir, template, output, numbering)
+        unresolved = convert_markdown(markdown, base_dir, template, output, numbering, chapter_start)
     return [w for f in files for w in _warnings(f, styles, unresolved)]
 
 
@@ -126,6 +140,13 @@ def _output_path(input_path: Path, output: str | None) -> Path:
     return candidate
 
 
+def _chapter_number(value: str) -> int:
+    """A --chapter-start value: a whole number from 1."""
+    if not value.isdigit() or int(value) < 1:
+        raise argparse.ArgumentTypeError(f"1 이상의 정수여야 합니다: {value}")
+    return int(value)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="md2hwpx", description="Markdown 파일을 HWPX 파일로 변환한다.")
     parser.add_argument("input", type=Path, help="변환할 Markdown 파일, 또는 .md 파일들이 있는 폴더")
@@ -142,6 +163,15 @@ def main(argv: list[str] | None = None) -> int:
         "--include-draft", action="store_true",
         help="front matter 에 draft: true 가 있는 파일도 변환한다 (기본: 빼고 변환)",
     )
+    parser.add_argument(
+        "--include", action="append", default=[], metavar="PATTERN",
+        help="이름이 이 패턴(예: 'ch_2*.md')에 맞는 .md 파일만 변환한다. 여러 번 주면 어느 하나에 맞는 파일. "
+        "셸이 펼치지 않게 따옴표로 감싼다",
+    )
+    parser.add_argument(
+        "--chapter-start", type=_chapter_number, default=1, metavar="N",
+        help="캡션의 장 번호를 N 부터 센다 (기본: 1). 예: 2 면 첫 장의 표가 [표 2-1]",
+    )
     if argv is None:
         argv = sys.argv[1:]
     if not argv:
@@ -152,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         output = _output_path(args.input, args.output)
-        warnings = convert_input(args.input, template, output, args.include_draft)
+        warnings = convert_input(args.input, template, output, args.include_draft, args.include, args.chapter_start)
     except CONVERSION_ERRORS as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1
