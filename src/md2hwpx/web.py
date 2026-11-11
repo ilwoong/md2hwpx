@@ -180,12 +180,17 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
     return root, name
 
 
-def _check_images(input_path: Path, root: Path) -> None:
+def _check_images(input_path: Path, root: Path, include_draft: bool) -> None:
     """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX."""
     try:
-        files = input_files(input_path)
+        files = input_files(input_path, include_draft)
     except FileNotFoundError:
-        raise HTTPException(400, f"변환할 .md 파일이 없습니다: {_relative(input_path, root) or '/'}") from None
+        where = _relative(input_path, root) or "/"
+        try:
+            input_files(input_path, include_draft=True)
+        except FileNotFoundError:
+            raise HTTPException(400, f"변환할 .md 파일이 없습니다: {where}") from None
+        raise HTTPException(400, f"변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): {where}") from None
     for md in files:
         for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
             if not _inside(image, root):
@@ -217,8 +222,12 @@ def convert(
     ref: str = Form(default=""),
     path: str = Form(default=""),
     template: UploadFile | None = File(default=None),
+    include_draft: bool = Form(default=False),
 ) -> Response:
-    """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back."""
+    """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back.
+
+    A zip or repository leaves out its drafts (see cli.input_files) unless *include_draft*; files uploaded one by
+    one are all chosen, drafts too."""
     budget = _Budget()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp).resolve()
@@ -232,9 +241,10 @@ def convert(
             name = _clone(repo.strip(), ref.strip(), root, request)
         else:
             raise HTTPException(400, f"알 수 없는 입력 방식입니다: {source}")
+        include_draft = include_draft or source == "files"
         _remove_symlinks(root)
         input_path, name = _input_path(root, path.strip().strip("/"), name)
-        _check_images(input_path, root)
+        _check_images(input_path, root, include_draft)
 
         template_path = DEFAULT_TEMPLATE
         if template is not None and template.filename:
@@ -242,7 +252,7 @@ def convert(
             budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
-            found = convert_input(input_path, template_path, output)
+            found = convert_input(input_path, template_path, output, include_draft)
         except CONVERSION_ERRORS as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None

@@ -16,7 +16,7 @@ from hwpx.errors import HwpxError
 from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, paragraph_styles
 from md2hwpx.diagram import DiagramError, render_diagrams
 from md2hwpx.source import (
-    ConversionError, caption_numbering, column_problems, read_markdown, references, unknown_styles,
+    ConversionError, caption_numbering, column_problems, is_draft, read_markdown, references, unknown_styles,
     unusable_images,
 )
 
@@ -31,14 +31,21 @@ def _natural_key(path: Path) -> list:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
 
 
-def input_files(path: Path) -> list[Path]:
-    """The Markdown file, or every .md file directly in the folder, in name order."""
-    if not path.is_dir():
-        return [path]
-    files = sorted((p for p in path.glob("*.md") if p.is_file()), key=_natural_key)
-    if not files:
-        raise FileNotFoundError(f"no .md files in folder: {path}")
-    return files
+def input_files(path: Path, include_draft: bool = False) -> list[Path]:
+    """The Markdown file, or every .md file directly in the folder, in name order; drafts (see is_draft)
+    only if *include_draft*."""
+    if path.is_dir():
+        files = sorted((p for p in path.glob("*.md") if p.is_file()), key=_natural_key)
+        if not files:
+            raise FileNotFoundError(f"no .md files in folder: {path}")
+    else:
+        files = [path]
+    if include_draft:
+        return files
+    kept = [f for f in files if not is_draft(f)]
+    if not kept:
+        raise FileNotFoundError(f"변환할 .md 파일이 모두 draft 입니다 (포함하려면 --include-draft): {path}")
+    return kept
 
 
 class ConversionWarning(NamedTuple):
@@ -80,11 +87,13 @@ def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[Co
     return sorted(found, key=lambda w: w.line)
 
 
-def convert_input(input_path: Path, template: Path, output: Path) -> list[ConversionWarning]:
-    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*, and return
-    what the HWPX is made despite (see _warnings)."""
+def convert_input(
+    input_path: Path, template: Path, output: Path, include_draft: bool = False
+) -> list[ConversionWarning]:
+    """Convert the Markdown file, or the .md files of the folder, *input_path* to *output*, drafts only if
+    *include_draft* (see input_files), and return what the HWPX is made despite (see _warnings)."""
     base_dir = input_path if input_path.is_dir() else input_path.parent
-    files = input_files(input_path)
+    files = input_files(input_path, include_draft)
     numbering = caption_numbering(files)
     styles = paragraph_styles(template)
     # A blank line between files keeps the last block of one file from running into the next.
@@ -129,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
         "-t", "--template", type=Path,
         help="템플릿 HWPX 파일 (기본: 현재 폴더의 template.hwpx, 없으면 내장 템플릿)",
     )
+    parser.add_argument(
+        "--include-draft", action="store_true",
+        help="front matter 에 draft: true 가 있는 파일도 변환한다 (기본: 빼고 변환)",
+    )
     if argv is None:
         argv = sys.argv[1:]
     if not argv:
@@ -139,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         output = _output_path(args.input, args.output)
-        warnings = convert_input(args.input, template, output)
+        warnings = convert_input(args.input, template, output, args.include_draft)
     except CONVERSION_ERRORS as error:
         print(f"md2hwpx: {error}", file=sys.stderr)
         return 1

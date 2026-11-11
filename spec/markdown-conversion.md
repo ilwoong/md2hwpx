@@ -55,7 +55,7 @@ Markdown 파싱에는 [markdown-it-py](https://github.com/executablebooks/markdo
 - 닫는 줄이 없거나 파일 맨 앞이 아닌 `---` 블록은 front matter 가 아니므로 본문으로 둔다.
 - 파일을 읽을 때(`read_markdown`) 제거하므로, 폴더 입력은 파일마다 각자의 front matter 를 제거한다.
 - TOML(`+++`) front matter 는 지원하지 않는다.
-- 단, `caption-numbering` 키는 읽는다 (아래 "캡션 번호 방식"). 그 밖의 키는 무시한다.
+- 단, `caption-numbering` 키(아래 "캡션 번호 방식")와 `draft` 키(아래 "초안")는 읽는다. 그 밖의 키는 무시한다.
 
 ### 캡션 번호 방식
 
@@ -74,6 +74,21 @@ caption-numbering: document
 - 폴더 입력: 키가 없는 파일은 다른 파일의 값을 따른다. 어느 파일에도 없으면 `chapter`.
   파일마다 값이 다르면 문서 하나에 번호 방식은 하나이므로 어느 쪽도 고르지 않고 `ConversionError` 를 낸다:
   `caption-numbering 가 파일마다 다릅니다: <파일> 는 '<값>', <파일> 는 '<값>'` (이름 순으로 처음 나온 두 값).
+
+### 초안 (draft)
+
+```markdown
+---
+draft: true
+---
+```
+
+- `draft: true` 인 파일은 변환하지 않는다 (`source.is_draft`). 명령줄 `--include-draft` 를 주면 다른 파일과 같이 변환한다.
+- 값은 YAML 의 참 값 `true`·`True`·`TRUE` 만 초안이다. `false`, 따옴표로 감싼 값(`"true"`, 문자열) 등 그 밖의 값은 초안이 아니다.
+  줄 맨 앞(들여쓰지 않은)의 키만 읽는다. front matter 밖의 같은 줄은 본문이다.
+- 폴더 입력은 초안 파일만 빼고 나머지를 이어 붙인다. 캡션 번호 방식·경고도 남은 파일로만 정한다.
+- 변환할 파일이 모두 초안이면(초안 파일 하나를 입력한 경우 포함) `FileNotFoundError` 로 종료 코드 1:
+  `변환할 .md 파일이 모두 draft 입니다 (포함하려면 --include-draft): <입력>`.
 
 ## 변환 규칙
 
@@ -569,8 +584,8 @@ def picture_data(path: Path) -> tuple[bytes, str]
 ## 명령줄 (`md2hwpx.cli`)
 
 ```
-md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
-python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
+md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx] [--include-draft]
+python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx] [--include-draft]
 ```
 
 - `md2hwpx` 명령은 `pyproject.toml` 의 `[project.scripts]` 로 설치된다.
@@ -582,6 +597,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
     Markdown 하나로 변환한다. 이미지 경로의 기준은 그 폴더다. 장 번호와 캡션 번호는 파일을 넘어 이어진다.
   - 이름 순은 대소문자를 구분하지 않고, 숫자 부분은 크기로 비교한다 (`2.md` → `10.md`).
   - `.md` 파일이 없는 폴더는 오류다.
+  - front matter 에 `draft: true` 가 있는 파일은 `--include-draft` 가 없으면 뺀다 (위 "초안").
 - 출력 경로:
   - 입력 이름: 파일이면 확장자를 뺀 이름, 폴더면 폴더 이름(`.` 도 실제 폴더 이름).
   - `-o`, `--output` 생략 시 현재 작업 폴더의 `입력 이름.hwpx`.
@@ -592,8 +608,8 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 - `-t`, `--template` 생략 시 현재 폴더의 `template.hwpx` 를, 없으면 내장 템플릿(`convert.DEFAULT_TEMPLATE`,
   `src/md2hwpx/template.hwpx`)을 쓴다. 내장 템플릿은 패키지에 들어 있어 wheel 로 설치해도 쓸 수 있다.
 - 처리 순서: 입력 읽기 → `render_diagrams` 로 다이어그램을 임시 폴더에 렌더링 → `convert_markdown`.
-  이 흐름은 `convert_input(input_path, template, output)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
-  입력 파일 목록은 `input_files(input_path)` 가 정하며, 웹 서비스가 이미지 경로를 검사할 때도 같은 목록을 쓴다.
+  이 흐름은 `convert_input(input_path, template, output, include_draft=False)` 이며, 웹 서비스([web-service.md](web-service.md))도 쓴다.
+  입력 파일 목록은 `input_files(input_path, include_draft=False)` 가 정하며, 웹 서비스가 이미지 경로를 검사할 때도 같은 목록을 쓴다.
   경고 목록을 `ConversionWarning`(입력 파일, 줄, 내용, 이미지 경로 또는 None) 으로 돌려준다 (아래 경고). `str()` 이 이것을 한 줄로 만든다.
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
@@ -649,6 +665,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx]
 | 차례 모으는 방식 | `[TOC 제목]`·`스타일="..."`·`개요 스타일="..."` 의 `ContentsMake` 17·33·49 와 `ContentsStyles` 글자 수·`;`, 처음 항목, 다른 차례와의 순서, 같은 이름 한 번, 모을 문단이 없으면 차례 없음, 없는 스타일 경고(표 셀 안 `[TOC]` 제외) |
 | 문단 스타일 지정 | `custom-style` div 안 문단·인용문 문단의 스타일과 문단 모양, 헤딩·목록 항목 유지, 안쪽 div 우선, 없는 스타일은 `본문`, 다른 `:::` 블록은 글자, `unknown_styles` 의 줄(front matter 포함, 코드블록 안 제외), 명령줄·웹 경고 |
 | Front matter | `---`/`...` 닫기, BOM, 빈 front matter 제거, 맨 앞이 아니거나 닫히지 않은 `---` 는 본문 유지, 폴더 입력은 파일마다 제거 |
+| 초안 | 폴더 입력에서 `draft: true` 파일 제외, `draft: false`·본문의 같은 줄은 유지, `--include-draft` 로 포함, `True` 값, 초안 파일 하나만이면 종료 코드 1·파일 미생성, 웹 zip·git 은 `include_draft` 로 포함·초안만이면 400, 웹 files 는 늘 포함 |
 | 캡션 번호 방식 | `caption-numbering: document` 의 `[표 M]`·`[그림 M]`, 장에서 다시 매기지 않음, `[새 번호 표]` 는 동작, 기본 `chapter`, 따옴표 값, 본문의 같은 줄 무시, 모르는 값과 파일마다 다른 값은 `ConversionError`, 키 없는 파일은 다른 파일을 따름 |
 | 수평선 | `---`·`***`·`- - -`·`___`, 목록 뒤 `---`, 아래쪽 테두리만 있음 |
 | 인용문 | 문단 나눔, 중첩 깊이별 왼쪽 여백, 왼쪽 테두리와 연결, 인라인 서식, 인용문 뒤 문단은 일반 여백 |

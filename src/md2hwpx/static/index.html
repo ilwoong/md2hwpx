@@ -83,6 +83,8 @@
         <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
       </label>
       <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
+      <label><input type="checkbox" name="include_draft"> draft 파일도 변환</label>
+      <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
     </div>
 
     <details>
@@ -163,7 +165,10 @@
     if (source === "files") for (const file of form.files.files) data.append("files", file);
     if (source === "zip" && form.archive.files[0]) data.append("archive", form.archive.files[0]);
     if (source === "git") { data.append("repo", form.repo.value); data.append("ref", form.ref.value); }
-    if (source !== "files") data.append("path", form.path.value);
+    if (source !== "files") {
+      data.append("path", form.path.value);
+      data.append("include_draft", form.include_draft.checked);
+    }
     if (form.template.files[0]) data.append("template", form.template.files[0]);
 
     button.disabled = true;

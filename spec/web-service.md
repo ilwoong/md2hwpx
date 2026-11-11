@@ -57,6 +57,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `ref` | `source=git`: 브랜치, 태그 또는 커밋의 전체 해시 40자 (선택, 비우면 기본 브랜치) |
 | `path` | `zip`·`git`: 변환할 md 파일 또는 폴더의 상대 경로 (선택) |
 | `template` | 템플릿 HWPX (선택, 비우면 내장 템플릿 `src/md2hwpx/template.hwpx`) |
+| `include_draft` | `zip`·`git`: `true` 면 front matter 에 `draft: true` 가 있는 파일도 변환 (선택, 기본 `false`). 페이지의 "draft 파일도 변환" |
 
 - 성공: `200`, `Content-Type: application/hwp+zip`,
   `Content-Disposition: attachment; filename="document.hwpx"; filename*=UTF-8''<이름>.hwpx`.
@@ -92,6 +93,9 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - `path` 가 있으면 root 아래의 그 파일 또는 폴더.
 - 없으면, root 에 폴더 하나만 있을 때(폴더를 압축한 zip) 그 폴더로 들어간 뒤,
   `.md` 가 하나면 그 파일, 아니면 그 폴더 (명령줄의 폴더 입력처럼 바로 안의 `.md` 를 이름 순으로 이어 붙인다).
+- 초안: `zip`·`git` 은 명령줄처럼 `draft: true` 파일을 빼고 변환한다 ([markdown-conversion.md](markdown-conversion.md) 의 "초안").
+  `include_draft` 가 `true` 면 포함한다. 남는 파일이 없으면 `변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): <경로>`.
+  `files` 는 올린 파일을 사용자가 고른 것이므로 초안도 늘 변환한다.
 - 내려받는 파일 이름: 대상이 파일이면 확장자를 뺀 이름, 폴더면 `path` 의 마지막 이름,
   `path` 가 없으면 zip 파일 이름 / 저장소 이름 / 처음 올린 md 이름 (없으면 `document`).
 

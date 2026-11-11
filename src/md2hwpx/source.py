@@ -21,6 +21,8 @@ _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\
 CAPTION_NUMBERING = "caption-numbering"
 CAPTION_NUMBERINGS = ("chapter", "document")
 _CAPTION_NUMBERING = re.compile(rf"^{CAPTION_NUMBERING}:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+# The front matter line that marks a file as a draft (see is_draft): YAML's true, unquoted.
+_DRAFT = re.compile(r"^draft:[ \t]*(?:true|True|TRUE)[ \t]*$", re.MULTILINE)
 
 
 class ConversionError(Exception):
@@ -127,6 +129,12 @@ def column_problems(markdown: str) -> list[tuple[int, str]]:
 def read_markdown(md_path: Path) -> str:
     """Read *md_path* (UTF-8) without its front matter, which is metadata, not document content."""
     return _FRONT_MATTER.sub("", md_path.read_text(encoding="utf-8"), count=1)
+
+
+def is_draft(md_path: Path) -> bool:
+    """Whether *md_path*'s front matter says "draft: true": a file left out of the conversion unless asked for."""
+    front = _FRONT_MATTER.match(md_path.read_text(encoding="utf-8"))
+    return bool(front and _DRAFT.search(front[0]))
 
 
 def caption_numbering(md_paths: Iterable[Path]) -> str:
