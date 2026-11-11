@@ -31,6 +31,21 @@ def test_convert_caption_numbers_restart_in_each_chapter(tmp_path):
     assert pictures == ["[그림 1-1] 첫 그림", "[그림 2-1] 장2 그림1"]
 
 
+def test_convert_chapter_start(tmp_path):
+    out = tmp_path / "out.hwpx"
+    markdown = (
+        "[표] 장 앞\n| a |\n|---|\n| 0 |\n\n# 장\n\n[표 #첫] 첫\n| b |\n|---|\n| 1 |\n\n"
+        "# 다음 장\n\n[표] 둘\n| c |\n|---|\n| 2 |\n\n[@첫] 참조\n"
+    )
+
+    convert_markdown(markdown, tmp_path, TEMPLATE, out, chapter_start=3)
+
+    doc = HwpxDocument.open(out)
+    # The first chapter is 3; a table before it keeps its number without one, and references read the chapter.
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 1] 장 앞", "[표 3-1] 첫", "[표 4-1] 둘"]
+    assert "표 3-1 참조" in [p.text for p in doc.paragraphs]
+
+
 def test_convert_captions(tmp_path):
     (tmp_path / "a.png").write_bytes(_png())
     md = tmp_path / "cap.md"

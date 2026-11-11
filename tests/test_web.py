@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from hwpx import HwpxDocument
 
+from helpers import _text
 from md2hwpx import web
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 
@@ -141,6 +142,57 @@ def test_zip_path_picks_a_file(tmp_path):
     assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["B"]
 
 
+
+def test_zip_leaves_out_drafts_unless_asked(tmp_path):
+    archive = _zip({"a.md": b"# A\n", "b.md": b"---\ndraft: true\n---\n# B\n"})
+    response = client.post("/convert", data={"source": "zip"}, files={"archive": ("x.zip", archive)})
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["A"]
+
+    response = client.post(
+        "/convert", data={"source": "zip", "include_draft": "true"}, files={"archive": ("x.zip", archive)}
+    )
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["A", "B"]
+
+
+def test_zip_of_drafts_only():
+    archive = _zip({"b.md": b"---\ndraft: true\n---\n# B\n"})
+    detail = _error(client.post("/convert", data={"source": "zip"}, files={"archive": ("x.zip", archive)}))
+    assert detail == "변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): b.md"
+
+
+def test_zip_include_patterns_and_chapter_start(tmp_path):
+    archive = _zip({
+        "book/ch_1.md": b"# A\n",
+        "book/ch_2.md": "# B\n\n[표] t\n| a |\n|---|\n| 1 |\n".encode(),
+        "book/ch_3.md": b"# C\n",
+    })
+    response = client.post(
+        "/convert",
+        data={"source": "zip", "include": " ch_2*.md, ch_3* ", "chapter_start": "2"},
+        files={"archive": ("x.zip", archive)},
+    )
+    doc = _hwpx(response, tmp_path)
+    assert [p.text for p in doc.paragraphs if p.text in ("A", "B", "C")] == ["B", "C"]
+    assert [_text(t.caption.element) for t in doc.tables.all] == ["[표 2-1] t"]
+
+    detail = _error(client.post("/convert", data={"source": "zip", "include": "x*"}, files={"archive": ("x.zip", archive)}))
+    assert detail == "'x*' 에 맞는 .md 파일이 없습니다: book"
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "a"])
+def test_chapter_start_must_be_a_number(value):
+    files = [("files", ("a.md", b"# A\n"))]
+    detail = _error(client.post("/convert", data={"source": "files", "chapter_start": value}, files=files))
+    assert detail == f"시작 장 번호는 1 이상의 정수여야 합니다: {value}"
+
+
+def test_files_convert_drafts(tmp_path):
+    # Files uploaded one by one are chosen: a draft among them is converted.
+    files = [("files", ("b.md", b"---\ndraft: true\n---\n# B\n"))]
+    response = client.post("/convert", data={"source": "files"}, files=files)
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == ["B"]
+
+
 def test_zip_path_outside_is_refused():
     archive = _zip({"a.md": b"# A\n"})
     response = client.post("/convert", data={"source": "zip", "path": "../"}, files={"archive": ("x.zip", archive)})
@@ -226,6 +278,24 @@ def test_git_clone(tmp_path, monkeypatch):
     assert command[command.index("--branch") + 1] == "v1.0"
     assert command[-3:-1] == ["--", "https://example.com/user/manual.git"]
     assert "protocol.allow=never" in command and "core.symlinks=false" in command
+
+
+
+@pytest.mark.parametrize("include_draft, texts", [("false", ["안내"]), ("true", ["안내", "초안"])])
+def test_git_leaves_out_drafts_unless_asked(tmp_path, monkeypatch, include_draft, texts):
+    def fake_run(command, **kwargs):
+        root = Path(command[-1])
+        root.mkdir(exist_ok=True)
+        (root / "1.md").write_text("# 안내\n", encoding="utf-8")
+        (root / "2.md").write_text("---\ndraft: true\n---\n# 초안\n", encoding="utf-8")
+        return web.subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    response = client.post(
+        "/convert",
+        data={"source": "git", "repo": "https://example.com/manual.git", "include_draft": include_draft},
+    )
+    assert [p.text for p in _hwpx(response, tmp_path).paragraphs if p.text] == texts
 
 
 def test_git_commit(tmp_path, monkeypatch):

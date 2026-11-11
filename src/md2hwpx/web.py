@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from md2hwpx import oauth
-from md2hwpx.cli import CONVERSION_ERRORS, convert_input, input_files
+from md2hwpx.cli import CONVERSION_ERRORS, NoInputFiles, convert_input, input_files
 from md2hwpx.convert import DEFAULT_TEMPLATE
 from md2hwpx.source import image_paths
 
@@ -180,12 +180,16 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
     return root, name
 
 
-def _check_images(input_path: Path, root: Path) -> None:
+def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: list[str]) -> None:
     """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX."""
     try:
-        files = input_files(input_path)
-    except FileNotFoundError:
-        raise HTTPException(400, f"변환할 .md 파일이 없습니다: {_relative(input_path, root) or '/'}") from None
+        files = input_files(input_path, include_draft, patterns)
+    except NoInputFiles as error:
+        what = {
+            "folder": "변환할 .md 파일이 없습니다",
+            "draft": f"{error.what} ('draft 파일도 변환' 을 켜세요)",
+        }.get(error.reason, error.what)
+        raise HTTPException(400, f"{what}: {_relative(input_path, root) or '/'}") from None
     for md in files:
         for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
             if not _inside(image, root):
@@ -217,8 +221,19 @@ def convert(
     ref: str = Form(default=""),
     path: str = Form(default=""),
     template: UploadFile | None = File(default=None),
+    include_draft: bool = Form(default=False),
+    include: str = Form(default=""),
+    chapter_start: str = Form(default=""),
 ) -> Response:
-    """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back."""
+    """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back.
+
+    A zip or repository leaves out its drafts (see cli.input_files) unless *include_draft*, and converts only the
+    files whose names match one of the comma-separated patterns *include*, if any; files uploaded one by one are
+    all chosen, drafts too. *chapter_start* is the first chapter's number in captions (empty: 1)."""
+    patterns = [p.strip() for p in include.split(",") if p.strip()]
+    chapter_start = chapter_start.strip() or "1"
+    if not chapter_start.isdigit() or int(chapter_start) < 1:
+        raise HTTPException(400, f"시작 장 번호는 1 이상의 정수여야 합니다: {chapter_start}")
     budget = _Budget()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp).resolve()
@@ -226,6 +241,8 @@ def convert(
         root.mkdir()
         if source == "files":
             name = _save_files(files, root, budget)
+            # The user chose each file: no patterns pick among them, and drafts go in too.
+            patterns, include_draft = [], True
         elif source == "zip":
             name = _extract_zip(archive, root, work, budget)
         elif source == "git":
@@ -234,7 +251,7 @@ def convert(
             raise HTTPException(400, f"알 수 없는 입력 방식입니다: {source}")
         _remove_symlinks(root)
         input_path, name = _input_path(root, path.strip().strip("/"), name)
-        _check_images(input_path, root)
+        _check_images(input_path, root, include_draft, patterns)
 
         template_path = DEFAULT_TEMPLATE
         if template is not None and template.filename:
@@ -242,7 +259,7 @@ def convert(
             budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
-            found = convert_input(input_path, template_path, output)
+            found = convert_input(input_path, template_path, output, include_draft, patterns, int(chapter_start))
         except CONVERSION_ERRORS as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None

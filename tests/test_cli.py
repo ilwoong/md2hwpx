@@ -118,6 +118,68 @@ def test_cli_folder_input(tmp_path, monkeypatch):
     assert len(doc.media.picture_references()) == 1
 
 
+
+def test_cli_leaves_out_drafts(tmp_path, capsys):
+    folder = tmp_path / "chapters"
+    folder.mkdir()
+    (folder / "1.md").write_text("---\ndraft: false\n---\n# 하나\n", encoding="utf-8")
+    (folder / "2.md").write_text("---\ntitle: 둘\ndraft: true\n---\n# 둘\n", encoding="utf-8")
+    (folder / "3.md").write_text("# 셋\n\ndraft: true\n", encoding="utf-8")  # not front matter: body text
+    out = tmp_path / "out.hwpx"
+
+    assert main([str(folder), "-o", str(out), "-t", str(TEMPLATE)]) == 0
+    assert [p.text for p in HwpxDocument.open(out).paragraphs[1:] if p.text] == ["하나", "셋", "draft: true"]
+
+    assert main([str(folder), "-o", str(out), "-t", str(TEMPLATE), "--include-draft"]) == 0
+    texts = [p.text for p in HwpxDocument.open(tmp_path / "out-1.hwpx").paragraphs[1:] if p.text]
+    assert texts == ["하나", "둘", "셋", "draft: true"]
+
+
+def test_cli_draft_file_needs_include_draft(tmp_path, capsys):
+    md = tmp_path / "doc.md"
+    md.write_text("---\ndraft: True\n---\n# 초안\n", encoding="utf-8")
+    out = tmp_path / "doc.hwpx"
+
+    assert main([str(md), "-o", str(out), "-t", str(TEMPLATE)]) == 1
+    assert "모두 draft 입니다 (포함하려면 --include-draft)" in capsys.readouterr().err
+    assert not out.exists()
+
+    assert main([str(md), "-o", str(out), "-t", str(TEMPLATE), "--include-draft"]) == 0
+    assert [p.text for p in HwpxDocument.open(out).paragraphs[1:] if p.text] == ["초안"]
+
+
+def test_cli_include_patterns(tmp_path, capsys):
+    folder = tmp_path / "book"
+    folder.mkdir()
+    for name in ("ch_1.md", "ch_2.md", "ch_2b.md", "ch_10.md", "appendix.md", "CH_2c.md"):
+        (folder / name).write_text(f"# {name}\n", encoding="utf-8")
+    (folder / "ch_2d.md").write_text(f"---\ndraft: true\n---\n# ch_2d.md\n", encoding="utf-8")
+    out = tmp_path / "out.hwpx"
+
+    args = [str(folder), "-o", str(out), "-t", str(TEMPLATE)]
+    assert main([*args, "--include", "ch_2*.md", "--include", "app*"]) == 0
+    # Name order, case kept, drafts still left out.
+    assert [p.text for p in HwpxDocument.open(out).paragraphs[1:] if p.text] == ["appendix.md", "ch_2.md", "ch_2b.md"]
+
+    assert main([*args, "--include", "ch_3*.md"]) == 1
+    assert "'ch_3*.md' 에 맞는 .md 파일이 없습니다" in capsys.readouterr().err
+    assert not (tmp_path / "out-1.hwpx").exists()
+
+
+def test_cli_chapter_start(tmp_path, capsys):
+    md = tmp_path / "ch_2.md"
+    md.write_text("# 둘째 장\n\n[표] 표\n| a |\n|---|\n| 1 |\n", encoding="utf-8")
+    out = tmp_path / "out.hwpx"
+
+    assert main([str(md), "-o", str(out), "-t", str(TEMPLATE), "--chapter-start", "2"]) == 0
+    assert [_text(t.caption.element) for t in HwpxDocument.open(out).tables.all] == ["[표 2-1] 표"]
+
+    for bad in ("0", "x"):
+        with pytest.raises(SystemExit):
+            main([str(md), "--chapter-start", bad])
+    assert "1 이상의 정수여야 합니다" in capsys.readouterr().err
+
+
 def test_cli_folder_input_named_dot(tmp_path, monkeypatch):
     folder = tmp_path / "book"
     folder.mkdir()
