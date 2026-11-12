@@ -123,7 +123,8 @@ def _blank_page_width(text: str, size: int) -> int:
 
 
 def _space_above_below(obj) -> None:
-    """Keep about a line of space above and below the table or picture *obj*, none at its sides."""
+    """Keep about a line of space above and below the table or picture *obj*. Its sides are left as they are:
+    none, but for a captioned picture narrower than the body (see _Writer.picture)."""
     margin = obj.element.find(f"{_HP}outMargin")
     margin.set("top", str(OBJECT_SPACING))
     margin.set("bottom", str(OBJECT_SPACING))
@@ -551,10 +552,11 @@ class _Writer:
         picture = self.doc.add_picture(data, image_format, width=width, height=height, **self.picture_body)
         _space_above_below(picture)
         self.place(picture.paragraph, quote, indent)
+        narrower = width is not None and width < max_width
         # A picture narrower than the body sits at the left margin and leaves a gap at the right; centred,
         # the gap is shared. The picture is laid out as a character, so the paragraph's own alignment is
         # what moves it. A picture that fills the body has nothing to centre, and keeps its style.
-        if width is not None and width < max_width:
+        if narrower:
             picture.paragraph.para_pr_id_ref = self.para_format(
                 picture.paragraph.para_pr_id_ref, alignment=PICTURE_REDUCED_ALIGN
             )
@@ -562,7 +564,7 @@ class _Writer:
         # A caption is as wide as its picture, or with fullSz, as the picture and its outer margins: a narrower
         # picture's side margins fill the rest of the width, centring it, so its caption takes the whole width.
         caption = picture.element.find(f"{_HP}caption")
-        if caption is not None and width is not None and width < max_width:
+        if caption is not None and narrower:
             margin = picture.element.find(f"{_HP}outMargin")
             left = (max_width - width) // 2
             margin.set("left", str(left))

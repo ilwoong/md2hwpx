@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from md2hwpx import oauth
-from md2hwpx.cli import CONVERSION_ERRORS, NoInputFiles, convert_input, input_files
+from md2hwpx.cli import CONVERSION_ERRORS, NoInputFiles, chapter_number, convert_input, input_files
 from md2hwpx.convert import DEFAULT_TEMPLATE
 from md2hwpx.source import image_paths
 
@@ -231,9 +231,10 @@ def convert(
     files whose names match one of the comma-separated patterns *include*, if any; files uploaded one by one are
     all chosen, drafts too. *chapter_start* is the first chapter's number in captions (empty: 1)."""
     patterns = [p.strip() for p in include.split(",") if p.strip()]
-    chapter_start = chapter_start.strip() or "1"
-    if not chapter_start.isdigit() or int(chapter_start) < 1:
-        raise HTTPException(400, f"시작 장 번호는 1 이상의 정수여야 합니다: {chapter_start}")
+    try:
+        first_chapter = chapter_number(chapter_start.strip() or "1")
+    except ValueError as error:
+        raise HTTPException(400, f"시작 장 번호는 {error}") from None
     budget = _Budget()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp).resolve()
@@ -259,7 +260,7 @@ def convert(
             budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
-            found = convert_input(input_path, template_path, output, include_draft, patterns, int(chapter_start))
+            found = convert_input(input_path, template_path, output, include_draft, patterns, first_chapter)
         except CONVERSION_ERRORS as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
             raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None
