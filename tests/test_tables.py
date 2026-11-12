@@ -5,11 +5,12 @@ import zipfile
 from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
+from hwpx.oxml.table_sizes import grid_widths_of
 
 from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _template_with_code_style, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
-from md2hwpx.tables import column_widths
+from md2hwpx.tables import TextStyles, _slot, column_widths
 
 
 def test_convert_code_block(tmp_path):
@@ -364,6 +365,36 @@ def test_convert_row_heights_measure_each_run_in_its_face(tmp_path):
     table, code = HwpxDocument.open(out).tables.all
     assert [table.cell(r, 1).height for r in range(1, 5)] == [lines * 1800 + 141 * 2 for lines in (1, 2, 3, 4)]
     assert code.cell(0, 0).height == 1260 + 141 * 2
+
+
+def test_cell_slot_is_python_hwpxs(tmp_path):
+    # The rows are measured in a slot worked out without python-hwpx's resolve_slot_metrics (slow: see
+    # tables.TextStyles): its width, size and layout settings must stay what that function gives.
+    md = tmp_path / "slots.md"
+    md.write_text(
+        "| 머리 `코드` | **굵게** | 오른쪽 |\n|---|:-:|--:|\n"
+        "| 긴 문장이 이어집니다 | `code_value()` 와 글 | [링크](http://a.b) |\n| 줄<br>나눔 |  | 3 |\n\n"
+        "<!-- [cols: 20%, 80%] -->\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+        "> - | 들여쓴 | 표 |\n>   |---|---|\n>   | x | y |\n\n"
+        "```python\ndef f():\n    return 1\n```\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "slots.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    text_styles = TextStyles(doc)
+    cells = 0
+    for table in doc.tables.all:
+        grid = grid_widths_of(table.element)
+        for r in range(table.row_count):
+            for c in range(table.column_count):
+                cell = table.cell(r, c)
+                theirs = resolve_slot_metrics(cell, doc, safety=1.0)
+                assert _slot(cell, grid, text_styles) == (theirs.line_width, theirs.font_pt, theirs.text_style)
+                cells += 1
+    assert cells == 9 + 4 + 4 + 1
 
 
 def test_convert_indented_tables_fit_the_body(tmp_path):

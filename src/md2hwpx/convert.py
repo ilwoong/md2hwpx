@@ -10,7 +10,6 @@ from urllib.parse import unquote
 
 from hwpx import HwpxDocument
 from hwpx.oxml import Style
-from hwpx.form_fit.measure import text_style_from_refs
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from markdown_it.tree import SyntaxTreeNode
 from pygments.lexers import TextLexer, get_lexer_by_name
@@ -24,7 +23,9 @@ from md2hwpx.pieces import (
     strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
-from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows, line_count, percent_widths
+from md2hwpx.tables import (
+    CELL_MARGIN_LR, CELL_MARGIN_TB, TextStyles, column_widths, fit_rows, line_count, percent_widths,
+)
 from md2hwpx.toc import TocRequest, add_toc, toc_entries, toc_request
 
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
@@ -207,6 +208,7 @@ class _Writer:
         # python-hwpx compares each requested shape with every one in the document, and lists all
         # paragraphs to find one by index; with hundreds of pages that adds up, so remember results.
         self._formats: dict[tuple, str] = {}
+        self.text_styles = TextStyles(doc)  # shapes' layout settings, for measuring lines
         self._list_headings: dict[tuple, dict] = {}  # (bullet level) / (numbering, level) -> hh:heading
         self._section = doc.sections[-1]  # where new paragraphs go
         self._paragraphs_before = len(doc.paragraphs) - len(self._section.element.findall(_HP_P))
@@ -400,8 +402,8 @@ class _Writer:
         # As set_caption writes it: footnotes dropped, each run in the shape its marks give.
         runs = [(run.text, self.run_char_pr(style.char_pr_id_ref, run.marks)) for run in self.caption.runs if run.text]
         lines = line_count(
-            self.doc, style.para_pr_id_ref, "".join(text for text, _ in runs), runs, width, self.caption_size,
-            text_style_from_refs(self.doc, style.para_pr_id_ref, [style.char_pr_id_ref]),
+            self.text_styles, style.para_pr_id_ref, "".join(text for text, _ in runs), runs, width, self.caption_size,
+            self.text_styles.style(style.para_pr_id_ref, [style.char_pr_id_ref]),
         )
         return CAPTION_GAP + lines * self.caption_line_height
 
@@ -698,7 +700,7 @@ class _Writer:
             paragraph.style_id_ref = style_id
             paragraph.para_pr_id_ref = para_pr
         # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
-        fit_rows(table, self.doc, self.code_line_height)
+        fit_rows(table, self.text_styles, self.code_line_height)
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""
@@ -795,7 +797,7 @@ class _Writer:
                 table.set_column_widths(column_widths(texts, width, self.plain_size))
             else:
                 table.set_column_widths(percent_widths(percents, width))
-            fit_rows(table, self.doc, self.plain_line_height, self.header_line_height)
+            fit_rows(table, self.text_styles, self.plain_line_height, self.header_line_height)
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs
         for index, start in self.page_starts.items():
