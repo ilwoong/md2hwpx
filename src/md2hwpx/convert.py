@@ -559,6 +559,16 @@ class _Writer:
                 picture.paragraph.para_pr_id_ref, alignment=PICTURE_REDUCED_ALIGN
             )
         self.set_caption(picture, "BOTTOM")
+        # A caption is as wide as its picture, or with fullSz, as the picture and its outer margins: a narrower
+        # picture's side margins fill the rest of the width, centring it, so its caption takes the whole width.
+        caption = picture.element.find(f"{_HP}caption")
+        if caption is not None and width is not None and width < max_width:
+            margin = picture.element.find(f"{_HP}outMargin")
+            left = (max_width - width) // 2
+            margin.set("left", str(left))
+            margin.set("right", str(max_width - width - left))
+            caption.set("fullSz", "1")
+            caption.set("lastWidth", str(max_width))
 
     def blank_page(self, text: str) -> None:
         """A page kept as margin: a 1x1 table just big enough for *text*, centred on its own page.

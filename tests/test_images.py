@@ -57,7 +57,9 @@ def test_convert_picture_sizes(tmp_path):
         (300 * 75, 150 * 75),
     ]
     margins = [pic.find(f"{HP}outMargin").attrib for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
-    assert margins == [{"left": "0", "right": "0", "top": "1400", "bottom": "1400"}] * len(images)
+    assert all((m["top"], m["bottom"]) == ("1400", "1400") for m in margins)
+    # None at the sides, but for the captioned picture narrower than the body (its caption takes the whole width).
+    assert [(m["left"], m["right"]) != ("0", "0") for m in margins] == [name == "tall.png" for name in images]
 
 
 def test_convert_picture_size_attributes(tmp_path):
@@ -253,6 +255,42 @@ def test_convert_pictures_in_list_items(tmp_path):
         ("", "NONE", BODY_LEFT + 1000),  # ... and the picture follows
     ]
     assert len(doc.media.picture_references()) == 2
+
+
+def test_convert_reduced_picture_caption_takes_the_whole_width(tmp_path):
+    (tmp_path / "a.png").write_bytes(_png(100, 50))
+    (tmp_path / "wide.png").write_bytes(_png(4000, 1000))
+    md = tmp_path / "caption.md"
+    md.write_text(
+        "![절반](a.png){width=50%}\n\n"  # narrower, captioned: the caption is as wide as the body
+        "![](a.png){width=50%}\n\n"  # narrower, no caption: margins untouched
+        "![가득](wide.png)\n\n"  # fills the body: its caption already does
+        "> ![인용](a.png){width=50%}\n",  # inside a quote: as wide as the quote leaves
+        encoding="utf-8",
+    )
+    out = tmp_path / "caption.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    pictures = [pic for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
+    found = []
+    for pic in pictures:
+        margin, caption = pic.find(f"{HP}outMargin"), pic.find(f"{HP}caption")
+        found.append((
+            int(pic.find(f"{HP}sz").get("width")) + int(margin.get("left")) + int(margin.get("right")),
+            None if caption is None else (caption.get("fullSz"), int(caption.get("lastWidth"))),
+        ))
+    quoted = BODY_WIDTH - 1000
+    assert found == [
+        (BODY_WIDTH, ("1", BODY_WIDTH)),
+        (BODY_WIDTH // 2, None),
+        (BODY_WIDTH, ("0", BODY_WIDTH)),
+        (quoted, ("1", quoted)),
+    ]
+    # Split evenly, so the picture stays in the middle.
+    margin = pictures[0].find(f"{HP}outMargin")
+    assert abs(int(margin.get("left")) - int(margin.get("right"))) <= 1
 
 
 def test_convert_indented_picture_fits_the_body(tmp_path):
