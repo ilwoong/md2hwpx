@@ -1,5 +1,7 @@
 """Tables and code blocks (a code block is a 1x1 table): layout, widths, row heights, highlighting."""
 
+import zipfile
+
 from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 from hwpx.layout import lint_layout
@@ -125,11 +127,13 @@ def test_convert_table(tmp_path):
     assert table.element.get("repeatHeader") == "1"
     assert [cell.element.get("header") for cell in header + body] == ["1"] * 4 + ["0"] * 4
     assert [align(cell) for cell in body[:3]] == ["LEFT", "CENTER", "RIGHT"]
+    # The header row's look is the template's 표 헤더 style (bold, centred); a column's alignment comes first.
+    assert [align(cell) for cell in header] == ["LEFT", "CENTER", "RIGHT", "CENTER"]
     # 바탕글 with 휴먼명조, so the 본문 first-line indent does not push the text in from the left edge.
-    plain = doc.styles.resolve("바탕글")
+    plain, header_style = doc.styles.resolve("바탕글"), doc.styles.resolve("표 헤더")
     for cell in header + body:
         paragraph = cell.paragraphs[0]
-        assert int(paragraph.style_id_ref) == plain.id
+        assert int(paragraph.style_id_ref) == (header_style if cell in header else plain).id
         assert int(doc.styles.paragraph_property(paragraph.para_pr_id_ref).margin.intent) == 0
         assert doc.styles.font_face(paragraph.char_pr_id_ref, "HANGUL") == "휴먼명조"
     # Cell padding, as Hancom's own tables have it: 1.8 mm at the sides, 0.5 mm above and below. The cells
@@ -143,6 +147,55 @@ def test_convert_table(tmp_path):
         assert cell.height == 2082
     assert table.element.find(f"{HP}sz").get("height") == str(2082 * 3)
     assert doc.paragraphs[-1].text == "뒤 문단"
+
+
+def _template_renaming(tmp_path, names: dict[str, str]):
+    """The bundled template with its styles renamed: *names* maps each old name to its new one."""
+    path = tmp_path / "renamed.hwpx"
+    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item)
+            if item.filename == "Contents/header.xml":
+                for old, new in names.items():
+                    data = data.replace(f'name="{old}"'.encode(), f'name="{new}"'.encode())
+            dst.writestr(item, data)
+    return path
+
+
+def test_convert_table_header_without_header_style(tmp_path):
+    # A template without 표 헤더: the header row is in 바탕글 like the others, not bold.
+    template = _template_renaming(tmp_path, {"표 헤더": "다른 이름"})
+    md = tmp_path / "table.md"
+    md.write_text("| 머리 | 둘 |\n|---|---|\n| a | b |\n", encoding="utf-8")
+    out = tmp_path / "table.hwpx"
+
+    convert(md, template, out)
+
+    doc = HwpxDocument.open(out)
+    table = doc.tables.all[0]
+    plain = doc.styles.resolve("바탕글")
+    for c in range(2):
+        paragraph = table.cell(0, c).paragraphs[0]
+        assert int(paragraph.style_id_ref) == plain.id
+        assert "bold" not in doc.styles.char_property(paragraph.char_pr_id_ref).child_attributes
+        assert table.cell(0, c).height == 2082
+
+
+def test_convert_table_header_row_takes_its_styles_line_height(tmp_path):
+    # 표내부 (한컴돋움 12pt, 160%) as 표 헤더: the header row's lines are 1920 high, the others 바탕글's 1800.
+    template = _template_renaming(tmp_path, {"표 헤더": "옛 표 헤더", "표내부": "표 헤더"})
+    md = tmp_path / "table.md"
+    md.write_text("| 머리 | 둘 |\n|---|---|\n| a | b |\n", encoding="utf-8")
+    out = tmp_path / "table.hwpx"
+
+    convert(md, template, out)
+
+    doc = HwpxDocument.open(out)
+    table = doc.tables.all[0]
+    paragraph = table.cell(0, 0).paragraphs[0]
+    assert int(paragraph.style_id_ref) == doc.styles.resolve("표 헤더").id
+    assert doc.styles.font_face(paragraph.char_pr_id_ref, "HANGUL") == "한컴돋움"
+    assert (table.cell(0, 0).height, table.cell(1, 0).height) == (1920 + 141 * 2, 1800 + 141 * 2)
 
 
 def test_convert_table_cell_line_breaks(tmp_path):

@@ -37,6 +37,7 @@ BODY_STYLE = "본문"
 PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
 CODE_STYLE = "코드블록"  # optional: without it, code blocks use CODE_FONT, CODE_SIZE and CODE_LINE_SPACING
+HEADER_STYLE = "표 헤더"  # optional: without it, a table's header row is in PLAIN_STYLE like the other rows
 HEADER_FILL = "#D9D9D9"
 TABLE_BORDER = {"border_color": "#000000", "border_width": "0.12 mm"}  # the template's table border
 TABLE_SIDES = ["LEFT", "RIGHT", "TOP", "BOTTOM"]
@@ -190,6 +191,9 @@ class _Writer:
         self.picture_body = {"style": self.plain_style, "para_pr_id_ref": self.plain_style.para_pr_id_ref}
         # The template's 바탕글 size and line height: a table's columns and rows are sized from them.
         self.plain_size, self.plain_line_height = _line_metrics(doc, self.plain_style)
+        # A table's header row takes the template's 표 헤더 style if it has one, its rows that line height.
+        self.header_style = self.paragraph_styles.get(HEADER_STYLE, self.plain_style)
+        self.header_line_height = _line_metrics(doc, self.header_style)[1]
         # The page body a 본문 paragraph can fill.
         margin = doc.styles.paragraph_property(self.body_style.para_pr_id_ref).margin
         size, page = doc.page.size(), doc.page.margins()
@@ -322,21 +326,23 @@ class _Writer:
         note = self.doc.notes.add_footnote(plain_text(runs), paragraph)
         self.write_runs(note.body_paragraph, runs, footnotes=False)
 
-    def plain(self, paragraph, size: int | None = None, with_runs: bool = True) -> None:
+    def plain(self, paragraph, size: int | None = None, with_runs: bool = True, style: Style | None = None) -> None:
         """Put *paragraph* on 바탕글 (휴먼명조), the style table cells and pictures are set in.
 
         The 본문 style indents its first line, which would shift a cell's text in from its left edge and
         push a picture in from the left. *size* overrides the style's own size, for the blank page's
         wording. *with_runs* brings the runs already in *paragraph* along, for a paragraph whose text came
-        from set_text; a paragraph holding a table instead keeps its own.
+        from set_text; a paragraph holding a table instead keeps its own. *style* takes the place of
+        바탕글, for a table's header row.
         """
-        paragraph.style_id_ref = self.plain_style.id
-        paragraph.para_pr_id_ref = self.plain_style.para_pr_id_ref
+        style = style or self.plain_style
+        paragraph.style_id_ref = style.id
+        paragraph.para_pr_id_ref = style.para_pr_id_ref
         if not with_runs:
             return
         paragraph.char_pr_id_ref = (
-            self.plain_style.char_pr_id_ref if size is None
-            else self.char_format(self.plain_style.char_pr_id_ref, size=size)
+            style.char_pr_id_ref if size is None
+            else self.char_format(style.char_pr_id_ref, size=size)
         )
         for run in paragraph.runs:
             run.char_pr_id_ref = paragraph.char_pr_id_ref
@@ -553,6 +559,16 @@ class _Writer:
                 picture.paragraph.para_pr_id_ref, alignment=PICTURE_REDUCED_ALIGN
             )
         self.set_caption(picture, "BOTTOM")
+        # A caption is as wide as its picture, or with fullSz, as the picture and its outer margins: a narrower
+        # picture's side margins fill the rest of the width, centring it, so its caption takes the whole width.
+        caption = picture.element.find(f"{_HP}caption")
+        if caption is not None and width is not None and width < max_width:
+            margin = picture.element.find(f"{_HP}outMargin")
+            left = (max_width - width) // 2
+            margin.set("left", str(left))
+            margin.set("right", str(max_width - width - left))
+            caption.set("fullSz", "1")
+            caption.set("lastWidth", str(max_width))
 
     def blank_page(self, text: str) -> None:
         """A page kept as margin: a 1x1 table just big enough for *text*, centred on its own page.
@@ -623,12 +639,10 @@ class _Writer:
                     )
                 for paragraph, runs in zip(cell.paragraphs, lines):
                     # 바탕글 (휴먼명조): a table's text is not body text, and the 본문 style's first-line
-                    # indent would shift every cell in from its left edge.
-                    self.plain(paragraph)
+                    # indent would shift every cell in from its left edge. The header row: 표 헤더.
+                    self.plain(paragraph, style=self.header_style if r == 0 else None)
                     if aligns[c]:
                         paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment=aligns[c])
-                    if r == 0:
-                        paragraph.char_pr_id_ref = self.char_format(paragraph.char_pr_id_ref, bold=True)
                     self.write_runs(paragraph, runs)
 
     def code_block(self, code: list[str], lang: str, quote: int, indent: int) -> None:
@@ -760,7 +774,7 @@ class _Writer:
                 table.set_column_widths(column_widths(texts, width, self.plain_size))
             else:
                 table.set_column_widths(percent_widths(percents, width))
-            fit_rows(table, self.doc, self.plain_line_height)
+            fit_rows(table, self.doc, self.plain_line_height, self.header_line_height)
         # Before the TOC goes in, while the indexes still hold. A break with nothing after it is dropped.
         paragraphs = self.doc.paragraphs
         for index, start in self.page_starts.items():
