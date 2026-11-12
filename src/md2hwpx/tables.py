@@ -107,8 +107,9 @@ def _cell_height(cell, doc, line_height: int) -> int:
     return max(lines, 1) * line_height + CELL_MARGIN_TB * 2
 
 
-def fit_rows(table, doc, line_height: int) -> None:
-    """Declare each row of *table* as tall as its tallest cell's text, and the table as their sum.
+def fit_rows(table, doc, line_height: int, header_line_height: int | None = None) -> None:
+    """Declare each row of *table* as tall as its tallest cell's text, and the table as their sum: the lines
+    *line_height* each, the first row's *header_line_height* if given.
 
     A cell declares its own height, and Hancom lays the text out inside it: when the declaration is
     shorter than the text, the table takes more room on the page than it says it will, which pushes the
@@ -117,7 +118,8 @@ def fit_rows(table, doc, line_height: int) -> None:
     total = 0
     for r in range(table.row_count):
         cells = [table.cell(r, c) for c in range(table.column_count)]
-        height = max(_cell_height(cell, doc, line_height) for cell in cells)
+        row_line_height = header_line_height if r == 0 and header_line_height else line_height
+        height = max(_cell_height(cell, doc, row_line_height) for cell in cells)
         for cell in cells:
             cell.set_size(height=height)
         total += height
