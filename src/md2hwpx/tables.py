@@ -75,19 +75,28 @@ def _listed_faces(style: TextStyle) -> TextStyle:
     return replace(style, **changes) if changes else style
 
 
-def _paragraph_lines(paragraph, doc, slot) -> int:
-    """The lines *paragraph* takes in the cell whose *slot* it is: each run measured in its own face, so inline
-    code amid the text takes the code's width; the line breaking rules and indent are the cell's."""
-    text = paragraph.text
+def line_count(
+    doc, para_pr_id_ref, text: str, runs: list[tuple[str, object]], line_width: float, font_pt: float, style: TextStyle,
+) -> int:
+    """The lines *text*, its *runs* as (text, character shape id), takes in a paragraph of shape *para_pr_id_ref*
+    *line_width* wide: each run measured in its own face, so inline code amid the text takes the code's width;
+    the line breaking rules and indent are *style*'s, the paragraph's own, at *font_pt*."""
     if not text:
         return 1
     styles: list[TextStyle] = []
-    for run in paragraph.runs:
-        style = _listed_faces(text_style_from_refs(doc, paragraph.para_pr_id_ref, [run.char_pr_id_ref]))
-        styles += [style] * len(run.text)
-    style = _listed_faces(slot.text_style)
-    first, rest = indented_widths(slot.line_width - style.margin_left - style.margin_right, style)
-    return len(hancom_line_starts(text, [first, rest], slot.font_pt, style, styles=styles))
+    for run_text, char_pr_id_ref in runs:
+        styles += [_listed_faces(text_style_from_refs(doc, para_pr_id_ref, [char_pr_id_ref]))] * len(run_text)
+    style = _listed_faces(style)
+    first, rest = indented_widths(line_width - style.margin_left - style.margin_right, style)
+    return len(hancom_line_starts(text, [first, rest], font_pt, style, styles=styles))
+
+
+def _paragraph_lines(paragraph, doc, slot) -> int:
+    """The lines *paragraph* takes in the cell whose *slot* it is (see line_count)."""
+    runs = [(run.text, run.char_pr_id_ref) for run in paragraph.runs]
+    return line_count(
+        doc, paragraph.para_pr_id_ref, paragraph.text, runs, slot.line_width, slot.font_pt, slot.text_style
+    )
 
 
 def _cell_height(cell, doc, line_height: int) -> int:
