@@ -190,6 +190,10 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
   줄 수는 python-hwpx 의 `hancom_line_starts` 로 한/글 줄바꿈 규칙대로 센다 (글자 수로 세면
   `-` 연속처럼 넓은 글자나 좁은 열에서 접히는 줄을 놓친다). 셀 폭은 `resolve_slot_metrics`, 줄바꿈 규칙·들여쓰기는
   셀 첫 글자 모양의 것(`indented_widths`)을 쓰고, 글자 폭은 run 마다 그 글자 모양(`text_style_from_refs`)으로 잰다.
+  단, `resolve_slot_metrics` 를 부르지 않고 같은 규칙으로 셀 폭(열 격자 폭 − 좌우 안쪽 여백), 첫 run 의 글자 크기,
+  첫 문단의 줄바꿈 설정만 구한다 (`tables._slot`). 그 함수는 쓰지 않는 행 높이 예산까지 셀마다 계산하고, python-hwpx 는
+  문단·글자 모양을 물을 때마다 header.xml 에서 다시 읽으므로, 문단·글자 모양 조합마다 한 번만 구해 둔다(`tables.TextStyles`).
+  모양은 만든 뒤 바뀌지 않는다 (다른 모양은 새 id 다). 표 300 개 문서에서 변환이 228 초에서 35 초가 되었고, 행·표·그림 크기는 같았다.
   첫 글자 모양 하나로 재면 글 사이의 인라인 코드(D2Coding)를 본문 글꼴 폭으로 재어 줄이 모자란다.
   python-hwpx 에 글자 폭이 없는 D2Coding 은 같은 폭의 고정폭 글꼴 `굴림체`(영문 반각, 한글 전각)로 잰다
   (`tables.STAND_IN_FACES`). 그대로 두면 python-hwpx 가 비례폭으로 짐작해 코드 줄이 실제보다 좁거나 넓게 재진다.
