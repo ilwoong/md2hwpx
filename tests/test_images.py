@@ -52,7 +52,8 @@ def test_convert_picture_sizes(tmp_path):
         (round(body_height / 10), body_height),
         (200 * 75, 100 * 75),
         (BODY_WIDTH, round(BODY_WIDTH / 4)),
-        (round((body_height - 2500) / 20), body_height - 2500),
+        # less its caption: the gap and one line of 표그림 제목 (10pt at 180%)
+        (round((body_height - 2650) / 20), body_height - 2650),
         (400 * 75, 300 * 75),
         (300 * 75, 150 * 75),
     ]
@@ -255,6 +256,27 @@ def test_convert_pictures_in_list_items(tmp_path):
         ("", "NONE", BODY_LEFT + 1000),  # ... and the picture follows
     ]
     assert len(doc.media.picture_references()) == 2
+
+
+def test_convert_tall_picture_leaves_room_for_each_caption_line(tmp_path):
+    (tmp_path / "tall.png").write_bytes(_png(100, 2000))
+    md = tmp_path / "caption.md"
+    # One line, and one of 91 characters that Hancom breaks into two at the body width (about 59 to a line).
+    md.write_text(
+        "[그림] 짧은 캡션\n\n![](tall.png)\n\n[그림] " + "캡션 문장이 " * 12 + "\n\n![](tall.png)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "caption.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    body_height = BODY_HEIGHT - 2 * 1400
+    doc = HwpxDocument.open(out)
+    # The gap (850) and each line of 표그림 제목 (10pt at 180%: 1800) come off the height.
+    assert [ref.height for ref in doc.media.picture_references()] == [
+        body_height - 850 - 1800,
+        body_height - 850 - 2 * 1800,
+    ]
 
 
 def test_convert_reduced_picture_caption_takes_the_whole_width(tmp_path):

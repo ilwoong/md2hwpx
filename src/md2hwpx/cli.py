@@ -145,11 +145,20 @@ def _output_path(input_path: Path, output: str | None) -> Path:
     return candidate
 
 
-def _chapter_number(value: str) -> int:
-    """A --chapter-start value: a whole number from 1."""
+def chapter_number(value: str) -> int:
+    """A first chapter's number for captions, as given on the command line or the web page: a whole number
+    from 1. Raises ValueError, its message a Korean clause, for anything else."""
     if not value.isdigit() or int(value) < 1:
-        raise argparse.ArgumentTypeError(f"1 이상의 정수여야 합니다: {value}")
+        raise ValueError(f"1 이상의 정수여야 합니다: {value}")
     return int(value)
+
+
+def _chapter_number(value: str) -> int:
+    """A --chapter-start value (see chapter_number). argparse shows only an ArgumentTypeError's message."""
+    try:
+        return chapter_number(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def main(argv: list[str] | None = None) -> int:

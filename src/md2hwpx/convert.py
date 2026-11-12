@@ -10,6 +10,7 @@ from urllib.parse import unquote
 
 from hwpx import HwpxDocument
 from hwpx.oxml import Style
+from hwpx.form_fit.measure import text_style_from_refs
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from markdown_it.tree import SyntaxTreeNode
 from pygments.lexers import TextLexer, get_lexer_by_name
@@ -23,7 +24,7 @@ from md2hwpx.pieces import (
     strip_runs,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
-from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows, percent_widths
+from md2hwpx.tables import CELL_MARGIN_LR, CELL_MARGIN_TB, column_widths, fit_rows, line_count, percent_widths
 from md2hwpx.toc import TocRequest, add_toc, toc_entries, toc_request
 
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
@@ -49,7 +50,7 @@ QUOTE_BAR_GAP = 850  # HWPUNIT between the quote bar and the text
 RULE_LINE = {"border_color": "#808080", "border_width": "0.12 mm"}  # thematic break
 # Hancom's running numbers (hp:newNum / hp:autoNum numType) a "[새 번호]" line can start over.
 NUMBERS = {"쪽": "PAGE", "표": "TABLE", "그림": "PICTURE", "수식": "EQUATION"}
-CAPTION_RESERVE = 2500  # HWPUNIT kept below a picture for its caption: gap 850 + one 10pt line at 160%
+CAPTION_GAP = 850  # HWPUNIT between a table or picture and its caption
 # A picture is laid out as a character in its paragraph, so it follows that paragraph's alignment: one
 # narrower than the body is centred rather than left at the margin.
 PICTURE_REDUCED_ALIGN = "CENTER"
@@ -123,7 +124,8 @@ def _blank_page_width(text: str, size: int) -> int:
 
 
 def _space_above_below(obj) -> None:
-    """Keep about a line of space above and below the table or picture *obj*, none at its sides."""
+    """Keep about a line of space above and below the table or picture *obj*. Its sides are left as they are:
+    none, but for a captioned picture narrower than the body (see _Writer.picture)."""
     margin = obj.element.find(f"{_HP}outMargin")
     margin.set("top", str(OBJECT_SPACING))
     margin.set("bottom", str(OBJECT_SPACING))
@@ -194,6 +196,8 @@ class _Writer:
         # A table's header row takes the template's 표 헤더 style if it has one, its rows that line height.
         self.header_style = self.paragraph_styles.get(HEADER_STYLE, self.plain_style)
         self.header_line_height = _line_metrics(doc, self.header_style)[1]
+        # The 표그림 제목 size and line height: a picture leaves room below it for its caption's lines.
+        self.caption_size, self.caption_line_height = _line_metrics(doc, self.caption_style)
         # The page body a 본문 paragraph can fill.
         margin = doc.styles.paragraph_property(self.body_style.para_pr_id_ref).margin
         size, page = doc.page.size(), doc.page.margins()
@@ -289,30 +293,29 @@ class _Writer:
         if all(not run.marks and run.url is None and run.note is None for run in merged):
             return
         base = paragraph.char_pr_id_ref
-        char_prs: dict[frozenset[str], str | None] = {frozenset(): base}
-
-        def char_pr(marks: frozenset[str]) -> str | None:
-            if marks not in char_prs:
-                # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
-                char_prs[marks] = self.char_format(
-                    base,
-                    bold=True if "bold" in marks else None,
-                    italic=True if "italic" in marks else None,
-                    strike=True if "strike" in marks else None,
-                    font_by_lang=self.code_fonts if "code" in marks else None,
-                )
-            return char_prs[marks]
-
         paragraph.clear_text()
         for run in merged:
             if run.note is not None:
                 self.add_footnote(paragraph, run.note)
             elif run.url is None:
-                paragraph.add_run(run.text, char_pr_id_ref=char_pr(run.marks))
+                paragraph.add_run(run.text, char_pr_id_ref=self.run_char_pr(base, run.marks))
             else:
                 # Hancom's link look (blue, underlined) on top of the run's own marks.
-                link_pr = hyperlink_char_pr(paragraph.section, None, char_pr(run.marks))
+                link_pr = hyperlink_char_pr(paragraph.section, None, self.run_char_pr(base, run.marks))
                 paragraph.add_hyperlink(run.url, run.text, char_pr_id_ref=link_pr)
+
+    def run_char_pr(self, base: str | None, marks: frozenset[str]) -> str | None:
+        """The character shape of a run with *marks* in a paragraph whose own is *base*."""
+        if not marks:
+            return base
+        # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
+        return self.char_format(
+            base,
+            bold=True if "bold" in marks else None,
+            italic=True if "italic" in marks else None,
+            strike=True if "strike" in marks else None,
+            font_by_lang=self.code_fonts if "code" in marks else None,
+        )
 
     def add_footnote(self, paragraph, note_id: int) -> None:
         """A Hancom footnote at the end of *paragraph*; the definition's paragraphs become lines."""
@@ -380,13 +383,27 @@ class _Writer:
             obj.element.set("numberingType", "NONE")
             return
         style, caption = self.caption_style, self.caption
-        made = obj.set_caption(plain_text(caption.runs), side=side, char_pr_id_ref=style.char_pr_id_ref)
+        made = obj.set_caption(
+            plain_text(caption.runs), side=side, gap=CAPTION_GAP, char_pr_id_ref=style.char_pr_id_ref
+        )
         for paragraph in made.paragraphs:
             paragraph.style_id_ref = style.id
             paragraph.para_pr_id_ref = style.para_pr_id_ref
             self.write_runs(paragraph, caption.runs, footnotes=False)
         _auto_number(made.paragraphs[0], caption.before, caption.number, caption.num_type)
         self.caption = None
+
+    def caption_height(self, width: int) -> int:
+        """The room the waiting caption takes below a picture when it is *width* wide: the gap and its lines,
+        counted as Hancom breaks them (see line_count) at the 표그림 제목 style's line height."""
+        style = self.caption_style
+        # As set_caption writes it: footnotes dropped, each run in the shape its marks give.
+        runs = [(run.text, self.run_char_pr(style.char_pr_id_ref, run.marks)) for run in self.caption.runs if run.text]
+        lines = line_count(
+            self.doc, style.para_pr_id_ref, "".join(text for text, _ in runs), runs, width, self.caption_size,
+            text_style_from_refs(self.doc, style.para_pr_id_ref, [style.char_pr_id_ref]),
+        )
+        return CAPTION_GAP + lines * self.caption_line_height
 
     def take_caption(self, runs: list[Run], following: str | None) -> bool:
         """If *runs* is a "[표] ..." / "[그림] ..." line and *following* (the kind of what comes
@@ -539,7 +556,10 @@ class _Writer:
             if alt:
                 self.number_caption("그림", alt)
         max_width = self.width_at(quote, indent)
-        max_height = self.body_height - 2 * OBJECT_SPACING - (CAPTION_RESERVE if self.caption is not None else 0)
+        # The caption takes the whole width, whatever the picture's (see below).
+        max_height = self.body_height - 2 * OBJECT_SPACING - (
+            self.caption_height(max_width) if self.caption is not None else 0
+        )
         width, height = picture_size(
             image_path,
             data,
@@ -551,10 +571,11 @@ class _Writer:
         picture = self.doc.add_picture(data, image_format, width=width, height=height, **self.picture_body)
         _space_above_below(picture)
         self.place(picture.paragraph, quote, indent)
+        narrower = width is not None and width < max_width
         # A picture narrower than the body sits at the left margin and leaves a gap at the right; centred,
         # the gap is shared. The picture is laid out as a character, so the paragraph's own alignment is
         # what moves it. A picture that fills the body has nothing to centre, and keeps its style.
-        if width is not None and width < max_width:
+        if narrower:
             picture.paragraph.para_pr_id_ref = self.para_format(
                 picture.paragraph.para_pr_id_ref, alignment=PICTURE_REDUCED_ALIGN
             )
@@ -562,7 +583,7 @@ class _Writer:
         # A caption is as wide as its picture, or with fullSz, as the picture and its outer margins: a narrower
         # picture's side margins fill the rest of the width, centring it, so its caption takes the whole width.
         caption = picture.element.find(f"{_HP}caption")
-        if caption is not None and width is not None and width < max_width:
+        if caption is not None and narrower:
             margin = picture.element.find(f"{_HP}outMargin")
             left = (max_width - width) // 2
             margin.set("left", str(left))
