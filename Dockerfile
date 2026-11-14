@@ -1,3 +1,10 @@
+# jre: PlantUML 이 쓰는 모듈만 담은 Java 런타임. 전체 JRE(174MB)보다 작다.
+# 모듈 목록은 jdeps --print-module-deps --ignore-missing-deps --multi-release 17 plantuml.jar 의 결과다.
+FROM alpine:3.22 AS jre
+RUN apk add --no-cache openjdk17-jdk openjdk17-jmods binutils \
+    && jlink --add-modules java.base,java.desktop,java.logging,java.prefs,java.scripting,jdk.unsupported \
+        --strip-debug --no-man-pages --no-header-files --compress=2 --output /opt/jre
+
 # tools: 다이어그램 도구와 Python 의존성. web 과 dev 가 이 위에 만들어진다.
 FROM alpine:3.22 AS tools
 
@@ -7,19 +14,27 @@ ARG D2CODING_VERSION=1.4.0
 ARG D2CODING_DATE=20261003
 
 # chromium: mermaid-cli 렌더링, graphviz: plantuml 의 클래스/컴포넌트 다이어그램,
-# font-noto-cjk: 다이어그램 안의 한글 표시, rsvg-convert: SVG 이미지를 PNG 로 변환
+# font-noto-cjk: 다이어그램 안의 한글 표시, rsvg-convert: SVG 이미지를 PNG 로 변환,
+# freetype ~ libpng: jre 단계의 Java 가 그림·글꼴을 다룰 때 쓰는 라이브러리
+# chromium 이 끌어오는 Mesa GPU 드라이버와 LLVM(약 245MB)은 지운다. --disable-gpu 로 실행해 쓰지 않는다.
 RUN apk add --no-cache \
         python3 \
-        nodejs npm \
+        nodejs \
         chromium \
-        openjdk17-jre \
         graphviz \
         font-noto-cjk \
-        rsvg-convert
+        rsvg-convert \
+        freetype lcms2 libjpeg-turbo giflib libpng \
+    && rm -rf /usr/lib/libLLVM* /usr/lib/libgallium* /usr/lib/gallium-pipe /usr/lib/dri/*
 
+COPY --from=jre /opt/jre /opt/jre
+
+# npm 은 설치에만 쓰므로 이미지에 남기지 않는다.
 ENV PUPPETEER_SKIP_DOWNLOAD=1
-RUN npm install -g @mermaid-js/mermaid-cli@${MERMAID_CLI_VERSION} \
-    && npm cache clean --force
+RUN apk add --no-cache --virtual .npm npm \
+    && npm install -g @mermaid-js/mermaid-cli@${MERMAID_CLI_VERSION} \
+    && npm cache clean --force \
+    && apk del .npm
 
 RUN mkdir -p /opt/plantuml \
     && wget -q -O /opt/plantuml/plantuml.jar \
@@ -46,7 +61,7 @@ RUN --mount=from=ghcr.io/astral-sh/uv:0.12.17,source=/uv,target=/usr/local/bin/u
     cd /tmp/project && uv sync --frozen --no-install-project --no-cache && rm -rf /tmp/project
 
 # HOME=/tmp: --user 로 호스트 사용자 권한 실행 시 chromium 이 쓸 수 있는 HOME 이 필요하다.
-ENV PATH=/opt/venv/bin:$PATH \
+ENV PATH=/opt/venv/bin:/opt/jre/bin:$PATH \
     HOME=/tmp \
     PYTHONPATH=/work/src \
     PYTHONDONTWRITEBYTECODE=1
