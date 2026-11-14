@@ -5,10 +5,11 @@
 다이어그램 렌더링에 필요한 외부 도구(mermaid-cli, Chromium, Java, PlantUML, Graphviz)를
 호스트에 설치하지 않고, 한 이미지 안에서 실행한다.
 
-Dockerfile 은 세 단계다.
+Dockerfile 은 네 단계다.
 
 | 단계 | 내용 | 빌드 |
 |------|------|------|
+| `jre` | PlantUML 에 필요한 모듈만 담은 Java 런타임(`/opt/jre`)을 만든다. `tools` 가 이것만 복사한다 | (빌드용) |
 | `tools` | 아래 "이미지 내용" 의 도구와 Python 의존성 | (다른 단계의 바탕) |
 | `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
 | `dev` (기본) | `tools` 그대로. 코드는 실행 시 `/work` 에 마운트한다 | `docker build -t md2hwpx .` |
@@ -35,9 +36,10 @@ Dockerfile 은 세 단계다.
 | 항목 | 버전 / 출처 | 비고 |
 |------|------|------|
 | Python | Alpine `python3` (3.12) | |
-| mermaid-cli | npm `@mermaid-js/mermaid-cli` 11.4.2 | `PUPPETEER_SKIP_DOWNLOAD=1`, Alpine `chromium` 사용 |
+| mermaid-cli | npm `@mermaid-js/mermaid-cli` 11.4.2 | `PUPPETEER_SKIP_DOWNLOAD=1`, Alpine `chromium` 사용. npm 은 설치하는 단계에서만 쓰고 지운다 |
+| Chromium | Alpine `chromium` | 함께 설치되는 Mesa GPU 드라이버와 LLVM(약 245MB)은 지운다. `--disable-gpu` 로 실행해 쓰지 않는다 |
 | PlantUML | GitHub 릴리스 jar 1.2026.9 | `/opt/plantuml/plantuml.jar` |
-| Java | Alpine `openjdk17-jre` | headless JRE 에는 폰트 라이브러리가 없어 PlantUML 이 실패한다 |
+| Java | Alpine `openjdk17-jdk` 의 `jlink` 로 만든 런타임 → `/opt/jre` | `jre` 단계에서 PlantUML 이 쓰는 모듈(`jdeps --print-module-deps` 결과)만 담는다. 그림·글꼴 라이브러리(`freetype`, `lcms2`, `libjpeg-turbo`, `giflib`, `libpng`)는 `tools` 단계에 설치한다. 없으면 PlantUML 이 실패한다 |
 | Graphviz | Alpine `graphviz` | PlantUML 의 시퀀스 외 다이어그램에 필요 |
 | 한글 폰트 | Alpine `font-noto-cjk` | 다이어그램 안의 한글 표시 |
 | rsvg-convert | Alpine `rsvg-convert` | SVG 이미지를 PNG 로 변환. 없으면 SVG 는 대체 이미지가 된다 |
@@ -53,7 +55,7 @@ D2Coding 은 시스템 폰트로만 등록한다. 다이어그램에서 쓰려�
 
 | 변수 | 값 | 이유 |
 |------|------|------|
-| `PATH` | `/opt/venv/bin` 우선 | `pytest`, `python` 이 venv 를 쓴다 |
+| `PATH` | `/opt/venv/bin`, `/opt/jre/bin` 우선 | `pytest`, `python` 이 venv 를, `plantuml` 이 `/opt/jre` 의 `java` 를 쓴다 |
 | `PYTHONPATH` | `/work/src` | 마운트한 코드를 설치 없이 import |
 | `PYTHONDONTWRITEBYTECODE` | `1` | 마운트 폴더에 `__pycache__` 를 만들지 않음 |
 | `HOME` | `/tmp` | `--user` 실행 시에도 Chromium 이 쓸 수 있는 HOME |
