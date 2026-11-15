@@ -18,8 +18,8 @@ from hwpx.errors import HwpxError
 from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, paragraph_styles
 from md2hwpx.diagram import DiagramError, render_diagrams
 from md2hwpx.source import (
-    ConversionError, caption_numbering, column_problems, is_draft, marker_problems, read_markdown, references,
-    unknown_styles, unusable_images,
+    ConversionError, caption_numbering, column_problems, footnote_leftovers, is_draft, marker_problems, marker_typos,
+    read_markdown, references, unknown_styles, unusable_images,
 )
 
 # Why a "[@name]" reference was left as written (see convert_markdown), as a Korean clause.
@@ -81,8 +81,9 @@ class ConversionWarning(NamedTuple):
 def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[ConversionWarning]:
     """What the HWPX is made despite in *md*, in line order: images shown as a placeholder (see
     unusable_images), styles the template lacks that custom-style divs or [TOC] name (see unknown_styles),
-    "[cols: ...]" comments that set no widths (see column_problems), comment markers left out (see marker_problems)
-    and the references left as written, *unresolved* (see convert_markdown)."""
+    "[cols: ...]" comments that set no widths (see column_problems), comment markers left out (see marker_problems),
+    lines that look like marker lines but stay text (see marker_typos), what footnotes leave out (see
+    footnote_leftovers) and the references left as written, *unresolved* (see convert_markdown)."""
     markdown = md.read_text(encoding="utf-8")
     found = [
         ConversionWarning(md, line, f"{why} 대체 이미지를 넣었습니다", image)
@@ -100,6 +101,11 @@ def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[Co
         ConversionWarning(md, line, f"주석 마커({marker})는 {why} 무시했습니다")
         for line, marker, why in marker_problems(markdown)
     ]
+    found += [
+        ConversionWarning(md, line, f"표기({text})는 형식이 맞지 않아 글자로 넣었습니다 (글자 그대로 쓰려면 맨 앞에 \\)")
+        for line, text in marker_typos(markdown)
+    ]
+    found += [ConversionWarning(md, line, f"각주 안의 {what} 넣지 않았습니다") for line, what in footnote_leftovers(markdown)]
     found += [
         ConversionWarning(
             md, line, f"'#{name}' 이름의 표·그림이 {_UNRESOLVED[unresolved[name]]} [@{name}] 를 그대로 두었습니다"

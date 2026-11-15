@@ -12,7 +12,7 @@ from markdown_it.token import Token
 from mdit_py_plugins.container import container_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 
-from md2hwpx.pieces import match_marker
+from md2hwpx.pieces import ESCAPES, match_marker
 
 # "{width=50% height="30mm"}": attributes right after an image, as pandoc writes them.
 _ATTRIBUTES = re.compile(r"\{([^{}\n]*)\}")
@@ -362,6 +362,24 @@ def _comment_inline(state: StateInline, silent: bool) -> bool:
     return True
 
 
+def _escapes(state: StateCore) -> None:
+    """Hold each escaped "[" and "\\" ("\\[감추기]", "\\\\newpage") as its mark (see pieces.ESCAPES) before the
+    escapes join the text around them: the notation they start then stays text.
+
+    markdown-it joins only an inline token's own children: inside an image's alt text an escape ("\\\\]") or
+    entity stays "text_special", which no one writes, so it becomes text here."""
+    def mark(tokens: list[Token], nested: bool) -> None:
+        for token in tokens:
+            if token.type == "text_special" and token.info == "escape" and token.content in ESCAPES:
+                token.content = ESCAPES[token.content]
+            if nested and token.type == "text_special":
+                token.type = "text"
+            mark(token.children or [], True)
+
+    for token in state.tokens:
+        mark(token.children or [], False)
+
+
 def custom_style(info: str) -> str | None:
     """The style a custom-style div's opening line (its "info") names, or None if it names none."""
     match = _CUSTOM_STYLE.fullmatch(info.strip())
@@ -382,3 +400,4 @@ PARSER.block.ruler.before("html_block", "comment_block", _comment_block, {"alt":
 PARSER.inline.ruler.before("html_inline", "comment_inline", _comment_inline)
 PARSER.core.ruler.after("block", "table_columns", _table_columns)
 PARSER.core.ruler.after("inline", "hwpx_markers", _markers)
+PARSER.core.ruler.before("text_join", "escapes", _escapes)

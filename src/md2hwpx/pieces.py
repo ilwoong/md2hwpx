@@ -35,6 +35,15 @@ MARKERS = {
     # "[빈 줄]" or "[빈 줄 3]": that many empty paragraphs (one without a number), at most 10.
     "blank_lines": re.compile(r"\[빈 줄((?:[ \t]+(?:10|\d))?)[ \t]*\]"),
 }
+# A line that starts as a marker line does but is not one ("[새 번호 쪽 페이지]", "[빈 줄 11]", "\newpage 뒤"):
+# it stays text, with a warning (see source.marker_typos). "[여백면] ..." takes any wording, so it has none.
+_LIKE_MARKER = re.compile(
+    r"\[(?:TOC|새 ?번호|빈 ?줄|감추기)(?:[ \t][^\n]*)?\]|\\(?:newpage|pagebreak)[ \t][^\n]*", re.IGNORECASE
+)
+# A "[" or "\" escaped in the Markdown ("\[감추기]", "\\newpage"), as the parser leaves it in text (see
+# parser._escapes): no marker line, caption line or reference starts with it, so the notation stays text.
+# The converter writes it as the character again (see unescape).
+ESCAPES = {"[": "\ue002", "\\": "\ue003"}
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
 
 
@@ -85,6 +94,13 @@ def inline_runs(
 def resolve_references(text: str, number: Callable[[str], str]) -> str:
     """*text* with each reference inline_runs held in it written as *number*(its name)."""
     return _REFERENCE_MARK.sub(lambda m: number(m[1]), text)
+
+
+def unescape(text: str) -> str:
+    """*text* with each escaped character the parser held in it (see ESCAPES) as itself."""
+    for character, mark in ESCAPES.items():
+        text = text.replace(mark, character)
+    return text
 
 
 def plain_text(runs: list[Run]) -> str:
@@ -181,8 +197,8 @@ def match_marker(text: str) -> tuple[str, str] | None:
     for name, pattern in MARKERS.items():
         if match := pattern.fullmatch(text):
             # The blank page marker carries a wording, the TOC and restart markers their words and the blank
-            # lines marker its count, in their one group.
-            return name, match.group(1).strip() if match.groups() else ""
+            # lines marker its count, in their one group. A wording may hold escaped characters.
+            return name, unescape(match.group(1).strip()) if match.groups() else ""
     return None
 
 
@@ -190,6 +206,16 @@ def marker_lines(inline: SyntaxTreeNode) -> list[tuple[int, str, str]]:
     """(source line offset in the paragraph, marker, its words) of each marker line of a paragraph's inline
     content, as paragraph_pieces finds them."""
     return [(offset, *found) for offset, line in _lines(inline) if (found := _marker(line))]
+
+
+def marker_typo_lines(inline: SyntaxTreeNode) -> list[tuple[int, str]]:
+    """(source line offset in the paragraph, the line) of each line of a paragraph's inline content that starts
+    as a marker line does but is not one (see _LIKE_MARKER): paragraph_pieces leaves it text."""
+    return [
+        (offset, unescape(text)) for offset, line in _lines(inline)
+        if len(line) == 1 and line[0].type == "text" and not _marker(line)
+        and _LIKE_MARKER.fullmatch(text := line[0].content.strip())
+    ]
 
 
 def paragraph_pieces(inline: SyntaxTreeNode) -> list[Piece]:

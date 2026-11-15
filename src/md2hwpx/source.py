@@ -12,7 +12,7 @@ from markdown_it.tree import SyntaxTreeNode
 
 from md2hwpx.images import ImageError, picture_data
 from md2hwpx.parser import COLUMN_PROBLEMS, PARSER, custom_style
-from md2hwpx.pieces import REFERENCE, marker_lines
+from md2hwpx.pieces import REFERENCE, marker_lines, marker_typo_lines
 from md2hwpx.toc import toc_request
 
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
@@ -119,6 +119,46 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
                         (node.map[0] + offset + 1, name, "차례에 모을 수 없습니다")
                         for name in toc_request(words).styles if name not in styles
                     ]
+    return found
+
+
+# What a footnote leaves out (see convert._Writer.add_footnote: it takes its paragraphs only), as a warning names
+# it, with its particle.
+_FOOTNOTE_LEAVES_OUT = {
+    "bullet_list": "목록은", "ordered_list": "목록은", "fence": "코드블록은", "code_block": "코드블록은", "table": "표는",
+    "blockquote": "인용문은", "heading": "헤딩은", "hr": "수평선은", "container_div": "스타일 지정 블록은",
+    "hwpx_marker": "주석 마커는", "footnote_ref": "각주 참조는",
+}
+
+
+def footnote_leftovers(markdown: str) -> list[tuple[int, str]]:
+    """(line number, what with its particle) of each block in a footnote that is not a paragraph, and each
+    footnote reference in a footnote: the footnote goes in without them."""
+    markdown = _blank_front_matter(markdown)
+    lines = markdown.splitlines()
+    found = []
+    for note in (n for n in _walk(SyntaxTreeNode(PARSER.parse(markdown))) if n.type == "footnote"):
+        for block in note.children:
+            if block.type in _FOOTNOTE_LEAVES_OUT:
+                found.append((block.map[0] + 1, _FOOTNOTE_LEAVES_OUT[block.type]))
+            elif block.type == "paragraph":
+                start, end = block.map
+                for ref in (n for n in _walk(block) if n.type == "footnote_ref"):
+                    # The line of the paragraph naming it.
+                    label = f"[^{ref.meta['label']}]"
+                    line = next((i + 1 for i in range(start, end) if label in lines[i]), start + 1)
+                    found.append((line, _FOOTNOTE_LEAVES_OUT["footnote_ref"]))
+    return sorted(found)
+
+
+def marker_typos(markdown: str) -> list[tuple[int, str]]:
+    """(line number, the line) of each line of a paragraph that starts as a marker line ("[새 번호 ...]",
+    "[빈 줄 ...]", "\\newpage ...") does but is not one: it stays text (see pieces.marker_typo_lines)."""
+    found = []
+    for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
+        # A footnote's paragraphs are only text.
+        if node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
+            found += [(node.map[0] + offset + 1, line) for offset, line in marker_typo_lines(node.children[0])]
     return found
 
 
