@@ -1,6 +1,7 @@
 """Pictures: sizes, placement, other formats, and the placeholder for an image that cannot go in."""
 
 import io
+import random
 import shutil
 import zipfile
 from pathlib import Path
@@ -16,13 +17,6 @@ from md2hwpx.images import length
 from md2hwpx.source import unusable_images
 
 
-def _jpeg(width: int, height: int) -> bytes:
-    """JPEG header bytes up to the start-of-frame marker: enough to read the size."""
-    app0 = b"\xff\xe0" + (16).to_bytes(2, "big") + b"JFIF\x00" + b"\x00" * 9
-    sof0 = b"\xff\xc0" + (11).to_bytes(2, "big") + b"\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x01\x01\x11\x00"
-    return b"\xff\xd8" + app0 + sof0 + b"\xff\xd9"
-
-
 def test_convert_picture_sizes(tmp_path):
     images = {
         "mermaid-0123456789ab.png": _png(10, 5),  # diagram: body width
@@ -30,8 +24,8 @@ def test_convert_picture_sizes(tmp_path):
         "small.png": _png(200, 100),  # natural size at 96 DPI
         "wide.png": _png(4000, 1000),  # wider than the body
         "tall.png": _png(100, 2000),  # taller than the body, with a caption
-        "photo.jpg": _jpeg(400, 300),
-        "anim.gif": b"GIF89a" + (300).to_bytes(2, "little") + (150).to_bytes(2, "little") + b"\x00" * 8,
+        "photo.jpg": _image(400, 300, "JPEG"),
+        "anim.gif": _image(300, 150, "GIF"),
     }
     for name, data in images.items():
         (tmp_path / name).write_bytes(data)
@@ -194,7 +188,38 @@ def test_convert_unreadable_image_is_a_placeholder(tmp_path):
     assert _embedded(out) == [MISSING_IMAGE.read_bytes()] * 2
 
 
-SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>'
+def _image_bytes(image_format: str) -> bytes:
+    """A 64x64 image of noise in *image_format*: it does not compress, so part of it is part of the picture."""
+    data = io.BytesIO()
+    Image.frombytes("RGB", (64, 64), random.Random(0).randbytes(64 * 64 * 3)).save(data, image_format)
+    return data.getvalue()
+
+
+def test_convert_broken_png_jpeg_gif_is_a_placeholder(tmp_path):
+    # They start as their format does, so they look like images they are not.
+    broken = {
+        "junk.png": b"\x89PNG\r\n\x1a\njunk",
+        "cut.png": _image_bytes("PNG")[:3000],
+        "cut.jpg": _image_bytes("JPEG")[:1500],
+        "junk.gif": b"GIF89a junk",
+    }
+    for name, data in broken.items():
+        (tmp_path / name).write_bytes(data)
+    (tmp_path / "whole.jpg").write_bytes(_image_bytes("JPEG"))
+    md = tmp_path / "broken.md"
+    md.write_text("".join(f"![]({name})\n\n" for name in [*broken, "whole.jpg"]), encoding="utf-8")
+    out = tmp_path / "broken.hwpx"
+
+    assert unusable_images(md.read_text(encoding="utf-8"), tmp_path) == [
+        (1 + 2 * k, tmp_path / name, "이미지 형식을 읽을 수 없어") for k, name in enumerate(broken)
+    ]
+    convert(md, TEMPLATE, out)
+
+    # A whole one goes in as it is.
+    assert _embedded(out) == [MISSING_IMAGE.read_bytes()] * 4 + [_image_bytes("JPEG")]
+
+
+SVG =b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>'
 
 
 @pytest.mark.skipif(shutil.which("rsvg-convert") is None, reason="rsvg-convert not installed")

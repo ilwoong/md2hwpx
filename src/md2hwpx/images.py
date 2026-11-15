@@ -62,12 +62,14 @@ def picture_data(path: Path) -> tuple[bytes, str]:
         raise ImageError("이미지 파일이 없어")
     data = path.read_bytes()
     kind = image_format(data)
-    if kind is not None:
-        return data, kind
-    if path.suffix.lower() == ".svg" or b"<svg" in data[:4096]:
+    if kind is None and (path.suffix.lower() == ".svg" or b"<svg" in data[:4096]):
         return _svg_to_png(data), "png"
     try:
         with Image.open(io.BytesIO(data)) as image:
+            # Read whole: a file that only starts as a PNG, JPEG or GIF (cut short, or junk after) is broken.
+            image.load()
+            if kind is not None:
+                return data, kind
             png = io.BytesIO()
             image.convert("RGBA").save(png, "PNG")  # RGBA: PNG cannot hold every mode (CMYK, ...)
     # UnidentifiedImageError is an OSError; DecompressionBombError, for one too large to open, is not.
