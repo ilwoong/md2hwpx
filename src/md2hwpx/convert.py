@@ -464,7 +464,8 @@ class _Writer:
     def heading(self, node: SyntaxTreeNode) -> None:
         """Write a heading, with the caption number reset its level asks for. Whether a heading starts a page
         is the template's to say, in its 개요 style's paragraph shape."""
-        runs = inline_runs(node.children[0].children)
+        # Stripped as a paragraph's are: a comment at the start leaves the space after it (see parser._comment_inline).
+        runs = strip_runs(inline_runs(node.children[0].children))
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
             self.heading_styles[depth] = self.doc.styles.resolve(HEADING_STYLE.format(depth))
