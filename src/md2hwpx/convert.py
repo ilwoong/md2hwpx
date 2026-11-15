@@ -20,7 +20,7 @@ from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, pict
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
     Piece, Run, block_kind, caption_line, cell_lines, inline_runs, paragraph_pieces, plain_text, resolve_references,
-    strip_runs,
+    strip_runs, unescape,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import (
@@ -400,7 +400,10 @@ class _Writer:
         counted as Hancom breaks them (see line_count) at the 표그림 제목 style's line height."""
         style = self.caption_style
         # As set_caption writes it: footnotes dropped, each run in the shape its marks give.
-        runs = [(run.text, self.run_char_pr(style.char_pr_id_ref, run.marks)) for run in self.caption.runs if run.text]
+        runs = [
+            (unescape(run.text), self.run_char_pr(style.char_pr_id_ref, run.marks))
+            for run in self.caption.runs if run.text
+        ]
         lines = line_count(
             self.text_styles, style.para_pr_id_ref, "".join(text for text, _ in runs), runs, width, self.caption_size,
             self.text_styles.style(style.para_pr_id_ref, [style.char_pr_id_ref]),
@@ -464,7 +467,8 @@ class _Writer:
     def heading(self, node: SyntaxTreeNode) -> None:
         """Write a heading, with the caption number reset its level asks for. Whether a heading starts a page
         is the template's to say, in its 개요 style's paragraph shape."""
-        runs = inline_runs(node.children[0].children)
+        # Stripped as a paragraph's are: a comment at the start leaves the space after it (see parser._comment_inline).
+        runs = strip_runs(inline_runs(node.children[0].children))
         depth = int(node.tag[1])
         if depth not in self.heading_styles:
             self.heading_styles[depth] = self.doc.styles.resolve(HEADING_STYLE.format(depth))
@@ -494,6 +498,9 @@ class _Writer:
                 self.heading(node)
             elif node.type == "paragraph":
                 self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, content)
+            elif node.type == "hwpx_marker":
+                # A comment marker does what the marker line it stands for does (see parser._read_marker).
+                self.pieces([Piece(node.meta["marker"], text=node.meta["words"])], None, quote, content)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
                 self.code_block(node.content.split("\n")[:-1], lang, quote, content)
@@ -779,12 +786,13 @@ class _Writer:
         return self.names[name]
 
     def references(self) -> None:
-        """Write each "[@name]" reference in the document as what it reads (see number)."""
+        """Write each "[@name]" reference in the document as what it reads (see number), and each escaped
+        character as itself (see unescape)."""
         for text in self._section.element.iter(f"{_HP}t"):
             # A line break or tab in the text is an element: the text goes on in its tail.
             for holder, attribute in [(text, "text"), *((child, "tail") for child in text)]:
                 if getattr(holder, attribute):
-                    setattr(holder, attribute, resolve_references(getattr(holder, attribute), self.number))
+                    setattr(holder, attribute, unescape(resolve_references(getattr(holder, attribute), self.number)))
 
     def finish(self) -> None:
         """Page breaks, references and the table of contents, which go in once all paragraphs are there."""
@@ -792,7 +800,7 @@ class _Writer:
         self.references()
         # Once their cells read their references' numbers, not the names.
         for table, width, texts, percents in self.tables:
-            texts = [[resolve_references(text, self.number) for text in row] for row in texts]
+            texts = [[unescape(resolve_references(text, self.number)) for text in row] for row in texts]
             if percents is None:
                 table.set_column_widths(column_widths(texts, width, self.plain_size))
             else:

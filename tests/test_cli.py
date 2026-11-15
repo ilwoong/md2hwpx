@@ -204,7 +204,6 @@ def test_cli_reports_missing_files(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "doc.hwpx").exists()
 
 
-@needs_mmdc
 def test_cli_folder_input_with_different_caption_numbering(tmp_path, capsys):
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -218,6 +217,7 @@ def test_cli_folder_input_with_different_caption_numbering(tmp_path, capsys):
     assert not out.exists()
 
 
+@needs_mmdc
 def test_cli_renders_diagrams(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     md = tmp_path / "doc.md"
@@ -281,7 +281,7 @@ def test_cli_warns_about_column_widths_it_ignores(tmp_path, monkeypatch, capsys)
     assert main([str(md), "-t", str(TEMPLATE)]) == 0
 
     # Line numbers count the front matter; the HWPX is made, those tables at their automatic widths.
-    ignored = "md2hwpx: 경고: {}:{}: 열 너비 지정 [cols: …] 은 {} 무시했습니다"
+    ignored = "md2hwpx: 경고: {}:{}: 열 너비 지정은 {} 무시했습니다"
     assert capsys.readouterr().err.splitlines() == [
         ignored.format(md, 8, "값 1개가 표의 열 2개와 달라"),
         ignored.format(md, 12, "값이 모두 0 보다 큰 % 가 아니어서"),
@@ -319,3 +319,57 @@ def test_cli_warns_about_unresolved_references(tmp_path, monkeypatch, capsys):
         f"md2hwpx: 경고: {md}:7: '#같음' 이름의 표·그림이 여럿이라 [@같음] 를 그대로 두었습니다",
         f"md2hwpx: 경고: {md}:8: '#없음' 이름의 표·그림이 없어 [@없음] 를 그대로 두었습니다",
     ]
+
+
+def test_cli_warns_about_what_footnotes_leave_out(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text(
+        "---\nk: v\n---\n"
+        "본문[^a] 과[^b]\n\n"
+        "[^a]: 문단 [^b] 은 넣음\n\n    - 목록\n\n    ```\n    코드\n    ```\n\n    둘째 문단\n\n"
+        "[^b]: 문단만 있는 각주\n",
+        encoding="utf-8",
+    )
+
+    assert main([str(md), "-t", str(TEMPLATE)]) == 0
+
+    # Line numbers count the front matter; the footnotes' paragraphs go in, the rest is left out.
+    left_out = "md2hwpx: 경고: {}:{}: 각주 안의 {} 넣지 않았습니다"
+    assert capsys.readouterr().err.splitlines() == [
+        left_out.format(md, 6, "각주 참조는"),
+        left_out.format(md, 8, "목록은"),
+        left_out.format(md, 10, "코드블록은"),
+    ]
+    assert (tmp_path / "doc.hwpx").is_file()
+
+
+def test_cli_warns_about_lines_that_look_like_markers(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text(
+        "---\nk: v\n---\n"
+        "[새 번호 쪽 페이지]\n\n[빈 줄 11]\n\n\\newpage 뒤\n\n"
+        "[새번호 쪽]\n[toc 목록]\n[감추기 둘]\n\n"
+        "> [빈 줄 셋]\n\n"
+        # Markers, text that does not start like one, escaped and formatted lines, code and table cells: no warning.
+        "[새 번호 쪽]\n\n[TOC]\n\n[새 번호 체계] 안내\n\n\\[새 번호 체계 안내]\n\n**[빈 줄 11]**\n\n"
+        "`[빈 줄 11]`\n\n```\n[빈 줄 11]\n```\n\n| [빈 줄 11] |\n|---|\n",
+        encoding="utf-8",
+    )
+
+    assert main([str(md), "-t", str(TEMPLATE)]) == 0
+
+    # The lines stay text in the HWPX, as before.
+    warning = "md2hwpx: 경고: {}:{}: 표기({})는 형식이 맞지 않아 글자로 넣었습니다 (글자 그대로 쓰려면 맨 앞에 \\)"
+    assert capsys.readouterr().err.splitlines() == [
+        warning.format(md, 4, "[새 번호 쪽 페이지]"),
+        warning.format(md, 6, "[빈 줄 11]"),
+        warning.format(md, 8, "\\newpage 뒤"),
+        warning.format(md, 10, "[새번호 쪽]"),
+        warning.format(md, 11, "[toc 목록]"),
+        warning.format(md, 12, "[감추기 둘]"),
+        warning.format(md, 14, "[빈 줄 셋]"),
+    ]
+    text = _text(HwpxDocument.open(tmp_path / "doc.hwpx").sections[-1].element)
+    assert "[새 번호 쪽 페이지]" in text and "[빈 줄 11]" in text

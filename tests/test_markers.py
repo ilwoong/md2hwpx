@@ -1,5 +1,8 @@
 """Marker lines about pages and paragraphs: page breaks, number restarts, page hiding, blank pages, blank lines."""
 
+import re
+import xml.etree.ElementTree as ET
+
 from hwpx import HwpxDocument
 from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_metrics
 
@@ -212,3 +215,40 @@ def test_convert_markers_in_code_are_text(tmp_path):
     assert [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"] == []
     assert next(element.iter(f"{HP}newNum"), None) is None
     assert next(element.iter(f"{HP}pageHiding"), None) is None
+
+
+def test_escaped_notations_stay_text(tmp_path):
+    md = tmp_path / "escaped.md"
+    md.write_text(
+        "# 장\n\n\\[감추기]\n\n\\[빈 줄 2]\n\n\\[TOC]\n\n\\\\newpage\n\n\\[새 번호 쪽]\n\n\\[여백면] 문구\n\n"
+        "\\[표] 표 아닌 제목\n| a | \\[@이름] |\n|---|---|\n\n"
+        "[표 #이름] 제목\n| b |\n|---|\n\n"
+        "\\[@이름] 과 [@이름], 각주[^n]\n\n[^n]: 각주 \\[@이름]\n\n"
+        "[여백면] 문구 \\[x]\n\n![그림 \\[x\\]](gone.png)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "escaped.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    section = doc.sections[-1].element
+    texts = [p.text for p in doc.paragraphs[1:]]
+    # An escaped "[" or "\" keeps the notation it starts as its text, without the backslash, and does nothing.
+    for line in ("[감추기]", "[빈 줄 2]", "[TOC]", "\\newpage", "[새 번호 쪽]", "[여백면] 문구", "[표] 표 아닌 제목"):
+        assert line in texts
+    assert "TableOfContents" not in ET.tostring(section, encoding="unicode")
+    assert section.find(f".//{HP}newNum[@numType='PAGE']") is None
+    # The one page hidden and the only page breaks are the real blank page's, which keeps an escaped "[".
+    assert len(list(section.iter(f"{HP}pageHiding"))) == 1
+    assert [p.text for p in doc.paragraphs[1:] if p.element.get("pageBreak") == "1"] == ["", ""]
+    tables = doc.tables.all
+    assert [t.cell(0, 1).text if t.column_count > 1 else t.cell(0, 0).text for t in tables] == ["[@이름]", "b", "문구 [x]"]
+    # Only the named table has a caption above it; an escaped reference stays text, the other reads its number.
+    assert tables[0].element.get("numberingType") == "NONE"
+    assert "[@이름] 과 표 1-1, 각주" in texts
+    assert "각주 [@이름]" in _text(section)
+    # An image's alt text keeps its escaped "[" in its caption.
+    assert "그림 [x]" in _text(section)
+    # The escaped characters never reach the HWPX as anything but themselves.
+    assert not re.search("[\ue000-\uf8ff]", _text(section))

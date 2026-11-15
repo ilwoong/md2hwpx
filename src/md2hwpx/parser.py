@@ -2,13 +2,17 @@
 
 import itertools
 import re
+from collections.abc import Callable
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_block import StateBlock
 from markdown_it.rules_core import StateCore
 from markdown_it.rules_inline import StateInline
+from markdown_it.token import Token
 from mdit_py_plugins.container import container_plugin
 from mdit_py_plugins.footnote import footnote_plugin
+
+from md2hwpx.pieces import ESCAPES, match_marker
 
 # "{width=50% height="30mm"}": attributes right after an image, as pandoc writes them.
 _ATTRIBUTES = re.compile(r"\{([^{}\n]*)\}")
@@ -27,6 +31,19 @@ COLUMN_PROBLEMS = {
     "count": "값 {values}개가 표의 열 {columns}개와 달라",
 }
 _PERCENT = re.compile(r"\s*(\d+(?:\.\d+)?)\s*%\s*")
+# A comment marker, "<!-- @hwpx 명령 인자 ... -->": what a marker line, a "[cols: ...]" comment, image attributes
+# or a custom-style div does, hidden from Markdown viewers. Its body is the command and arguments.
+_MARKER = re.compile(r"<!--\s*@hwpx(?:\s+((?:(?!-->).)*?))?\s*-->", re.DOTALL)
+_MARKER_START = re.compile(r"<!--\s*@hwpx(?=\s|-->)")
+# A command or argument: words, and "..." holding spaces ("이 면은 여백", 스타일="A B").
+_ARGUMENT = re.compile(r'(?:[^\s"]|"[^"]*")+')
+_NAME = re.compile(r'"([^"]+)"|([^\s"]+)')  # a style name or blank page wording: one word, or in quotes
+_SIZE_KEYS = {"너비": "width", "높이": "height"}  # 그림크기 arguments: the image attributes they set
+# An image's width / height, in image attributes or a 그림크기 marker: percent of the page body, or millimetres.
+_LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
+# Why a comment marker is left out, as a Korean clause.
+_MARKER_ARGUMENTS = "인자가 맞지 않아"
+_MARKER_ALONE = "줄에 따로 있지 않아"
 
 
 def _image_attributes(state: StateInline, silent: bool) -> bool:
@@ -63,13 +80,220 @@ def _comment_block(state: StateBlock, start: int, end: int, silent: bool) -> boo
         line += 1
         if "-->" in text:
             break
-    match = _COLUMNS.fullmatch(state.getLines(start, line, state.blkIndent, False).strip())
-    if match is not None:
+    block = state.getLines(start, line, state.blkIndent, False).strip()
+    if (match := _COLUMNS.fullmatch(block)) is not None:
         token = state.push("table_columns", "", 0)
         token.meta["percents"] = _column_percents(match[1])
         token.map = [start, line]
+    elif (match := _MARKER.fullmatch(block)) is not None:
+        _marker_token(state, block, match[1] or "", start, line)
+    else:
+        # A marker with something else in its block: an ordinary comment, or text after it on its line.
+        for comment in _COMMENT.finditer(block):
+            if _MARKER_START.match(comment[0]):
+                at = start + block[: comment.start()].count("\n")
+                _marker_problems(state.env).append((at, _label(comment[0]), _MARKER_ALONE))
     state.line = line
     return True
+
+
+def _marker_problems(env: dict) -> list[tuple[int, str, str]]:
+    """The comment markers left out, as (line index, label, why: a Korean clause), for the warnings (see
+    source.marker_problems)."""
+    return env.setdefault("marker_problems", [])
+
+
+def _label(comment: str) -> str:
+    """A comment marker as a warning names it: "@hwpx 명령 인자", its spaces as one."""
+    return " ".join(comment[4:-3].split())
+
+
+def _name(argument: str) -> str | None:
+    """A style name or blank page wording *argument* without its quotes, or None if it is not one."""
+    match = _NAME.fullmatch(argument)
+    return match and (match[1] or match[2])
+
+
+def image_length(value: str | None) -> tuple[float, str] | None:
+    """An image's width / height *value* ("50%", "80mm") as (number, "%" or "mm"), or None if it is not one above 0."""
+    match = _LENGTH.fullmatch(value or "")
+    return (float(match[1]), match[2]) if match and float(match[1]) > 0 else None
+
+
+# Readers of a command's arguments (see _COMMANDS): what the command asks for, as its token's meta, or None if
+# the arguments are not its own. "marker" and "words" in it are a marker line's (see pieces.MARKERS).
+
+def _line_command(marker: str, line: str) -> Callable[[list[str]], dict | None]:
+    """The reader of a command that does what the marker line *line* ("{}": the arguments) does: it reads the
+    arguments as that line, so both take the same ones."""
+    def read(arguments: list[str]) -> dict | None:
+        found = match_marker(line.format("".join(f" {a}" for a in arguments)))
+        return {"marker": marker, "words": found[1]} if found and found[0] == marker else None
+    return read
+
+
+def _blank_page(arguments: list[str]) -> dict | None:
+    names = [_name(a) for a in arguments]
+    if len(names) > 1 or None in names:
+        return None
+    return {"marker": "blank_page", "words": names[0].strip() if names else ""}
+
+
+def _columns(arguments: list[str]) -> dict:
+    # Its percents are checked against the table, as a "[cols: ...]" comment's are (see _table_columns).
+    return {"percents": _column_percents(",".join(arguments))}
+
+
+def _size(arguments: list[str]) -> dict | None:
+    size = {}
+    for argument in arguments:
+        key, _, value = argument.partition("=")
+        value = value.strip('"')
+        if key not in _SIZE_KEYS or _SIZE_KEYS[key] in size or image_length(value) is None:
+            return None
+        size[_SIZE_KEYS[key]] = value
+    return {"size": size} if size else None
+
+
+def _style(arguments: list[str]) -> dict | None:
+    name = _name(arguments[0]) if len(arguments) == 1 else None
+    return None if name is None else {"style": name}
+
+
+def _style_end(arguments: list[str]) -> dict | None:
+    return None if arguments else {}
+
+
+# Every comment marker command, and the reader of its arguments.
+_COMMANDS: dict[str, Callable[[list[str]], dict | None]] = {
+    "쪽나눔": _line_command("page_break", "\\newpage{}"),
+    "감추기": _line_command("hide_page", "[감추기{}]"),
+    "새번호": _line_command("restart", "[새 번호{}]"),
+    "빈줄": _line_command("blank_lines", "[빈 줄{}]"),
+    "차례": _line_command("toc", "[TOC{}]"),
+    "여백면": _blank_page,
+    "열너비": _columns,
+    "그림크기": _size,
+    "스타일": _style,
+    "스타일끝": _style_end,
+}
+
+
+def _read_marker(body: str) -> dict | str:
+    """What a comment marker's *body* (its command and arguments) asks for, as its token's meta with the
+    "command" (see _COMMANDS), or why it cannot be read (a Korean clause)."""
+    words = _ARGUMENT.findall(body)
+    if not words:
+        return "명령이 없어"
+    command, arguments = words[0], words[1:]
+    if command not in _COMMANDS:
+        return "모르는 명령이라"
+    # A quote left open cannot be read as arguments.
+    read = None if body.count('"') % 2 else _COMMANDS[command](arguments)
+    return _MARKER_ARGUMENTS if read is None else {"command": command, **read}
+
+
+def _marker_token(state: StateBlock, comment: str, body: str, start: int, end: int) -> None:
+    """The token of the comment marker *comment* (*body*: its command and arguments) on lines *start* to *end*:
+    "table_columns" for 열너비, as a "[cols: ...]" comment gives, else "hwpx_marker" (see _markers). One that
+    cannot be read gives none, and a problem."""
+    read = _read_marker(body)
+    if isinstance(read, str):
+        _marker_problems(state.env).append((start, _label(comment), read))
+        return
+    if read["command"] == "열너비":
+        token = state.push("table_columns", "", 0)
+        token.meta["percents"] = read["percents"]
+    else:
+        token = state.push("hwpx_marker", "", 0)
+        token.meta = {**read, "label": _label(comment)}
+    token.map = [start, end]
+
+
+def _markers(state: StateCore) -> None:
+    """Put each comment marker's setting where it goes, once inline content is parsed:
+
+    - 그림크기: its width / height on the first image of the next block, where the image's own "{...}" does not
+      set them; the token is dropped.
+    - 스타일 ... 스타일끝: a custom-style div ("container_div" tokens) holding the blocks between them, which
+      must be in the same block (the document, a list item, a quote).
+    - A marker inside a line ("hwpx_misplaced", see _comment_inline) is dropped.
+
+    What cannot be done goes in env "marker_problems" (see _marker_problems). The markers that do what a marker
+    line does stay "hwpx_marker" tokens, for the converter.
+    """
+    problems = _marker_problems(state.env)
+    tokens: list[Token | None] = []
+    opened: list[tuple[int, int, Token]] = []  # 스타일 not closed yet: its index in tokens, depth inside, marker
+    depth = line = 0
+
+    def unclosed() -> None:
+        nonlocal depth
+        index, _, marker = opened.pop()
+        tokens[index] = None
+        depth -= 1
+        problems.append((marker.map[0], marker.meta["label"], "짝이 되는 스타일끝이 없어"))
+
+    for k, token in enumerate(state.tokens):
+        if token.map is not None:
+            line = token.map[0]  # a table cell's inline content has no lines of its own: its row's are the nearest
+        if token.type == "inline":
+            _misplaced_markers(token, line, problems)
+        command = token.meta.get("command") if token.type == "hwpx_marker" else None
+        if command not in ("그림크기", "스타일", "스타일끝"):
+            if token.nesting < 0:
+                # The block a 스타일 is in ends before its 스타일끝.
+                while opened and opened[-1][1] == depth:
+                    unclosed()
+                depth -= 1
+            elif token.nesting > 0:
+                depth += 1
+            tokens.append(token)
+        elif command == "그림크기":
+            image = _next_image(state.tokens, k)
+            if image is None:
+                problems.append((token.map[0], token.meta["label"], "바로 뒤에 그림이 없어"))
+                continue
+            for key, value in token.meta["size"].items():
+                if image.attrGet(key) is None:
+                    image.attrSet(key, value)
+        elif command == "스타일":
+            div = Token("container_div_open", "div", 1, map=token.map, info=f'{{custom-style="{token.meta["style"]}"}}')
+            depth += 1
+            opened.append((len(tokens), depth, token))
+            tokens.append(div)
+        elif opened and opened[-1][1] == depth:
+            opened.pop()
+            depth -= 1
+            tokens.append(Token("container_div_close", "div", -1))
+        else:
+            problems.append((token.map[0], token.meta["label"], "짝이 되는 스타일이 없어"))
+    while opened:
+        unclosed()
+    state.tokens = [token for token in tokens if token is not None]
+
+
+def _next_image(tokens: list[Token], k: int) -> Token | None:
+    """The first image of the paragraph right after *tokens*[*k*], if there is one."""
+    if k + 2 >= len(tokens) or tokens[k + 1].type != "paragraph_open":
+        return None
+    return next((child for child in tokens[k + 2].children or [] if child.type == "image"), None)
+
+
+def _misplaced_markers(inline: Token, line: int, problems: list) -> None:
+    """Drop the comment markers inside the lines of *inline*, starting at *line*, as problems."""
+    children = []
+    offset = 0
+    for child in inline.children or []:
+        if child.type in ("softbreak", "hardbreak"):
+            offset += 1
+        elif child.type == "html_comment":
+            offset += child.content.count("\n")
+        elif child.type == "hwpx_misplaced":
+            problems.append((line + offset, child.content, _MARKER_ALONE))
+            continue
+        children.append(child)
+    inline.children = children
 
 
 def _column_percents(values: str) -> list[float] | None:
@@ -130,9 +354,30 @@ def _comment_inline(state: StateInline, silent: bool) -> bool:
             state.pos += 1
         if state.pos == state.posMax and not silent:
             state.pending = state.pending.rstrip(" ")
+    if _MARKER_START.match(match[0]) and not silent:
+        # A comment marker belongs on a line of its own: _markers drops it, as a problem.
+        state.push("hwpx_misplaced", "", 0).content = _label(match[0])
     if "\n" in match[0] and not silent:
         state.push("html_comment", "", 0).content = match[0]
     return True
+
+
+def _escapes(state: StateCore) -> None:
+    """Hold each escaped "[" and "\\" ("\\[감추기]", "\\\\newpage") as its mark (see pieces.ESCAPES) before the
+    escapes join the text around them: the notation they start then stays text.
+
+    markdown-it joins only an inline token's own children: inside an image's alt text an escape ("\\\\]") or
+    entity stays "text_special", which no one writes, so it becomes text here."""
+    def mark(tokens: list[Token], nested: bool) -> None:
+        for token in tokens:
+            if token.type == "text_special" and token.info == "escape" and token.content in ESCAPES:
+                token.content = ESCAPES[token.content]
+            if nested and token.type == "text_special":
+                token.type = "text"
+            mark(token.children or [], True)
+
+    for token in state.tokens:
+        mark(token.children or [], False)
 
 
 def custom_style(info: str) -> str | None:
@@ -154,3 +399,5 @@ PARSER.inline.ruler.push("image_attributes", _image_attributes)
 PARSER.block.ruler.before("html_block", "comment_block", _comment_block, {"alt": ["paragraph", "reference", "blockquote"]})
 PARSER.inline.ruler.before("html_inline", "comment_inline", _comment_inline)
 PARSER.core.ruler.after("block", "table_columns", _table_columns)
+PARSER.core.ruler.after("inline", "hwpx_markers", _markers)
+PARSER.core.ruler.before("text_join", "escapes", _escapes)
