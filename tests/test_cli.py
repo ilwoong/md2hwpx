@@ -281,7 +281,7 @@ def test_cli_warns_about_column_widths_it_ignores(tmp_path, monkeypatch, capsys)
     assert main([str(md), "-t", str(TEMPLATE)]) == 0
 
     # Line numbers count the front matter; the HWPX is made, those tables at their automatic widths.
-    ignored = "md2hwpx: 경고: {}:{}: 열 너비 지정 [cols: …] 은 {} 무시했습니다"
+    ignored = "md2hwpx: 경고: {}:{}: 열 너비 지정은 {} 무시했습니다"
     assert capsys.readouterr().err.splitlines() == [
         ignored.format(md, 8, "값 1개가 표의 열 2개와 달라"),
         ignored.format(md, 12, "값이 모두 0 보다 큰 % 가 아니어서"),

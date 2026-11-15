@@ -104,7 +104,14 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
     for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
         if node.type == "container_div" and (name := custom_style(node.info)) not in styles:
             found.append((node.map[0] + 1, name, "본문 스타일로 넣었습니다"))
-        elif node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
+        elif any(a.type == "footnote" for a in _ancestors(node)):
+            continue
+        elif node.type == "hwpx_marker" and node.meta["marker"] == "toc":
+            found += [
+                (node.map[0] + 1, name, "차례에 모을 수 없습니다")
+                for name in toc_request(node.meta["words"]).styles if name not in styles
+            ]
+        elif node.type == "paragraph":
             # The [TOC] markers as the conversion finds them; a footnote's paragraphs are only text.
             for offset, marker, words in marker_lines(node.children[0]):
                 if marker == "toc":
@@ -124,6 +131,14 @@ def column_problems(markdown: str) -> list[tuple[int, str]]:
         (line + 1, COLUMN_PROBLEMS[problem].format(values=values, columns=columns))
         for line, problem, values, columns in env.get("column_problems", [])
     ]
+
+
+def marker_problems(markdown: str) -> list[tuple[int, str, str]]:
+    """(line number, marker, why) of each "<!-- @hwpx ... -->" comment marker left out, in line order: "marker"
+    names it ("@hwpx 명령 인자"), "why" is a Korean clause (see parser._markers)."""
+    env: dict = {}
+    PARSER.parse(_blank_front_matter(markdown), env)
+    return sorted((line + 1, marker, why) for line, marker, why in env.get("marker_problems", []))
 
 
 def read_markdown(md_path: Path) -> str:

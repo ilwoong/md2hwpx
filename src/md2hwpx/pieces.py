@@ -173,7 +173,11 @@ def _marker(line: list[SyntaxTreeNode]) -> tuple[str, str] | None:
 
     Only plain text is: a line with emphasis, a link or a break in it is text, whatever it reads.
     """
-    text = line[0].content.strip() if len(line) == 1 and line[0].type == "text" else ""
+    return match_marker(line[0].content.strip() if len(line) == 1 and line[0].type == "text" else "")
+
+
+def match_marker(text: str) -> tuple[str, str] | None:
+    """(marker, its words) if *text* is a marker line (a key of MARKERS), else None."""
     for name, pattern in MARKERS.items():
         if match := pattern.fullmatch(text):
             # The blank page marker carries a wording, the TOC and restart markers their words and the blank

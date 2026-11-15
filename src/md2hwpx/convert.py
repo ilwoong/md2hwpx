@@ -494,6 +494,9 @@ class _Writer:
                 self.heading(node)
             elif node.type == "paragraph":
                 self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, content)
+            elif node.type == "hwpx_marker":
+                # A comment marker does what the marker line it stands for does (see parser._read_marker).
+                self.pieces([Piece(node.meta["marker"], text=node.meta["words"])], None, quote, content)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
                 self.code_block(node.content.split("\n")[:-1], lang, quote, content)
