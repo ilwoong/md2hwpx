@@ -204,7 +204,6 @@ def test_cli_reports_missing_files(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "doc.hwpx").exists()
 
 
-@needs_mmdc
 def test_cli_folder_input_with_different_caption_numbering(tmp_path, capsys):
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -218,6 +217,7 @@ def test_cli_folder_input_with_different_caption_numbering(tmp_path, capsys):
     assert not out.exists()
 
 
+@needs_mmdc
 def test_cli_renders_diagrams(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     md = tmp_path / "doc.md"

@@ -306,7 +306,7 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
   `N` 은 그 개체가 속한 장(수준 1 헤딩)의 번호이고, `M` 은 그 장 안에서의 순번이다.
   장이 바뀌면 표·그림 번호를 모두 1부터 다시 매긴다 (표와 그림은 따로 센다).
   첫 장의 번호는 `convert_markdown(..., chapter_start=1)` (명령줄 `--chapter-start`)이며, 그 뒤 장은 하나씩 더한다.
-  첫 수준 1 헤딩 앞 개체의 `[표 M]` 과 `[@이름]` 참조도 이 번호를 따른다. 문서 번호(`document`) 방식에는 영향이 없다.
+  `[@이름]` 참조도 이 번호를 따른다. 첫 수준 1 헤딩 앞 개체는 장이 없으므로 영향이 없고(아래), 문서 번호(`document`) 방식에도 영향이 없다.
   헤딩 자체에 번호를 붙이지 않으므로(내장 템플릿의 `개요` 스타일은 문단 번호 없음), 템플릿의 개요 문단 번호와는 맞추지 않는다.
   첫 수준 1 헤딩 앞에 나오는 개체는 장이 없으므로 `[표 1]`, `[그림 1]` 처럼 장 번호 없이 매긴다.
   캡션이 없는 개체는 번호를 세지 않는다. 한/글은 캡션이 없는 표·그림도 세므로 그런 개체는
@@ -570,7 +570,8 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 
 100쪽이 넘는 문서를 다루므로, python-hwpx 의 비용이 문서 크기에 비례하는 호출을 반복하지 않는다.
 
-- 스타일(`본문`, `표그림 제목`, `개요 N`)은 변환을 시작할 때 이름으로 한 번만 찾고, 이후에는 `Style` 객체를 넘긴다.
+- 스타일은 이름으로 한 번만 찾고, 이후에는 `Style` 객체를 넘긴다. `본문`·`바탕글`·`표그림 제목` 은 변환을 시작할 때,
+  `개요 N` 은 그 수준의 헤딩이 처음 나올 때 찾는다.
   python-hwpx 는 이름으로 찾을 때마다 header.xml 전체를 훑는데, header.xml 은 변환 중 글자·문단 모양이 늘며 커진다.
 - 본문 폭·높이·왼쪽 여백은 한 번만 계산한다.
 - 문단 모양·글자 모양·테두리(`ensure_paragraph_format`, `ensure_run`, `ensure_border_fill`)는 같은 요청의 결과를 기억한다.
@@ -595,7 +596,8 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 # md2hwpx.convert
 def convert(md_path: Path, template_path: Path, out_path: Path) -> None
 def convert_markdown(
-    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter"
+    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter",
+    chapter_start: int = 1,
 ) -> dict[str, str]
 def paragraph_styles(template_path: Path) -> set[str]
 
@@ -604,6 +606,7 @@ def read_markdown(md_path: Path) -> str
 def caption_numbering(md_paths: Iterable[Path]) -> str
 def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, str, str]]
 def references(markdown: str) -> list[tuple[int, str]]
+def column_problems(markdown: str) -> list[tuple[int, str]]
 def marker_problems(markdown: str) -> list[tuple[int, str, str]]
 ```
 
@@ -687,7 +690,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx] [--include-draft] [--incl
   다이어그램 PNG 는 HWPX 에 들어가므로 저장 후 임시 폴더와 함께 지운다.
 - 성공하면 출력 파일 경로를 stdout 에 쓰고 종료 코드 0 을 돌려준다.
 - 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div·`[TOC]` 의 스타일을,
-  `column_problems` 로 무시한 `[cols: …]` 열 너비 지정을,
+  `column_problems` 로 무시한 열 너비 지정(`[cols: …]`, `열너비`)을, `marker_problems` 로 무시한 주석 마커를,
   `references` 와 `convert_markdown` 의 결과로 글자 그대로 둔 번호 참조를 확인한다.
   넣을 수 없는 이미지는 대체 이미지로, 없는 스타일의 div 는 `본문` 으로 변환하고, 저장한 뒤 모두 stderr 에 쓴다.
   종료 코드는 0 이다. 입력 파일 순서, 파일 안에서는 줄 순서다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
