@@ -10,11 +10,10 @@ from pathlib import Path
 from PIL import Image
 
 from md2hwpx.diagram import LANGS
+from md2hwpx.parser import image_length
 
 # File names render_diagrams gives the PNGs it renders.
 _DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
-# An image's width / height attribute: percent of the page body, or millimetres.
-_LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Shown in place of an image whose file is not there, or that cannot be read.
 MISSING_IMAGE = Path(__file__).resolve().parent / "static" / "missing-image.png"
 SVG_TIMEOUT = 60  # seconds for rsvg-convert
@@ -91,13 +90,13 @@ def _svg_to_png(svg: bytes) -> bytes:
 
 
 def length(value: str | None, whole: int) -> int | None:
-    """A width / height attribute ("50%" of *whole*, or "80mm") in HWPUNIT, or None if absent, zero or neither."""
-    match = _LENGTH.fullmatch(value or "")
-    if match is None:
+    """A width / height attribute ("50%" of *whole*, or "80mm") in HWPUNIT, at least 1, or None if absent, zero
+    or neither (see parser.image_length, which a 그림크기 marker is checked with too)."""
+    read = image_length(value)
+    if read is None:
         return None
-    number = float(match[1])
-    hwpunit = round(whole * number / 100 if match[2] == "%" else number * HWPUNIT_PER_MM)
-    return hwpunit or None
+    number, unit = read
+    return max(1, round(whole * number / 100 if unit == "%" else number * HWPUNIT_PER_MM))
 
 
 def picture_size(

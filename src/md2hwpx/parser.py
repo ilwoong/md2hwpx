@@ -2,6 +2,7 @@
 
 import itertools
 import re
+from collections.abc import Callable
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_block import StateBlock
@@ -37,16 +38,9 @@ _MARKER_START = re.compile(r"<!--\s*@hwpx(?=\s|-->)")
 # A command or argument: words, and "..." holding spaces ("이 면은 여백", 스타일="A B").
 _ARGUMENT = re.compile(r'(?:[^\s"]|"[^"]*")+')
 _NAME = re.compile(r'"([^"]+)"|([^\s"]+)')  # a style name or blank page wording: one word, or in quotes
-# Commands that do what a marker line does: the marker, and the line they stand for ("{}": the arguments).
-_LINE_COMMANDS = {
-    "쪽나눔": ("page_break", "\\newpage{}"),
-    "감추기": ("hide_page", "[감추기{}]"),
-    "새번호": ("restart", "[새 번호{}]"),
-    "빈줄": ("blank_lines", "[빈 줄{}]"),
-    "차례": ("toc", "[TOC{}]"),
-}
 _SIZE_KEYS = {"너비": "width", "높이": "height"}  # 그림크기 arguments: the image attributes they set
-_SIZE = re.compile(r"(\d+(?:\.\d+)?)(?:%|mm)")
+# An image's width / height, in image attributes or a 그림크기 marker: percent of the page body, or millimetres.
+_LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Why a comment marker is left out, as a Korean clause.
 _MARKER_ARGUMENTS = "인자가 맞지 않아"
 _MARKER_ALONE = "줄에 따로 있지 않아"
@@ -120,42 +114,83 @@ def _name(argument: str) -> str | None:
     return match and (match[1] or match[2])
 
 
+def image_length(value: str | None) -> tuple[float, str] | None:
+    """An image's width / height *value* ("50%", "80mm") as (number, "%" or "mm"), or None if it is not one above 0."""
+    match = _LENGTH.fullmatch(value or "")
+    return (float(match[1]), match[2]) if match and float(match[1]) > 0 else None
+
+
+# Readers of a command's arguments (see _COMMANDS): what the command asks for, as its token's meta, or None if
+# the arguments are not its own. "marker" and "words" in it are a marker line's (see pieces.MARKERS).
+
+def _line_command(marker: str, line: str) -> Callable[[list[str]], dict | None]:
+    """The reader of a command that does what the marker line *line* ("{}": the arguments) does: it reads the
+    arguments as that line, so both take the same ones."""
+    def read(arguments: list[str]) -> dict | None:
+        found = match_marker(line.format("".join(f" {a}" for a in arguments)))
+        return {"marker": marker, "words": found[1]} if found and found[0] == marker else None
+    return read
+
+
+def _blank_page(arguments: list[str]) -> dict | None:
+    names = [_name(a) for a in arguments]
+    if len(names) > 1 or None in names:
+        return None
+    return {"marker": "blank_page", "words": names[0].strip() if names else ""}
+
+
+def _columns(arguments: list[str]) -> dict:
+    # Its percents are checked against the table, as a "[cols: ...]" comment's are (see _table_columns).
+    return {"percents": _column_percents(",".join(arguments))}
+
+
+def _size(arguments: list[str]) -> dict | None:
+    size = {}
+    for argument in arguments:
+        key, _, value = argument.partition("=")
+        value = value.strip('"')
+        if key not in _SIZE_KEYS or _SIZE_KEYS[key] in size or image_length(value) is None:
+            return None
+        size[_SIZE_KEYS[key]] = value
+    return {"size": size} if size else None
+
+
+def _style(arguments: list[str]) -> dict | None:
+    name = _name(arguments[0]) if len(arguments) == 1 else None
+    return None if name is None else {"style": name}
+
+
+def _style_end(arguments: list[str]) -> dict | None:
+    return None if arguments else {}
+
+
+# Every comment marker command, and the reader of its arguments.
+_COMMANDS: dict[str, Callable[[list[str]], dict | None]] = {
+    "쪽나눔": _line_command("page_break", "\\newpage{}"),
+    "감추기": _line_command("hide_page", "[감추기{}]"),
+    "새번호": _line_command("restart", "[새 번호{}]"),
+    "빈줄": _line_command("blank_lines", "[빈 줄{}]"),
+    "차례": _line_command("toc", "[TOC{}]"),
+    "여백면": _blank_page,
+    "열너비": _columns,
+    "그림크기": _size,
+    "스타일": _style,
+    "스타일끝": _style_end,
+}
+
+
 def _read_marker(body: str) -> dict | str:
-    """What a comment marker's *body* (its command and arguments) asks for, as its token's meta, or why it
-    cannot be read (a Korean clause)."""
+    """What a comment marker's *body* (its command and arguments) asks for, as its token's meta with the
+    "command" (see _COMMANDS), or why it cannot be read (a Korean clause)."""
     words = _ARGUMENT.findall(body)
     if not words:
         return "명령이 없어"
     command, arguments = words[0], words[1:]
-    if command not in _LINE_COMMANDS and command not in ("여백면", "열너비", "그림크기", "스타일", "스타일끝"):
+    if command not in _COMMANDS:
         return "모르는 명령이라"
-    if body.count('"') % 2:
-        return _MARKER_ARGUMENTS
-    if command in _LINE_COMMANDS:
-        # Read as the marker line it stands for, so both take the same arguments.
-        marker, line = _LINE_COMMANDS[command]
-        found = match_marker(line.format("".join(f" {a}" for a in arguments)))
-        return {"marker": marker, "words": found[1]} if found and found[0] == marker else _MARKER_ARGUMENTS
-    if command == "열너비":
-        return {"percents": _column_percents(",".join(arguments))}
-    if command == "그림크기":
-        size = {}
-        for argument in arguments:
-            key, _, value = argument.partition("=")
-            value = value.strip('"')
-            match = _SIZE.fullmatch(value)
-            if key not in _SIZE_KEYS or _SIZE_KEYS[key] in size or match is None or float(match[1]) == 0:
-                return _MARKER_ARGUMENTS
-            size[_SIZE_KEYS[key]] = value
-        return {"size": size} if size else _MARKER_ARGUMENTS
-    names = [_name(a) for a in arguments]
-    if command == "여백면" and len(names) <= 1 and None not in names:
-        return {"marker": "blank_page", "words": names[0].strip() if names else ""}
-    if command == "스타일" and len(names) == 1 and names[0] is not None:
-        return {"style": names[0]}
-    if command == "스타일끝" and not names:
-        return {"style_end": True}
-    return _MARKER_ARGUMENTS
+    # A quote left open cannot be read as arguments.
+    read = None if body.count('"') % 2 else _COMMANDS[command](arguments)
+    return _MARKER_ARGUMENTS if read is None else {"command": command, **read}
 
 
 def _marker_token(state: StateBlock, comment: str, body: str, start: int, end: int) -> None:
@@ -166,7 +201,7 @@ def _marker_token(state: StateBlock, comment: str, body: str, start: int, end: i
     if isinstance(read, str):
         _marker_problems(state.env).append((start, _label(comment), read))
         return
-    if "percents" in read:
+    if read["command"] == "열너비":
         token = state.push("table_columns", "", 0)
         token.meta["percents"] = read["percents"]
     else:
@@ -204,7 +239,8 @@ def _markers(state: StateCore) -> None:
             line = token.map[0]  # a table cell's inline content has no lines of its own: its row's are the nearest
         if token.type == "inline":
             _misplaced_markers(token, line, problems)
-        if token.type != "hwpx_marker" or "marker" in token.meta:
+        command = token.meta.get("command") if token.type == "hwpx_marker" else None
+        if command not in ("그림크기", "스타일", "스타일끝"):
             if token.nesting < 0:
                 # The block a 스타일 is in ends before its 스타일끝.
                 while opened and opened[-1][1] == depth:
@@ -213,7 +249,7 @@ def _markers(state: StateCore) -> None:
             elif token.nesting > 0:
                 depth += 1
             tokens.append(token)
-        elif "size" in token.meta:
+        elif command == "그림크기":
             image = _next_image(state.tokens, k)
             if image is None:
                 problems.append((token.map[0], token.meta["label"], "바로 뒤에 그림이 없어"))
@@ -221,7 +257,7 @@ def _markers(state: StateCore) -> None:
             for key, value in token.meta["size"].items():
                 if image.attrGet(key) is None:
                     image.attrSet(key, value)
-        elif "style" in token.meta:
+        elif command == "스타일":
             div = Token("container_div_open", "div", 1, map=token.map, info=f'{{custom-style="{token.meta["style"]}"}}')
             depth += 1
             opened.append((len(tokens), depth, token))

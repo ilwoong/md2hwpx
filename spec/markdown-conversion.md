@@ -287,6 +287,7 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
   - 하나만 쓰면 다른 쪽은 원본 비율을 따른다. 둘 다 쓰면 그대로 쓴다. 지정한 크기까지 작은 이미지도 키운다.
   - 지정한 크기도 위의 본문 폭·높이를 넘으면 비율을 유지해 줄인다.
   - `width`·`height` 외의 항목(`#id`, `.class`, 다른 키)과 다른 단위(`px` 등)·0 은 무시한다. 속성 묶음은 글자로 남지 않는다.
+  - 0 보다 크면 반올림해 0 이 되는 값도 1 HWPUNIT 로 쓴다. 그림크기 주석 마커와 같은 기준(`parser.image_length`)이다.
   - 이미지와 `{` 사이에 공백이 있으면 속성이 아니라 글자다.
 - 픽셀 크기는 PNG, GIF, JPEG 헤더에서 읽는다.
   읽지 못하는 형식이면 python-hwpx 기본값(폭 14400 HWPUNIT, 약 51mm)을 따른다.

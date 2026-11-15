@@ -12,6 +12,7 @@ from PIL import Image
 from helpers import BODY_HEIGHT, BODY_LEFT, BODY_WIDTH, HP, _paragraph_info, _png, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import MISSING_IMAGE, convert
+from md2hwpx.images import length
 from md2hwpx.source import unusable_images
 
 
@@ -329,3 +330,11 @@ def test_convert_indented_picture_fits_the_body(tmp_path):
     widths = [int(pic.find(f"{HP}sz").get("width")) for _, pic in pictures]
     # Too wide for the body less its indent, it comes down to that; a width asked for is still of the body.
     assert widths == [BODY_WIDTH - 1000, BODY_WIDTH // 2]
+
+
+def test_length_of_a_size_too_small_to_round_is_kept():
+    # Any size above 0 is used, as a 그림크기 marker is checked (see parser.image_length): it does not round to none.
+    assert length("0.001mm", 40000) == 1
+    assert length("0.001%", 40000) == 1
+    assert length("30mm", 40000) == round(30 * 7200 / 25.4)
+    assert [length(v, 40000) for v in (None, "0mm", "0%", "50px", "50", "mm")] == [None] * 6
