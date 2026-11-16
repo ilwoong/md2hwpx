@@ -124,6 +124,21 @@ def test_marker_problems_say_where_and_why():
     ]
 
 
+def test_unknown_command_with_spaces_names_the_command_meant():
+    text = (
+        "<!-- @hwpx 쪽 나눔 -->\n\n<!-- @hwpx 새 번호 쪽 표 -->\n\n<!-- @hwpx 빈 줄 3 -->\n\n"
+        "<!-- @hwpx 그림 크기 너비=50% -->\n\n<!-- @hwpx 여백 면 -->\n\n<!-- @hwpx 쪽 나누기 -->\n"
+    )
+    assert marker_problems(text) == [
+        (1, "@hwpx 쪽 나눔", "모르는 명령이라 (쪽나눔?)"),
+        (3, "@hwpx 새 번호 쪽 표", "모르는 명령이라 (새번호?)"),
+        (5, "@hwpx 빈 줄 3", "모르는 명령이라 (빈줄?)"),
+        (7, "@hwpx 그림 크기 너비=50%", "모르는 명령이라 (그림크기?)"),
+        (9, "@hwpx 여백 면", "모르는 명령이라 (여백면?)"),
+        (11, "@hwpx 쪽 나누기", "모르는 명령이라"),
+    ]
+
+
 def test_comments_nearly_markers_are_warned_about(tmp_path):
     text = (
         "가\n\n<!-- @HWPX 쪽나눔 -->\n\n<!-- @hwpx: 쪽나눔 -->\n\n<!-- @hwp 쪽나눔 -->\n\n<!-- @ hwpx 쪽나눔 -->\n\n"

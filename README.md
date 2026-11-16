@@ -248,6 +248,9 @@ uv run pytest -q
 
 `mmdc`, `plantuml`, `rsvg-convert` 가 PATH 에 없으면 해당 렌더링 테스트는 skip 됩니다.
 
+uv 0.4.27 이상이 필요합니다 (pytest 가 든 `dev` 의존성 그룹). `Failed to spawn: pytest` 가 나면 `uv --version` 과
+`UV_NO_DEV` 같은 환경 변수가 설정되어 있지 않은지 확인하세요.
+
 ## 프로젝트 구조
 
 ```

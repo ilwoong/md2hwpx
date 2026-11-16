@@ -193,7 +193,9 @@ def _read_marker(body: str) -> dict | str:
         return "명령이 없어"
     command, arguments = words[0], words[1:]
     if command not in _COMMANDS:
-        return "모르는 명령이라"
+        # A command written with spaces ("쪽 나눔", as the marker line "[새 번호]" is): name the one meant.
+        meant = next((c for n in range(2, len(words) + 1) if (c := "".join(words[:n])) in _COMMANDS), None)
+        return f"모르는 명령이라 ({meant}?)" if meant else "모르는 명령이라"
     # A quote left open cannot be read as arguments.
     read = None if body.count('"') % 2 else _COMMANDS[command](arguments)
     return _MARKER_ARGUMENTS if read is None else {"command": command, **read}
