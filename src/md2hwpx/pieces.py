@@ -202,10 +202,13 @@ def match_marker(text: str) -> tuple[str, str] | None:
     return None
 
 
-def marker_lines(inline: SyntaxTreeNode) -> list[tuple[int, str, str]]:
-    """(source line offset in the paragraph, marker, its words) of each marker line of a paragraph's inline
-    content, as paragraph_pieces finds them."""
-    return [(offset, *found) for offset, line in _lines(inline) if (found := _marker(line))]
+def marker_lines(inline: SyntaxTreeNode) -> list[tuple[int, str, str, str]]:
+    """(source line offset in the paragraph, marker, its words, the line) of each marker line of a paragraph's
+    inline content, as paragraph_pieces finds them."""
+    return [
+        (offset, *found, unescape(line[0].content.strip()))
+        for offset, line in _lines(inline) if (found := _marker(line))
+    ]
 
 
 def marker_typo_lines(inline: SyntaxTreeNode) -> list[tuple[int, str]]:

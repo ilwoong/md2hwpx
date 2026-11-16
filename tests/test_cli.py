@@ -353,7 +353,7 @@ def test_cli_warns_about_lines_that_look_like_markers(tmp_path, monkeypatch, cap
         "[새번호 쪽]\n[toc 목록]\n[감추기 둘]\n\n"
         "> [빈 줄 셋]\n\n"
         # Markers, text that does not start like one, escaped and formatted lines, code and table cells: no warning.
-        "[새 번호 쪽]\n\n[TOC]\n\n[새 번호 체계] 안내\n\n\\[새 번호 체계 안내]\n\n**[빈 줄 11]**\n\n"
+        "\\newpage\n\n[새 번호 체계] 안내\n\n\\[새 번호 체계 안내]\n\n**[빈 줄 11]**\n\n"
         "`[빈 줄 11]`\n\n```\n[빈 줄 11]\n```\n\n| [빈 줄 11] |\n|---|\n",
         encoding="utf-8",
     )
@@ -373,3 +373,36 @@ def test_cli_warns_about_lines_that_look_like_markers(tmp_path, monkeypatch, cap
     ]
     text = _text(HwpxDocument.open(tmp_path / "doc.hwpx").sections[-1].element)
     assert "[새 번호 쪽 페이지]" in text and "[빈 줄 11]" in text
+
+
+def test_cli_warns_about_marker_lines_going_away(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    md = tmp_path / "doc.md"
+    md.write_text(
+        "---\nk: v\n---\n"
+        '[TOC 그림 표 링크없음 스타일="요약문-본문"]\n\n\\newpage\n[감추기]\n[새 번호 쪽 표]\n\n'
+        "- [빈 줄 3]\n\n> [빈 줄]\n\n[여백면]\n\n[여백면] 이 면은 여백\n\n[여백면] 여백\n\n"
+        # pandoc's page break, comment markers, escaped and formatted lines, code, table cells, footnotes: no warning.
+        "<!-- @hwpx 감추기 -->\n\n\\[감추기]\n\n**[감추기]**\n\n`[감추기]`\n\n| [감추기] |\n|---|\n\n"
+        "본문[^n]\n\n[^n]: [감추기]\n",
+        encoding="utf-8",
+    )
+
+    assert main([str(md), "-t", str(TEMPLATE)]) == 0
+
+    # They still do what they did.
+    warning = "md2hwpx: 경고: {}:{}: 표기({})는 없어질 표기입니다. {} 로 바꾸세요"
+    assert capsys.readouterr().err.splitlines() == [
+        warning.format(
+            md, 4, '[TOC 그림 표 링크없음 스타일="요약문-본문"]', '<!-- @hwpx 차례 그림 표 링크없음 스타일="요약문-본문" -->'
+        ),
+        warning.format(md, 7, "[감추기]", "<!-- @hwpx 감추기 -->"),
+        warning.format(md, 8, "[새 번호 쪽 표]", "<!-- @hwpx 새번호 쪽 표 -->"),
+        warning.format(md, 10, "[빈 줄 3]", "<!-- @hwpx 빈줄 3 -->"),
+        warning.format(md, 12, "[빈 줄]", "<!-- @hwpx 빈줄 -->"),
+        warning.format(md, 14, "[여백면]", "<!-- @hwpx 여백면 -->"),
+        warning.format(md, 16, "[여백면] 이 면은 여백", '<!-- @hwpx 여백면 "이 면은 여백" -->'),
+        warning.format(md, 18, "[여백면] 여백", "<!-- @hwpx 여백면 여백 -->"),
+    ]
+    text = _text(HwpxDocument.open(tmp_path / "doc.hwpx").sections[-1].element)
+    assert "[새 번호 쪽 표]" not in text and "이 면은 여백" in text

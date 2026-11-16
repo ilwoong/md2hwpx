@@ -11,7 +11,7 @@
 ![](images/picture.png)
 
 \newpage
-[새 번호 쪽 표 그림]
+<!-- @hwpx 새번호 쪽 표 그림 -->
 
 [표] 다시 1번 표
 

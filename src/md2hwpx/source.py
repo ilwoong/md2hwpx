@@ -42,9 +42,18 @@ def _ancestors(node: SyntaxTreeNode) -> Iterable[SyntaxTreeNode]:
         yield node
 
 
+def _in_footnote(node: SyntaxTreeNode) -> bool:
+    return any(a.type == "footnote" for a in _ancestors(node))
+
+
 def _blank_front_matter(markdown: str) -> str:
     """*markdown* with its front matter as blank lines, so line numbers still count it."""
     return _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
+
+
+def _nodes(markdown: str) -> Iterable[SyntaxTreeNode]:
+    """Every node of *markdown* as the conversion parses it, its front matter as blank lines."""
+    return _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown))))
 
 
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
@@ -52,7 +61,7 @@ def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
     markdown = _blank_front_matter(markdown)
     lines = markdown.splitlines()
     images: list[tuple[int, Path]] = []
-    for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
+    for node in _nodes(markdown):
         if node.type != "inline" or node.map is None:
             continue
         for image in (n for n in _walk(node) if n.type == "image"):
@@ -70,7 +79,7 @@ def references(markdown: str) -> list[tuple[int, str]]:
     markdown = _blank_front_matter(markdown)
     lines = markdown.splitlines()
     found = []
-    for node in _walk(SyntaxTreeNode(PARSER.parse(markdown))):
+    for node in _nodes(markdown):
         if node.type != "inline":
             continue
         # A table cell's inline content has no lines of its own: its row's are the nearest.
@@ -100,25 +109,22 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
     """(line number, name, what follows) of each paragraph style not in *styles* (see convert.paragraph_styles) that
     a custom-style div or a [TOC] marker names. A div's paragraphs are left 본문; a TOC keeps the name, but
     Hancom finds no paragraph of it to collect. "What follows" says which, as a Korean clause."""
+    def toc_styles(line: int, words: str) -> list[tuple[int, str, str]]:
+        return [(line, name, "차례에 모을 수 없습니다") for name in toc_request(words).styles if name not in styles]
+
     found = []
-    for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
+    for node in _nodes(markdown):
         if node.type == "container_div" and (name := custom_style(node.info)) not in styles:
             found.append((node.map[0] + 1, name, "본문 스타일로 넣었습니다"))
-        elif any(a.type == "footnote" for a in _ancestors(node)):
+        elif _in_footnote(node):
             continue
         elif node.type == "hwpx_marker" and node.meta["marker"] == "toc":
-            found += [
-                (node.map[0] + 1, name, "차례에 모을 수 없습니다")
-                for name in toc_request(node.meta["words"]).styles if name not in styles
-            ]
+            found += toc_styles(node.map[0] + 1, node.meta["words"])
         elif node.type == "paragraph":
             # The [TOC] markers as the conversion finds them; a footnote's paragraphs are only text.
-            for offset, marker, words in marker_lines(node.children[0]):
+            for offset, marker, words, _ in marker_lines(node.children[0]):
                 if marker == "toc":
-                    found += [
-                        (node.map[0] + offset + 1, name, "차례에 모을 수 없습니다")
-                        for name in toc_request(words).styles if name not in styles
-                    ]
+                    found += toc_styles(node.map[0] + offset + 1, words)
     return found
 
 
@@ -137,7 +143,7 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]:
     markdown = _blank_front_matter(markdown)
     lines = markdown.splitlines()
     found = []
-    for note in (n for n in _walk(SyntaxTreeNode(PARSER.parse(markdown))) if n.type == "footnote"):
+    for note in (n for n in _nodes(markdown) if n.type == "footnote"):
         for block in note.children:
             if block.type in _FOOTNOTE_LEAVES_OUT:
                 found.append((block.map[0] + 1, _FOOTNOTE_LEAVES_OUT[block.type]))
@@ -155,10 +161,32 @@ def marker_typos(markdown: str) -> list[tuple[int, str]]:
     """(line number, the line) of each line of a paragraph that starts as a marker line ("[새 번호 ...]",
     "[빈 줄 ...]", "\\newpage ...") does but is not one: it stays text (see pieces.marker_typo_lines)."""
     found = []
-    for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
+    for node in _nodes(markdown):
         # A footnote's paragraphs are only text.
-        if node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
+        if node.type == "paragraph" and not _in_footnote(node):
             found += [(node.map[0] + offset + 1, line) for offset, line in marker_typo_lines(node.children[0])]
+    return found
+
+
+# The marker lines going away (see old_markers), and the comment marker command that does what each does.
+_OLD_MARKERS = {"toc": "차례", "restart": "새번호", "hide_page": "감추기", "blank_lines": "빈줄", "blank_page": "여백면"}
+
+
+def old_markers(markdown: str) -> list[tuple[int, str, str]]:
+    """(line number, the line, the comment marker to write instead) of each marker line going away ("[TOC]",
+    "[새 번호 ...]", "[감추기]", "[빈 줄 ...]", "[여백면] ..."): it still works, with a warning. The pandoc ones
+    ("\\newpage") stay."""
+    found = []
+    for node in _nodes(markdown):
+        # A footnote's paragraphs are only text.
+        if node.type == "paragraph" and not _in_footnote(node):
+            for offset, marker, words, line in marker_lines(node.children[0]):
+                if marker not in _OLD_MARKERS:
+                    continue
+                if marker == "blank_page" and re.search(r"\s", words):
+                    words = f'"{words}"'
+                command = _OLD_MARKERS[marker] + (f" {words}" if words else "")
+                found.append((node.map[0] + offset + 1, line, f"<!-- @hwpx {command} -->"))
     return found
 
 

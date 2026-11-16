@@ -35,6 +35,8 @@ _PERCENT = re.compile(r"\s*(\d+(?:\.\d+)?)\s*%\s*")
 # or a custom-style div does, hidden from Markdown viewers. Its body is the command and arguments.
 _MARKER = re.compile(r"<!--\s*@hwpx(?:\s+((?:(?!-->).)*?))?\s*-->", re.DOTALL)
 _MARKER_START = re.compile(r"<!--\s*@hwpx(?=\s|-->)")
+# A comment that starts nearly as a marker does: "@HWPX", "@hwpx:", "@hwp", "@ hwpx", "@hwpx쪽나눔".
+_LIKE_MARKER_START = re.compile(r"<!--\s*@\s*hwpx?(?![a-z])", re.IGNORECASE)
 # A command or argument: words, and "..." holding spaces ("이 면은 여백", 스타일="A B").
 _ARGUMENT = re.compile(r'(?:[^\s"]|"[^"]*")+')
 _NAME = re.compile(r'"([^"]+)"|([^\s"]+)')  # a style name or blank page wording: one word, or in quotes
@@ -44,6 +46,7 @@ _LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 # Why a comment marker is left out, as a Korean clause.
 _MARKER_ARGUMENTS = "인자가 맞지 않아"
 _MARKER_ALONE = "줄에 따로 있지 않아"
+_MARKER_FORM = "'@hwpx 명령' 꼴이 아니어서"
 
 
 def _image_attributes(state: StateInline, silent: bool) -> bool:
@@ -88,11 +91,14 @@ def _comment_block(state: StateBlock, start: int, end: int, silent: bool) -> boo
     elif (match := _MARKER.fullmatch(block)) is not None:
         _marker_token(state, block, match[1] or "", start, line)
     else:
-        # A marker with something else in its block: an ordinary comment, or text after it on its line.
+        # A marker with something else in its block: an ordinary comment, or text after it on its line. A
+        # comment that is nearly a marker is most likely one mistyped.
         for comment in _COMMENT.finditer(block):
+            at = start + block[: comment.start()].count("\n")
             if _MARKER_START.match(comment[0]):
-                at = start + block[: comment.start()].count("\n")
                 _marker_problems(state.env).append((at, _label(comment[0]), _MARKER_ALONE))
+            elif _LIKE_MARKER_START.match(comment[0]):
+                _marker_problems(state.env).append((at, _label(comment[0]), _MARKER_FORM))
     state.line = line
     return True
 
@@ -187,7 +193,9 @@ def _read_marker(body: str) -> dict | str:
         return "명령이 없어"
     command, arguments = words[0], words[1:]
     if command not in _COMMANDS:
-        return "모르는 명령이라"
+        # A command written with spaces ("쪽 나눔", as the marker line "[새 번호]" is): name the one meant.
+        meant = next((c for n in range(2, len(words) + 1) if (c := "".join(words[:n])) in _COMMANDS), None)
+        return f"모르는 명령이라 ({meant}?)" if meant else "모르는 명령이라"
     # A quote left open cannot be read as arguments.
     read = None if body.count('"') % 2 else _COMMANDS[command](arguments)
     return _MARKER_ARGUMENTS if read is None else {"command": command, **read}
