@@ -124,6 +124,27 @@ def test_marker_problems_say_where_and_why():
     ]
 
 
+def test_comments_nearly_markers_are_warned_about(tmp_path):
+    text = (
+        "가\n\n<!-- @HWPX 쪽나눔 -->\n\n<!-- @hwpx: 쪽나눔 -->\n\n<!-- @hwp 쪽나눔 -->\n\n<!-- @ hwpx 쪽나눔 -->\n\n"
+        "<!-- @hwpx쪽나눔 -->\n\n<!-- @HWPX\n감추기 -->\n\n"
+        # Other comments, and code: no warning.
+        "<!-- @todo 고치기 -->\n\n<!-- @hwpdoc -->\n\n<!-- hwpx 쪽나눔 -->\n\n<!-- 메모 @hwp -->\n\n"
+        "```\n<!-- @HWPX 쪽나눔 -->\n```\n\n    <!-- @HWPX 쪽나눔 -->\n"
+    )
+    form = "'@hwpx 명령' 꼴이 아니어서"
+    assert marker_problems(text) == [
+        (3, "@HWPX 쪽나눔", form),
+        (5, "@hwpx: 쪽나눔", form),
+        (7, "@hwp 쪽나눔", form),
+        (9, "@ hwpx 쪽나눔", form),
+        (11, "@hwpx쪽나눔", form),
+        (13, "@HWPX 감추기", form),
+    ]
+    # They are dropped, as before.
+    assert _converted(tmp_path, "new", "가\n\n<!-- @HWPX 쪽나눔 -->\n\n나\n") == _converted(tmp_path, "old", "가\n\n나\n")
+
+
 def test_unknown_styles_of_markers():
     text = '가\n\n<!-- @hwpx 스타일 "없는 스타일" -->\n나\n<!-- @hwpx 스타일끝 -->\n\n<!-- @hwpx 차례 스타일="없음;본문" -->\n'
     assert unknown_styles(text, {"본문"}) == [
