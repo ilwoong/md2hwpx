@@ -113,7 +113,7 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
             ]
         elif node.type == "paragraph":
             # The [TOC] markers as the conversion finds them; a footnote's paragraphs are only text.
-            for offset, marker, words in marker_lines(node.children[0]):
+            for offset, marker, words, _ in marker_lines(node.children[0]):
                 if marker == "toc":
                     found += [
                         (node.map[0] + offset + 1, name, "차례에 모을 수 없습니다")
@@ -159,6 +159,28 @@ def marker_typos(markdown: str) -> list[tuple[int, str]]:
         # A footnote's paragraphs are only text.
         if node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
             found += [(node.map[0] + offset + 1, line) for offset, line in marker_typo_lines(node.children[0])]
+    return found
+
+
+# The marker lines going away (see old_markers), and the comment marker command that does what each does.
+_OLD_MARKERS = {"toc": "차례", "restart": "새번호", "hide_page": "감추기", "blank_lines": "빈줄", "blank_page": "여백면"}
+
+
+def old_markers(markdown: str) -> list[tuple[int, str, str]]:
+    """(line number, the line, the comment marker to write instead) of each marker line going away ("[TOC]",
+    "[새 번호 ...]", "[감추기]", "[빈 줄 ...]", "[여백면] ..."): it still works, with a warning. The pandoc ones
+    ("\\newpage") stay."""
+    found = []
+    for node in _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown)))):
+        # A footnote's paragraphs are only text.
+        if node.type == "paragraph" and not any(a.type == "footnote" for a in _ancestors(node)):
+            for offset, marker, words, line in marker_lines(node.children[0]):
+                if marker not in _OLD_MARKERS:
+                    continue
+                if marker == "blank_page" and re.search(r"\s", words):
+                    words = f'"{words}"'
+                command = _OLD_MARKERS[marker] + (f" {words}" if words else "")
+                found.append((node.map[0] + offset + 1, line, f"<!-- @hwpx {command} -->"))
     return found
 
 
