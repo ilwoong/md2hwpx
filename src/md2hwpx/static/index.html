@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>md2hwpx</title>
 <style>
-  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; --warning: #9a6700; }
+  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; --warning: #9a6700; --button: #0969da; color-scheme: light dark; }
   @media (prefers-color-scheme: dark) {
-    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; --warning: #d29922; }
+    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; --warning: #d29922; --button: #1f6feb; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, -apple-system, "Malgun Gothic", sans-serif; }
@@ -15,12 +15,13 @@
   h1 { font-size: 24px; margin: 0 0 4px; }
   p.lead { margin: 0 0 24px; color: var(--muted); }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
-  .tabs label { padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); }
-  .tabs input { display: none; }
+  .tabs label { position: relative; padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); }
+  .tabs input { position: absolute; opacity: 0; pointer-events: none; }
   .tabs input:checked + span { color: var(--fg); font-weight: 600; }
   .tabs label:has(input:checked) { border-bottom-color: var(--accent); }
-  fieldset { border: 0; padding: 0; margin: 0 0 16px; }
-  .field { margin-bottom: 14px; }
+  .tabs label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  .field { display: block; margin-bottom: 14px; }
   .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
   .field small { display: block; color: var(--muted); }
   input[type=text], input[type=url], input[type=number] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
@@ -30,7 +31,7 @@
   details .field { margin-top: 12px; }
   details .download { display: block; margin-top: -6px; color: var(--muted); }
   details .download a { color: var(--accent); }
-  button { padding: 10px 20px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button { padding: 10px 20px; border: 0; border-radius: 6px; background: var(--button); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: .6; cursor: progress; }
   #status { margin-top: 16px; white-space: pre-wrap; }
   #status.error { color: var(--error); }
@@ -78,17 +79,18 @@
       </label>
     </fieldset>
 
-    <div class="field" id="path-field" hidden>
-      <label><span>변환할 경로 (선택)</span>
+    <div id="path-field" hidden>
+      <label class="field"><span>변환할 경로 (선택)</span>
         <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
+        <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
       </label>
-      <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
       <label class="field"><span>파일 이름 패턴 (선택)</span>
         <input type="text" name="include" placeholder="ch_2*.md, appendix*.md">
+        <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
       </label>
-      <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
-      <label><input type="checkbox" name="include_draft"> draft 파일도 변환</label>
-      <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
+      <label class="field"><input type="checkbox" name="include_draft"> draft 파일도 변환
+        <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
+      </label>
     </div>
 
     <label class="field"><span>시작 장 번호 (선택)</span>
