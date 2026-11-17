@@ -24,7 +24,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
 | `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs |
-| `.env.example` | 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
+| `.env.example` | 업로드 크기 제한과 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
 의존성은 `pyproject.toml` 의 `web` 그룹(`fastapi`, `uvicorn`, `python-multipart`)이다.
 `[tool.uv] default-groups` 에 넣어 `uv sync` 와 Docker 이미지에 함께 설치한다.
@@ -157,7 +157,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `ref` 를 git 옵션으로 넘기기 (`--upload-pack=…`) | 글자·숫자·`_` 로 시작하고 `./-` 만 더 허용. 주소 앞에 `--` |
 | PlantUML `!include` 로 파일·URL 읽기 | 이미지에 `PLANTUML_SECURITY_PROFILE=SANDBOX` |
 | 끝나지 않는 다이어그램으로 작업자 붙잡기 | 다이어그램마다 제한 시간 60 초, 넘으면 도구의 프로세스 그룹째 끝내고 400 |
-| 큰 업로드·zip 폭탄 | 요청마다 디스크에 쓰는 양(업로드와 푼 파일, 템플릿 합계) 50 MB, zip 항목 2000 개 |
+| 큰 업로드·zip 폭탄 | 요청마다 디스크에 쓰는 양(업로드와 푼 파일, 템플릿 합계) 50 MB (`MD2HWPX_MAX_UPLOAD_MB` 로 바꿈), zip 항목 2000 개 |
 | 컨테이너 권한 | `nobody` 사용자로 실행 |
 
 제한:

@@ -59,7 +59,7 @@
     <fieldset data-source="files">
       <label class="field"><span>Markdown 과 이미지 파일</span>
         <input type="file" name="files" multiple accept=".md,image/*" required>
-        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다. 모두 합쳐 50 MB 까지 올릴 수 있습니다.</small>
+        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다. 모두 합쳐 {{MAX_UPLOAD_MB}} MB 까지 올릴 수 있습니다.</small>
         <small id="chosen" hidden></small>
       </label>
     </fieldset>
@@ -67,7 +67,7 @@
     <fieldset data-source="zip" hidden>
       <label class="field"><span>zip 파일</span>
         <input type="file" name="archive" accept=".zip" required>
-        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다. zip 과 그 안의 파일을 합쳐 50 MB 까지 올릴 수 있습니다.</small>
+        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다. zip 과 그 안의 파일을 합쳐 {{MAX_UPLOAD_MB}} MB 까지 올릴 수 있습니다.</small>
       </label>
     </fieldset>
 
@@ -179,7 +179,7 @@
   }
 
   // The files chosen, as the conversion will take them.
-  const MAX_MB = 50;  // web.py: MAX_UPLOAD
+  const MAX_MB = {{MAX_UPLOAD_MB}};  // filled in by the server (web.py: MAX_UPLOAD)
   const chosen = document.getElementById("chosen");
   form.files.addEventListener("change", () => {
     const files = [...form.files.files];

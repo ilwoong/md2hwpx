@@ -23,7 +23,9 @@ from md2hwpx.convert import DEFAULT_TEMPLATE
 from md2hwpx.source import image_paths
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
-MAX_UPLOAD = 50 * 1024 * 1024  # bytes: all uploads of a request, and a zip's extracted files
+# bytes: all uploads of a request, and a zip's extracted files. Set in megabytes by the environment (see
+# .env.example).
+MAX_UPLOAD = int(os.environ.get("MD2HWPX_MAX_UPLOAD_MB", "").strip() or 50) * 1024 * 1024
 MAX_ZIP_FILES = 2000
 GIT_TIMEOUT = 120  # seconds
 # Only http(s), http for repositories on a closed network: file://, ssh and local paths would let a request
@@ -202,7 +204,7 @@ def _relative(path: Path, root: Path) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    return INDEX.read_text(encoding="utf-8")
+    return INDEX.read_text(encoding="utf-8").replace("{{MAX_UPLOAD_MB}}", str(MAX_UPLOAD // 1024 // 1024))
 
 
 @app.get("/template")

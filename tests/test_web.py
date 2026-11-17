@@ -374,5 +374,12 @@ def test_upload_size_limit(monkeypatch):
     assert _error(client.post("/convert", data={"source": "files"}, files=files), 413).startswith("올린 파일이 너무 큽니다")
 
 
+def test_page_tells_the_upload_size_limit(monkeypatch):
+    monkeypatch.setattr(web, "MAX_UPLOAD", 80 * 1024 * 1024)
+    page = client.get("/").text
+    assert "모두 합쳐 80 MB 까지" in page and "const MAX_MB = 80;" in page
+    assert "{{" not in page
+
+
 def test_unknown_source():
     assert _error(client.post("/convert", data={"source": "ftp"})) == "알 수 없는 입력 방식입니다: ftp"
