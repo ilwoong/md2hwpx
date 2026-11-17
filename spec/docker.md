@@ -11,7 +11,7 @@ Dockerfile 은 네 단계다.
 |------|------|------|
 | `jre` | PlantUML 에 필요한 모듈만 담은 Java 런타임(`/opt/jre`)을 만든다. `tools` 가 이것만 복사한다 | (빌드용) |
 | `tools` | 아래 "이미지 내용" 의 도구와 Python 의존성 | (다른 단계의 바탕) |
-| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
+| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함), 빌드한 날짜(`static/build-date`, 페이지 제목 옆에 보인다). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
 | `dev` (기본) | `tools` 그대로. 코드는 실행 시 `/work` 에 마운트한다 | `docker build -t md2hwpx .` |
 
 아래 "실행 환경 변수", "사용법", "실행 스크립트" 는 `dev` 이미지 이야기다.
@@ -120,7 +120,9 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 - `/` 로 끝나는 출력 폴더는 호스트에서 먼저 만든다.
 - 인자 없이 또는 `-h` 로 실행하면 md2hwpx 의 도움말 아래에 예와 `--include` 패턴을 따옴표로 감싸라는 안내를 붙인다.
   도움말이 인자 오류로 끝나면 안내 없이 그 종료 코드로 끝난다.
-- `--platform linux/amd64` 로 실행한다. 현재 폴더가 `/` 이면 그것은 마운트하지 않는다.
+- `--platform linux/amd64` 로 실행한다. 그래서 이미지가 amd64 여야 한다: arm64 호스트에서 빌드한 이미지로는
+  Docker 가 amd64 이미지를 내려받으려다 `pull access denied for md2hwpx-web` 로 실패한다.
+- 현재 폴더가 `/` 이면 그것은 마운트하지 않는다.
 
 ## 빌드 스크립트 (`build-images.sh`)
 

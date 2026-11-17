@@ -24,7 +24,8 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
 | `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs |
-| `.env.example` | 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
+| `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 (아래 "명령줄 클라이언트") |
+| `.env.example` | 업로드 크기 제한과 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
 의존성은 `pyproject.toml` 의 `web` 그룹(`fastapi`, `uvicorn`, `python-multipart`)이다.
 `[tool.uv] default-groups` 에 넣어 `uv sync` 와 Docker 이미지에 함께 설치한다.
@@ -33,16 +34,35 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 ### `GET /`
 
-변환 페이지. 입력 방식(파일 / zip / git 저장소)을 고르고, 템플릿을 선택해 올릴 수 있다.
-템플릿 안내에는 필요한 스타일(개요 1~6, 본문, 바탕글, 표그림 제목)과, 있으면 쓰는 `코드블록` 스타일
-(코드블록 서식, 문장 안 코드 글꼴, 없으면 D2Coding)을 적는다.
-변환이 끝나면 응답 헤더의 파일 이름으로 내려받고, 실패하면 `detail` 메시지를 보여 준다.
+변환 페이지 (`static/index.html`). 페이지의 `{{MAX_UPLOAD_MB}}` 자리에 업로드 크기 제한(MB)을 채워 보낸다.
+`{{BUILD}}` 자리(제목 옆)에는 `web` 이미지를 빌드한 날짜를 `2026-11-17 빌드` 처럼 채운다. Dockerfile 이 빌드할 때
+`static/build-date` 에 한국 시간 날짜를 적어 둔 것이다. 이미지 밖(로컬 실행)에는 그 파일이 없어 날짜를 보여 주지 않는다.
+코드가 바뀌지 않아 그 층이 빌드 캐시에서 오면 날짜도 그대로다 (그 내용의 이미지를 처음 빌드한 날).
+
+- 입력 방식(파일 / zip / git 저장소)을 탭으로 고른다. 네 번째 탭 "스크립트" 는 입력 방식이 아니라 명령줄 클라이언트를 내려받는 곳이다. 탭마다 꼭 필요한 입력은 하나(파일, zip 파일, 저장소 주소)이고,
+  비어 있으면 브라우저가 제출을 막는다. 보이지 않는 탭의 입력은 검사하지 않는다.
+- 나머지 입력은 접어 둔 "선택 옵션" 에 있다: 브랜치·태그·커밋(git), 변환할 경로·파일 이름 패턴·draft 파일도 변환(zip·git),
+  시작 장 번호, 템플릿 HWPX 바꾸기.
+  템플릿 안내에는 필요한 스타일(개요 1~6, 본문, 바탕글, 표그림 제목)과, 있으면 쓰는 `코드블록` 스타일
+  (코드블록 서식, 문장 안 코드 글꼴, 없으면 D2Coding)을 적는다.
+- 파일 탭은 고른 파일의 개수와 크기, md 이름(이어 붙이는 순서), 이미지 이름을 보여 준다. 제한을 넘으면 오류 색으로 알린다.
+  파일을 다시 고르면 앞의 선택을 바꾼다 (더하지 않는다).
+- 변환하는 동안 지난 시간을 초로 보여 준다. 끝나면 응답 헤더의 파일 이름으로 내려받는다.
+- 실패하면 `detail` 메시지를 보여 준다: 한 입력 때문이면 그 입력 아래에, 아니면 버튼 아래에 (아래 `POST /convert` 의 실패).
+- 로그인하러 떠날 때 저장소 주소·브랜치·경로·패턴을 브라우저의 `sessionStorage` 에 두었다가, 돌아오면 git 저장소 탭을 고르고
+  그 값을 되살린다. 브랜치·경로·패턴 중 적은 것이 있으면 "선택 옵션" 을 펼친다.
+
+### `GET /md2hwpx-remote.py`
+
+명령줄 클라이언트(아래 "명령줄 클라이언트")를 내려준다. `Content-Disposition: attachment; filename="md2hwpx-remote.py"`.
+페이지의 "스크립트" 탭에 이 주소의 링크와 사용법이 있다. 사용법의 `--server` 에는 페이지가 열린 주소를 채워 보여 준다.
+이 탭에는 "선택 옵션" 과 변환 버튼이 없다.
 
 ### `GET /template`
 
 기본 템플릿(내장 템플릿 `src/md2hwpx/template.hwpx`, `template` 을 비우고 변환할 때 쓰는 것)을 내려준다.
 `Content-Type: application/hwp+zip`, `Content-Disposition: attachment; filename="template.hwpx"`.
-변환 페이지의 "템플릿 바꾸기" 에 이 주소로 내려받는 링크가 있다.
+변환 페이지의 "선택 옵션" 에 이 주소로 내려받는 링크가 있다.
 
 ### `POST /convert`
 
@@ -70,6 +90,9 @@ docker run --rm -p 8000:8000 md2hwpx-web
     헤더는 Latin-1 만 담으므로 퍼센트 인코딩하고, 페이지가 풀어서 내려받기 안내 아래에 경고 색으로 보여 준다.
     경고가 없으면 헤더도 없다.
 - 실패: `400` (업로드 크기 초과는 `413`), `{"detail": "<한국어 메시지>"}`.
+  오류가 폼의 한 입력 때문이면 `X-Md2hwpx-Field` 헤더에 그 입력의 이름(`files`, `archive`, `repo`, `ref`, `path`,
+  `include`, `include_draft`, `chapter_start`, `template`)을 담고, 페이지는 오류를 그 입력 아래에 보여 준다.
+  문서 내용의 오류(메시지에 파일과 줄 번호가 있다)에는 헤더가 없고, 페이지는 버튼 아래에 보여 준다.
   `source` 가 없거나 `include_draft` 가 참·거짓이 아닌 등 폼 값 자체가 틀리면 FastAPI 의 `422` (`detail` 은 영어 오류 목록)다.
   페이지는 이런 요청을 보내지 않는다.
   메시지와 경고의 경로는 서버 임시 폴더가 아니라 올린 내용의 맨 위 폴더 기준이다.
@@ -85,6 +108,8 @@ docker run --rm -p 8000:8000 md2hwpx-web
   - UTF-8 플래그가 없는 항목 이름은 cp949 로 읽는다 (한국어 Windows 의 zip). cp949 로 읽을 수 없으면 zipfile 기본(cp437)대로 둔다.
   - 암호가 걸렸거나 zip 이 아니면 오류.
 - `git`: `git clone --depth 1 [--branch <ref>]` 로 root 에 받고 `.git` 을 지운다. 제한 시간 120 초 (git 명령마다).
+  - `ref` 를 주고 받기에 실패하면 `git ls-remote` 로 저장소가 응답하는지 본다. 응답하면 `ref` 가 틀린 것이므로
+    오류를 `ref` 입력의 것으로 알리고 로그인 안내는 붙이지 않는다. 응답하지 않으면 `repo` 입력의 것이다.
   - `ref` 가 16진수 40자면 커밋이다. `clone --branch` 는 커밋을 받지 못하므로 `git init` → `git fetch --depth 1 -- <repo> <해시>`
     → `git checkout FETCH_HEAD` 로 그 커밋 하나만 받는다. 서버는 짧은 해시로 받기를 허용하지 않으므로 커밋은 전체 해시로 지정한다.
   - 받기에 실패했고 `ref` 가 짧은 해시 모양(16진수 4~39자)이면 오류 끝에 `커밋은 전체 해시(40자)로 지정하세요.` 를 붙인다.
@@ -106,6 +131,28 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - 내려받는 파일 이름: 대상이 파일이면 확장자를 뺀 이름, 폴더면 `path` 의 마지막 이름,
   `path` 가 없으면 zip 파일 이름 / 저장소 이름 / 처음 올린 md 이름 (없으면 `document`).
 
+## 명령줄 클라이언트 (`md2hwpx-remote.py`)
+
+md2hwpx 도 Docker 도 없는 곳에서 웹 서비스에 변환을 맡긴다. 표준 라이브러리만 쓰는 한 파일이다 (Python 3.9 이상).
+웹 서비스가 `GET /md2hwpx-remote.py` 로 내주려고 패키지의 `static/` 에 둔다 (`web` 이미지에는 `src/` 만 들어간다).
+
+```sh
+md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include PATTERN ...] [--chapter-start N] [--server URL]
+```
+
+- INPUT 은 md 파일 또는 폴더(바로 안의 `.md` 파일). 그 md 와 그것이 쓰는 이미지 파일을 zip 으로 묶어
+  `POST /convert` 에 `source=zip` 으로 보낸다. 옵션은 같은 이름의 폼 필드로 넘긴다 (`--include` 여러 개는 쉼표로 이어서).
+- zip 의 맨 위 폴더는 INPUT 과 그 md 가 쓰는 이미지를 모두 담는 가장 가까운 폴더다. 그래서 `../shared/a.png` 처럼
+  md 폴더 밖의 이미지도 보낸다. INPUT 의 위치는 `path` 로 알린다 (맨 위 폴더가 INPUT 이면 비운다).
+  없는 이미지의 경로도 맨 위 폴더를 정할 때 넣는다: 서비스는 올린 폴더 밖의 이미지는 거부하고, 없는 이미지는 경고만 하기 때문이다.
+- 이미지는 `![..](경로)` 와 `[이름]: 경로` 에서 찾는다. 코드블록과 코드 스팬 안, 주소(`http:` 등)·절대 경로는 뺀다.
+  서비스의 파서보다 거칠게 읽는다: 이미지가 아닌 것을 이미지로 보면 파일 하나를 더 보낼 뿐이고,
+  놓친 이미지는 서비스가 "이미지 파일이 없어" 경고로 알려 준다. `[이름]: 경로` 는 링크의 것일 수도 있어 파일이 있을 때만 보낸다.
+- 서비스 주소: `--server`, 환경 변수 `MD2HWPX_SERVER`, `http://localhost:8000` 순. 응답을 600 초까지 기다린다.
+- 저장 위치와 이름은 명령줄과 같다 (`<입력 이름>.hwpx`, 있으면 `-1`, `-2`…, `/` 로 끝나는 `-o` 는 폴더).
+  저장한 경로를 출력하고, 경고는 `md2hwpx-remote: 경고: …` 로 stderr 에 출력한다.
+- 실패하면 서비스의 `detail` 을 stderr 에 출력하고 종료 코드 1 (연결 실패, 없는 입력·템플릿도 1). 옵션 오류는 argparse 의 2.
+
 ## GitLab·Gitea 로그인 (OAuth2)
 
 폐쇄망의 GitLab·Gitea 비공개 저장소를, 페이지에서 로그인한 사용자의 권한으로 받는다.
@@ -126,7 +173,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
     컨테이너 안의 `localhost` 는 웹 서비스 자신이다.
   - 저장소 주소가 이 서버 주소로 시작해야 토큰을 붙이므로, 같은 서버라도 IP 와 도메인을 섞어 쓰면 로그인하지 않은 것처럼 받는다.
 - 흐름 (authorization code):
-  1. 페이지의 git 탭이 `GET /auth` 로 서버 목록과 로그인 여부를 보여 준다.
+  1. 페이지의 git 탭이 `GET /auth` 로 서버 목록과 로그인 여부를 보여 준다. 설정한 서버가 없으면 로그인 안내도 보이지 않는다.
   2. `GET /login/{gitlab|gitea}` → 서버의 로그인·승인 화면 (GitLab `/oauth/authorize`, Gitea `/login/oauth/authorize`).
   3. 서버가 `GET /oauth/{name}/callback?code&state` 로 돌려보내면, `state` 를 확인하고 code 를 토큰으로 바꾼다
      (GitLab `/oauth/token`, Gitea `/login/oauth/access_token`). 그 뒤 `<MD2HWPX_BASE_URL>/` 로 돌아간다.
@@ -141,6 +188,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
   메모리에 두므로 uvicorn 워커는 하나여야 한다 (지금 실행 방식).
 - 토큰 요청은 표준 라이브러리 `urllib` 로 보낸다 (의존성 추가 없음).
 
+## 보안
 
 변환 요청이 서버의 파일을 읽어 HWPX 에 담거나 다른 곳에 접속하지 못하게 한다.
 
@@ -157,7 +205,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `ref` 를 git 옵션으로 넘기기 (`--upload-pack=…`) | 글자·숫자·`_` 로 시작하고 `./-` 만 더 허용. 주소 앞에 `--` |
 | PlantUML `!include` 로 파일·URL 읽기 | 이미지에 `PLANTUML_SECURITY_PROFILE=SANDBOX` |
 | 끝나지 않는 다이어그램으로 작업자 붙잡기 | 다이어그램마다 제한 시간 60 초, 넘으면 도구의 프로세스 그룹째 끝내고 400 |
-| 큰 업로드·zip 폭탄 | 요청마다 디스크에 쓰는 양(업로드와 푼 파일, 템플릿 합계) 50 MB, zip 항목 2000 개 |
+| 큰 업로드·zip 폭탄 | 요청마다 디스크에 쓰는 양(올린 파일, zip 과 그것을 푼 파일, 템플릿의 합계) 50 MB (`MD2HWPX_MAX_UPLOAD_MB` 로 바꿈), zip 항목 2000 개 |
 | 컨테이너 권한 | `nobody` 사용자로 실행 |
 
 제한:
@@ -183,5 +231,8 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | 로그인 | 설정한 서버만 목록에 나옴, 로그인 이동 주소(client_id·redirect_uri·scope·state), 쿠키 속성, `state` 없음·다름 거부, 사용자 거절, 토큰 요청 형식과 토큰 없는 응답, 로그아웃, 브라우저마다 세션 |
 | 로그인 clone | 토큰을 환경 변수 헤더로 넘기고 명령줄에 없음, 다른 서버·이름이 이어지는 주소·사용자명 속임·다른 scheme 에는 안 보냄, 로그인 안 했으면 안내, 만료 토큰 안 씀. 가짜 GitLab(OAuth + 토큰을 요구하는 smart HTTP git)과 uvicorn 으로 로그인부터 변환까지 |
 | 템플릿 | 올린 템플릿으로 변환, HWPX 가 아닌 템플릿은 오류, `GET /template` 가 내장 템플릿 그대로·내려받기 헤더, 페이지에 그 링크 |
+| 오류의 입력 | 오류마다 `X-Md2hwpx-Field` 의 입력 이름 (문서 내용의 오류에는 없음), 크기 초과의 입력 이름, git 받기 실패가 저장소가 응답하면 `ref`·아니면 `repo` |
+| 크기 제한·빌드 날짜 | 페이지에 제한 값이 채워짐, 빌드 날짜 파일이 있으면 제목 옆에 날짜·없으면 비움 |
+| 명령줄 클라이언트 | 이미지 찾기(코드·주소·절대 경로 제외, 공백·퍼센트 경로, 참조 정의), 파일·폴더 입력의 맨 위 폴더와 보낼 파일, 덮어쓰지 않는 출력 이름, 서비스로 변환해 md 폴더 밖 이미지 포함·없는 이미지 경고, 서비스 오류 표시, 스크립트 내려받기와 페이지의 탭 (`tests/test_remote.py`) |
 | 컨테이너 | `docker compose up` 후 세 입력 방식 모두 다이어그램 포함 변환, PlantUML `!include /etc/passwd` 실패, `nobody` 실행 |
-| 페이지 | 헤드리스 Chromium 으로 파일 올려 내려받기, 탭 전환, 오류 메시지 표시 |
+| 페이지 | 헤드리스 Chromium 으로 파일 올려 내려받기, 탭 전환, 오류 메시지 표시. 실제 환경에서 볼 것은 [remaining-work.md](remaining-work.md) 의 3 |

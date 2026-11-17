@@ -374,5 +374,69 @@ def test_upload_size_limit(monkeypatch):
     assert _error(client.post("/convert", data={"source": "files"}, files=files), 413).startswith("올린 파일이 너무 큽니다")
 
 
+def test_page_tells_the_upload_size_limit(monkeypatch):
+    monkeypatch.setattr(web, "MAX_UPLOAD", 80 * 1024 * 1024)
+    page = client.get("/").text
+    assert "모두 합쳐 80 MB 까지" in page and "const MAX_MB = 80;" in page
+    assert "{{" not in page
+
+
+@pytest.mark.parametrize("answers, field", [(True, "ref"), (False, "repo")])
+def test_git_failure_is_about_the_ref_if_the_repository_answers(monkeypatch, answers, field):
+    def fake_run(command, **kwargs):
+        if "ls-remote" in command:
+            assert command[command.index("ls-remote"):] == ["ls-remote", "--quiet", "--", "https://example.com/manual.git", "HEAD"]
+            return web.subprocess.CompletedProcess(command, 0 if answers else 128, "", "")
+        return web.subprocess.CompletedProcess(command, 128, "", "fatal: Remote branch none not found")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    data = {"source": "git", "repo": "https://example.com/manual.git"}
+    assert _field(client.post("/convert", data={**data, "ref": "none"})) == field
+    # Without a ref, the repository is all there is to be wrong.
+    assert _field(client.post("/convert", data=data)) == "repo"
+
+
+def test_page_shows_the_day_the_image_was_built(tmp_path, monkeypatch):
+    assert "<h1>md2hwpx<small></small></h1>" in client.get("/").text  # not in an image: no date
+    (tmp_path / "build-date").write_text("2026-11-17\n", encoding="utf-8")
+    monkeypatch.setattr(web, "BUILD_DATE", tmp_path / "build-date")
+    assert "<h1>md2hwpx<small>2026-11-17 빌드</small></h1>" in client.get("/").text
+
+
+def _field(response) -> str | None:
+    """The form field the error is about, for the page to show it there."""
+    assert response.status_code in (400, 413), response.text
+    return response.headers.get(web.FIELD_HEADER)
+
+
+def test_error_names_the_field_it_is_about():
+    md = ("files", ("doc.md", b"# A\n", "text/markdown"))
+    draft = ("files", ("doc.md", b"---\ndraft: true\n---\n# A\n", "text/markdown"))
+    assert _field(client.post("/convert", data={"source": "files"})) == "files"
+    assert _field(client.post("/convert", data={"source": "files"}, files=[("files", ("a.png", b"x"))])) == "files"
+    assert _field(client.post("/convert", data={"source": "zip"})) == "archive"
+    assert _field(client.post("/convert", data={"source": "zip"}, files=[("archive", ("a.zip", b"x"))])) == "archive"
+    assert _field(client.post("/convert", data={"source": "git", "repo": "ssh://host/a.git"})) == "repo"
+    assert _field(client.post("/convert", data={"source": "git", "repo": "http://h/a.git", "ref": "-x"})) == "ref"
+    assert _field(client.post("/convert", data={"source": "files", "chapter_start": "0"}, files=[md])) == "chapter_start"
+    template = ("template", ("t.hwpx", b"not a template"))
+    assert _field(client.post("/convert", data={"source": "files"}, files=[md, template])) == "template"
+
+    archive = ("archive", ("docs.zip", _zip({"doc.md": "---\ndraft: true\n---\n# A\n"}), "application/zip"))
+    assert _field(client.post("/convert", data={"source": "zip", "path": "none"}, files=[archive])) == "path"
+    assert _field(client.post("/convert", data={"source": "zip", "include": "x*.md"}, files=[archive])) == "include"
+    assert _field(client.post("/convert", data={"source": "zip"}, files=[archive])) == "include_draft"
+    # Drafts chosen one by one are converted: what is wrong in a document is about no field.
+    assert client.post("/convert", data={"source": "files"}, files=[draft]).status_code == 200
+    broken = ("files", ("doc.md", b"![x](../out.png)\n", "text/markdown"))
+    assert _field(client.post("/convert", data={"source": "files"}, files=[broken])) is None
+
+
+def test_upload_over_the_limit_names_its_field(monkeypatch):
+    monkeypatch.setattr(web, "MAX_UPLOAD", 10)
+    files = [("files", ("doc.md", b"# 0123456789\n", "text/markdown"))]
+    assert _field(client.post("/convert", data={"source": "files"}, files=files)) == "files"
+
+
 def test_unknown_source():
     assert _error(client.post("/convert", data={"source": "ftp"})) == "알 수 없는 입력 방식입니다: ftp"

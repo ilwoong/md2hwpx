@@ -5,36 +5,46 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>md2hwpx</title>
 <style>
-  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; --warning: #9a6700; }
+  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --accent: #0969da; --bg: #ffffff; --panel: #f6f8fa; --error: #d1242f; --warning: #9a6700; --button: #0969da; color-scheme: light dark; }
   @media (prefers-color-scheme: dark) {
-    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; --warning: #d29922; }
+    :root { --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --bg: #0d1117; --panel: #151b23; --error: #f85149; --warning: #d29922; --button: #1f6feb; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, -apple-system, "Malgun Gothic", sans-serif; }
   main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
   h1 { font-size: 24px; margin: 0 0 4px; }
+  h1 small { margin-left: 8px; font-size: 13px; font-weight: normal; color: var(--muted); }
   p.lead { margin: 0 0 24px; color: var(--muted); }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
-  .tabs label { padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); }
-  .tabs input { display: none; }
+  .tabs label { position: relative; padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); }
+  .tabs input { position: absolute; opacity: 0; pointer-events: none; }
   .tabs input:checked + span { color: var(--fg); font-weight: 600; }
   .tabs label:has(input:checked) { border-bottom-color: var(--accent); }
-  fieldset { border: 0; padding: 0; margin: 0 0 16px; }
-  .field { margin-bottom: 14px; }
+  .tabs label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  .field { display: block; margin-bottom: 14px; }
   .field > span { display: block; font-weight: 600; margin-bottom: 4px; }
   .field small { display: block; color: var(--muted); }
   input[type=text], input[type=url], input[type=number] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
   input[type=file] { width: 100%; padding: 10px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
+  .field [aria-invalid] { border-color: var(--error); }
+  .field small.error { color: var(--error); white-space: pre-wrap; }
+  pre { margin: 6px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow-x: auto; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, "D2Coding", monospace; }
+  [data-source=script] p { margin: 0 0 14px; }
+  [data-source=script] a { color: var(--accent); }
+  [data-source=script] ul { margin: 0 0 14px; padding-left: 20px; color: var(--muted); font-size: smaller; }
   details { margin: 8px 0 20px; }
   summary { cursor: pointer; color: var(--muted); }
   details .field { margin-top: 12px; }
   details .download { display: block; margin-top: -6px; color: var(--muted); }
   details .download a { color: var(--accent); }
-  button { padding: 10px 20px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button { padding: 10px 20px; border: 0; border-radius: 6px; background: var(--button); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: .6; cursor: progress; }
   #status { margin-top: 16px; white-space: pre-wrap; }
   #status.error { color: var(--error); }
-  #status.warning { color: var(--warning); }
+  #status .warning { margin-top: 12px; color: var(--warning); }
+  #chosen { margin-top: 4px; color: var(--fg); white-space: pre-wrap; }
+  #chosen.error { color: var(--error); }
   #accounts { margin: -6px 0 14px; color: var(--muted); }
   #accounts a, #accounts .link { color: var(--accent); }
   #accounts .link { padding: 0; border: 0; background: none; font: inherit; font-weight: normal; cursor: pointer; text-decoration: underline; }
@@ -43,7 +53,7 @@
 </head>
 <body>
 <main>
-  <h1>md2hwpx</h1>
+  <h1>md2hwpx<small>{{BUILD}}</small></h1>
   <p class="lead">Markdown 문서를 한/글 HWPX 파일로 변환합니다.</p>
 
   <form id="form">
@@ -51,54 +61,77 @@
       <label><input type="radio" name="source" value="files" checked><span>파일</span></label>
       <label><input type="radio" name="source" value="zip"><span>zip</span></label>
       <label><input type="radio" name="source" value="git"><span>git 저장소</span></label>
+      <label><input type="radio" name="source" value="script"><span>스크립트</span></label>
     </div>
 
     <fieldset data-source="files">
       <label class="field"><span>Markdown 과 이미지 파일</span>
-        <input type="file" name="files" multiple accept=".md,image/*">
-        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다.</small>
+        <input type="file" name="files" multiple accept=".md,image/*" required>
+        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다. 모두 합쳐 {{MAX_UPLOAD_MB}} MB 까지 올릴 수 있습니다.</small>
+        <small id="chosen" hidden></small>
       </label>
     </fieldset>
 
     <fieldset data-source="zip" hidden>
       <label class="field"><span>zip 파일</span>
-        <input type="file" name="archive" accept=".zip">
-        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다.</small>
+        <input type="file" name="archive" accept=".zip" required>
+        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다. zip 과 그 안의 파일을 합쳐 {{MAX_UPLOAD_MB}} MB 까지 올릴 수 있습니다.</small>
       </label>
     </fieldset>
 
     <fieldset data-source="git" hidden>
       <label class="field"><span>저장소 주소</span>
-        <input type="url" name="repo" placeholder="https://github.com/user/repo.git">
-        <small>http·https 저장소 (폐쇄망 http 저장소 포함). 비공개 저장소는 아래에서 그 서버에 로그인하세요.</small>
+        <input type="url" name="repo" placeholder="https://github.com/user/repo.git" required>
+        <small>http·https 저장소 (폐쇄망 http 저장소 포함).<span id="login-hint" hidden> 비공개 저장소는 아래에서 그 서버에 로그인하세요.</span></small>
       </label>
       <div id="accounts" hidden></div>
-      <label class="field"><span>브랜치, 태그 또는 커밋 (선택)</span>
-        <input type="text" name="ref" placeholder="기본 브랜치">
-      </label>
     </fieldset>
 
-    <div class="field" id="path-field" hidden>
-      <label><span>변환할 경로 (선택)</span>
-        <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
-      </label>
-      <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
-      <label class="field"><span>파일 이름 패턴 (선택)</span>
-        <input type="text" name="include" placeholder="ch_2*.md, appendix*.md">
-      </label>
-      <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
-      <label><input type="checkbox" name="include_draft"> draft 파일도 변환</label>
-      <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
-    </div>
+    <fieldset data-source="script" hidden>
+      <p>내 PC 의 명령줄에서 이 서비스로 변환하는 스크립트입니다. md 파일과 그 문서가 쓰는 이미지 파일을 찾아 zip 으로 묶어 보내고, HWPX 를 받아 저장합니다. Python 3.9 이상만 있으면 되고 다른 패키지는 필요 없습니다.</p>
+      <p><a href="md2hwpx-remote.py" download="md2hwpx-remote.py">md2hwpx-remote.py 내려받기</a></p>
+      <div class="field"><span>사용법</span>
+<pre># md 파일 하나 → 현재 폴더의 guide.hwpx
+python3 md2hwpx-remote.py docs/guide.md --server <span class="server"></span>
 
-    <label class="field"><span>시작 장 번호 (선택)</span>
-      <input type="number" name="chapter_start" min="1" step="1" placeholder="1">
-      <small>캡션의 장 번호를 이 번호부터 셉니다. 예: 2 면 첫 장의 표가 [표 2-1]. 비우면 1.</small>
-    </label>
+# 폴더의 .md 파일을 이름 순으로 이어 붙여 out/ 폴더에
+python3 md2hwpx-remote.py docs/chapters/ -o out/ --server <span class="server"></span>
 
-    <details>
-      <summary>템플릿 바꾸기</summary>
-      <label class="field"><span>템플릿 HWPX (선택)</span>
+# 주소를 한 번 정해 두면 --server 를 생략할 수 있습니다
+export MD2HWPX_SERVER=<span class="server"></span>
+python3 md2hwpx-remote.py docs/guide.md -t my-template.hwpx --chapter-start 2</pre>
+      </div>
+      <ul>
+        <li>이미지는 폴더 구조 그대로 보내므로 <code>images/a.png</code>, <code>../shared/a.png</code> 같은 경로를 그대로 쓸 수 있습니다. 문서가 쓰지 않는 파일은 보내지 않습니다.</li>
+        <li>옵션: <code>-o</code> 저장할 파일 또는 폴더, <code>-t</code> 템플릿 HWPX, <code>--include 'ch_2*.md'</code> 파일 이름 패턴, <code>--include-draft</code> draft 파일도 변환, <code>--chapter-start N</code> 시작 장 번호. <code>-h</code> 로 모두 볼 수 있습니다.</li>
+        <li>같은 이름의 파일이 있으면 덮어쓰지 않고 <code>-1</code>, <code>-2</code> 를 붙여 저장합니다. 경고와 오류는 화면에 출력합니다.</li>
+        <li>Windows 에서는 <code>python3</code> 대신 <code>python</code> 또는 <code>py</code> 를 씁니다.</li>
+      </ul>
+    </fieldset>
+
+    <details id="options">
+      <summary>선택 옵션</summary>
+      <label class="field" id="ref-field" hidden><span>브랜치, 태그 또는 커밋</span>
+        <input type="text" name="ref" placeholder="기본 브랜치">
+      </label>
+      <div id="path-field" hidden>
+        <label class="field"><span>변환할 경로</span>
+          <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
+          <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
+        </label>
+        <label class="field"><span>파일 이름 패턴</span>
+          <input type="text" name="include" placeholder="ch_2*.md, appendix*.md">
+          <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
+        </label>
+        <label class="field"><input type="checkbox" name="include_draft"> draft 파일도 변환
+          <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
+        </label>
+      </div>
+      <label class="field"><span>시작 장 번호</span>
+        <input type="number" name="chapter_start" min="1" step="1" placeholder="1">
+        <small>캡션의 장 번호를 이 번호부터 셉니다. 예: 2 면 첫 장의 표가 [표 2-1]. 비우면 1.</small>
+      </label>
+      <label class="field"><span>템플릿 HWPX 바꾸기</span>
         <input type="file" name="template" accept=".hwpx">
         <small>개요 1~6, 본문, 바탕글, 표그림 제목 스타일이 있어야 합니다. 비우면 기본 템플릿을 씁니다.</small>
         <small>코드블록 스타일이 있으면 코드블록은 그 스타일로, 문장 안 코드는 그 글꼴로 씁니다 (없으면 D2Coding).</small>
@@ -117,10 +150,27 @@
 
   function showSource() {
     const source = form.source.value;
-    for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.dataset.source !== source;
+    // Disabled as well as hidden: the browser checks only the shown tab's inputs before a submit.
+    for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.disabled = set.dataset.source !== source;
+    // The script's tab converts nothing here: it has no options, button or result.
+    for (const part of [document.getElementById("options"), button, status]) part.hidden = source === "script";
+    document.getElementById("ref-field").hidden = source !== "git";
     document.getElementById("path-field").hidden = source === "files";
   }
   for (const radio of form.source) radio.addEventListener("change", showSource);
+  // This service's own address, in the commands to copy.
+  for (const server of form.querySelectorAll(".server")) server.textContent = new URL(".", location.href).href.replace(/\/$/, "");
+
+  // Signing in leaves the page: keep what was typed about the repository, and come back to its tab.
+  const KEPT = ["repo", "ref", "path", "include"];
+  const kept = sessionStorage.getItem("git");
+  if (kept) {
+    sessionStorage.removeItem("git");
+    form.source.value = "git";
+    JSON.parse(kept).forEach((value, i) => { form[KEPT[i]].value = value; });
+    // Not folded away, if any of the options was filled in.
+    document.getElementById("options").open = KEPT.slice(1).some((name) => form[name].value);
+  }
   showSource();
 
   // Servers to sign in to for private repositories (GitLab, Gitea), if this instance is set up for any.
@@ -142,11 +192,13 @@
         const link = document.createElement("a");
         link.href = `login/${server.name}`;
         link.textContent = "로그인";
+        link.addEventListener("click", () => sessionStorage.setItem("git", JSON.stringify(KEPT.map((name) => form[name].value))));
         line.append(link);
       }
       accounts.append(line);
     }
     accounts.hidden = servers.length === 0;
+    document.getElementById("login-hint").hidden = servers.length === 0;
   }
   showAccounts();
 
@@ -158,6 +210,45 @@
     status.className = "error";
     status.textContent = loginError;
     history.replaceState(null, "", location.pathname);
+  }
+
+  // The files chosen, as the conversion will take them.
+  const MAX_MB = {{MAX_UPLOAD_MB}};  // filled in by the server (web.py: MAX_UPLOAD)
+  const chosen = document.getElementById("chosen");
+  form.files.addEventListener("change", () => {
+    const files = [...form.files.files];
+    const names = (isMarkdown) => files.map((f) => f.name).filter((name) => name.endsWith(".md") === isMarkdown).sort();
+    const md = names(true);
+    const images = names(false);
+    const mb = files.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024;
+    chosen.hidden = files.length === 0;
+    chosen.classList.toggle("error", mb > MAX_MB);
+    chosen.textContent = [
+      `선택한 파일 ${files.length}개 (${mb.toFixed(1)} MB${mb > MAX_MB ? `, ${MAX_MB} MB 를 넘습니다` : ""})`,
+      md.length ? `md ${md.length}개${md.length > 1 ? " (이 순서로 이어 붙임)" : ""}: ${md.join(", ")}` : "md 파일이 없습니다",
+      images.length ? `이미지 ${images.length}개: ${images.join(", ")}` : "",
+    ].filter(Boolean).join("\n");
+  });
+
+  // An error about one input is shown at that input, which the server names (web.py: FIELD_HEADER).
+  const fieldError = document.createElement("small");
+  fieldError.id = "field-error";
+  fieldError.className = "error";
+  function showFieldError(field, message) {
+    const fold = field.closest("details");
+    if (fold) fold.open = true;
+    fieldError.textContent = message;
+    field.closest(".field").append(fieldError);
+    field.setAttribute("aria-invalid", "true");
+    field.setAttribute("aria-describedby", fieldError.id);
+    field.focus();
+  }
+  function clearFieldError() {
+    const field = form.querySelector("[aria-invalid]");
+    if (!field) return;
+    field.removeAttribute("aria-invalid");
+    field.removeAttribute("aria-describedby");
+    fieldError.remove();
   }
 
   function filename(response) {
@@ -183,14 +274,20 @@
     if (form.template.files[0]) data.append("template", form.template.files[0]);
 
     button.disabled = true;
+    clearFieldError();
     status.className = "";
-    status.textContent = "변환하는 중입니다…";
+    // The seconds show that it is still at work (a repository may take minutes); a screen reader is told once.
+    const seconds = document.createElement("span");
+    seconds.ariaHidden = "true";
+    status.replaceChildren(source === "git" ? "저장소를 받아 변환하는 중입니다…" : "변환하는 중입니다…", seconds);
+    const started = Date.now();
+    const timer = setInterval(() => { seconds.textContent = ` (${Math.round((Date.now() - started) / 1000)}초)`; }, 1000);
     try {
       const response = await fetch("convert", { method: "POST", body: data });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         const detail = typeof body.detail === "string" ? body.detail : `변환하지 못했습니다 (HTTP ${response.status}).`;
-        throw new Error(detail);
+        throw Object.assign(new Error(detail), { field: form.elements[response.headers.get("X-Md2hwpx-Field")] });
       }
       const blob = await response.blob();
       const link = document.createElement("a");
@@ -201,13 +298,21 @@
       status.textContent = `${link.download} 을 내려받았습니다.`;
       const warnings = response.headers.get("X-Md2hwpx-Warnings");
       if (warnings) {
-        status.className = "warning";
-        status.textContent += `\n\n경고:\n${decodeURIComponent(warnings)}`;
+        const list = document.createElement("div");
+        list.className = "warning";
+        list.textContent = `경고:\n${decodeURIComponent(warnings)}`;
+        status.append(list);
       }
     } catch (error) {
-      status.className = "error";
-      status.textContent = error.message;
+      if (error.field) {
+        status.textContent = "";
+        showFieldError(error.field, error.message);
+      } else {
+        status.className = "error";
+        status.textContent = error.message;
+      }
     } finally {
+      clearInterval(timer);
       button.disabled = false;
     }
   });

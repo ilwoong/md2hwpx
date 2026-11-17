@@ -10,7 +10,7 @@ Markdown 파일을 HWPX 파일로 변환하는 Python 프로젝트.
 | [docker.md](docker.md) | 필요한 도구를 모두 담은 실행용 Docker 이미지 | 구현됨 |
 | [markdown-conversion.md](markdown-conversion.md) | 템플릿 HWPX 에 Markdown 을 변환해 추가하고 저장 | 구현됨 |
 | [web-service.md](web-service.md) | 파일·zip·git 저장소를 올려 HWPX 를 내려받는 웹 서비스 | 구현됨 |
-| [remaining-work.md](remaining-work.md) | 주석 마커 이후 남은 작업 | 작업 목록 |
+| [remaining-work.md](remaining-work.md) | 주석 마커 이후 남은 작업, 웹 페이지 변경 뒤 확인할 일 | 작업 목록 |
 
 ## 공통 원칙
 

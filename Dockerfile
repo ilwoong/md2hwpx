@@ -71,6 +71,9 @@ WORKDIR /work
 FROM tools AS web
 RUN apk add --no-cache git
 COPY src /app/src
+# 빌드한 날짜(한국 시간)를 남긴다. 변환 페이지가 제목 옆에 보여 준다. 코드가 그대로면 이 층도 캐시에서 오므로,
+# 날짜는 "이 내용의 이미지를 처음 빌드한 날" 이다.
+RUN TZ=KST-9 date +%Y-%m-%d > /app/src/md2hwpx/static/build-date
 # SANDBOX: 업로드한 PlantUML 이 !include 로 서버 파일이나 URL 을 읽지 못하게 한다.
 ENV PYTHONPATH=/app/src \
     PLANTUML_SECURITY_PROFILE=SANDBOX
