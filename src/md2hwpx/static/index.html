@@ -71,7 +71,7 @@
     <fieldset data-source="git" hidden>
       <label class="field"><span>저장소 주소</span>
         <input type="url" name="repo" placeholder="https://github.com/user/repo.git">
-        <small>http·https 저장소 (폐쇄망 http 저장소 포함). 비공개 저장소는 아래에서 그 서버에 로그인하세요.</small>
+        <small>http·https 저장소 (폐쇄망 http 저장소 포함).<span id="login-hint" hidden> 비공개 저장소는 아래에서 그 서버에 로그인하세요.</span></small>
       </label>
       <div id="accounts" hidden></div>
       <label class="field"><span>브랜치, 태그 또는 커밋 (선택)</span>
@@ -123,6 +123,15 @@
     document.getElementById("path-field").hidden = source === "files";
   }
   for (const radio of form.source) radio.addEventListener("change", showSource);
+
+  // Signing in leaves the page: keep what was typed about the repository, and come back to its tab.
+  const KEPT = ["repo", "ref", "path", "include"];
+  const kept = sessionStorage.getItem("git");
+  if (kept) {
+    sessionStorage.removeItem("git");
+    form.source.value = "git";
+    JSON.parse(kept).forEach((value, i) => { form[KEPT[i]].value = value; });
+  }
   showSource();
 
   // Servers to sign in to for private repositories (GitLab, Gitea), if this instance is set up for any.
@@ -144,11 +153,13 @@
         const link = document.createElement("a");
         link.href = `login/${server.name}`;
         link.textContent = "로그인";
+        link.addEventListener("click", () => sessionStorage.setItem("git", JSON.stringify(KEPT.map((name) => form[name].value))));
         line.append(link);
       }
       accounts.append(line);
     }
     accounts.hidden = servers.length === 0;
+    document.getElementById("login-hint").hidden = servers.length === 0;
   }
   showAccounts();
 
