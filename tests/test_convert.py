@@ -1,9 +1,11 @@
 """Converting Markdown to HWPX: text blocks, lists, quotes, footnotes, styles and validation."""
 
+import zipfile
+
 import pytest
 from hwpx import HwpxDocument
 
-from helpers import BODY_LEFT, HH, HP, _paragraph_info, _png, _template_with_code_style
+from helpers import BODY_LEFT, HH, HP, _paragraph_info, _png, _template_with_code_style, _template_without_bullet_styles
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert, paragraph_styles
 from md2hwpx.source import unknown_styles
@@ -121,7 +123,7 @@ def test_convert_lists(tmp_path):
     )
     out = tmp_path / "list.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     body = doc.styles.resolve("본문")
@@ -152,6 +154,71 @@ def test_convert_lists(tmp_path):
     header = doc.oxml.headers[0].element
     first_list = header.find(f".//{HH}numbering[@id='{numbering[5]}']")
     assert first_list.find(f"{HH}paraHead[@level='1']").get("start") == "3"
+
+
+def test_convert_bullets_in_the_template_styles(tmp_path):
+    md = tmp_path / "list.md"
+    md.write_text(
+        "- 첫째 **굵게**\n\n  이어지는 문단\n  - 하위\n    - 하위의 하위\n\n      깊은 문단\n      - 4단계\n\n"
+        "> - 인용 안\n\n"
+        "1. 번호\n   - 번호 안\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "list.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    names = {int(style.id): style.name for style in doc.styles.values()}
+    bullets = {b.get("id"): b.get("char") for b in doc.oxml.headers[0].element.iter(f"{HH}bullet")}
+
+    def info(p):
+        pp = doc.styles.paragraph_property(p.para_pr_id_ref)
+        mark = bullets[str(pp.heading.id_ref)] if pp.heading.type == "BULLET" else pp.heading.type
+        return p.text, names[int(p.style_id_ref)], mark, int(pp.margin.left), int(pp.margin.intent)
+
+    # The built-in template: □ at 10pt, ○ at 25pt, - at 40pt, none with 본문's first-line indent.
+    assert [info(p) for p in doc.paragraphs[1:]] == [
+        ("첫째 굵게", "글머리표 1", "□", 1000, 0),
+        ("이어지는 문단", "본문", "NONE", 2500, 2000),  # where the next level's bullets are
+        ("하위", "글머리표 2", "○", 2500, 0),
+        ("하위의 하위", "글머리표 3", "-", 4000, 0),
+        ("깊은 문단", "본문", "NONE", 5000, 2000),  # past the last style: a list step further in
+        ("4단계", "글머리표 3", "-", 4000, 0),  # deeper than the styles go: the last one
+        ("인용 안", "글머리표 1", "□", 2000, 0),  # a quote's indent more
+        ("번호", "본문", "NUMBER", BODY_LEFT, 2000),  # numbered items are as before
+        ("번호 안", "글머리표 2", "○", 2500, 0),
+    ]
+    # An item's own paragraph shape is the style's, untouched, and its text keeps its marks.
+    first = doc.paragraphs[1]
+    assert int(first.para_pr_id_ref) == doc.styles.resolve("글머리표 1").para_pr_id_ref
+    assert [run.text for run in first.runs if run.text] == ["첫째 ", "굵게"]
+
+
+def test_convert_bullet_styles_count_from_one_in_a_row(tmp_path):
+    # Only 글머리표 1 and 2: the third level takes 2. Without 글머리표 1 the others are not used.
+    def template(name, old, new):
+        path = tmp_path / name
+        with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item)
+                if item.filename == "Contents/header.xml":
+                    data = data.replace(f'name="{old}"'.encode(), f'name="{new}"'.encode())
+                dst.writestr(item, data)
+        return path
+
+    md = tmp_path / "list.md"
+    md.write_text("- 하나\n  - 둘\n    - 셋\n", encoding="utf-8")
+
+    def styles(template_path):
+        out = tmp_path / "out.hwpx"
+        convert(md, template_path, out)
+        doc = HwpxDocument.open(out)
+        names = {int(style.id): style.name for style in doc.styles.values()}
+        return [names[int(p.style_id_ref)] for p in doc.paragraphs[1:]]
+
+    assert styles(template("two.hwpx", "글머리표 3", "다른 이름")) == ["글머리표 1", "글머리표 2", "글머리표 2"]
+    assert styles(template("none.hwpx", "글머리표 1", "다른 이름")) == ["본문", "본문", "본문"]
 
 
 def test_convert_inline_formatting(tmp_path):
@@ -375,7 +442,7 @@ def test_convert_custom_style_div(tmp_path):
     )
     out = tmp_path / "styled.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     # Its text paragraphs (in a quote too) take the style; a heading or a list item keeps its own.
@@ -441,7 +508,7 @@ def test_convert_blocks_inside_list_items(tmp_path):
     )
     out = tmp_path / "nested.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     paragraphs = doc.paragraphs[1:]
@@ -466,7 +533,7 @@ def test_convert_numbering_around_nested_lists(tmp_path):
     md.write_text("1. 하나\n   - 글머리\n     1. 안쪽 번호\n2. 둘\n", encoding="utf-8")
     out = tmp_path / "numbers.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     heads = [doc.styles.paragraph_property(p.para_pr_id_ref).heading for p in doc.paragraphs[1:]]
@@ -537,7 +604,7 @@ def test_convert_lists_after_headings(tmp_path):
     md.write_text("## 절\n\n- 하나\n  - 둘\n\n### 소절\n\n1. 번호\n", encoding="utf-8")
     out = tmp_path / "headed.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
 

@@ -7,7 +7,7 @@ from hwpx.form_fit.measure import estimate_text_width, measure, resolve_slot_met
 from hwpx.layout import lint_layout
 from hwpx.oxml.table_sizes import grid_widths_of
 
-from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _template_with_code_style, _text
+from helpers import BODY_LEFT, BODY_WIDTH, HP, TEXT_WIDTH, _template_with_code_style, _template_without_bullet_styles, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
 from md2hwpx.tables import TextStyles, _slot, column_widths
@@ -408,7 +408,7 @@ def test_convert_indented_tables_fit_the_body(tmp_path):
     )
     out = tmp_path / "indented.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     placed = []

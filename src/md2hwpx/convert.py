@@ -40,6 +40,8 @@ PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
 CODE_STYLE = "코드블록"  # optional: without it, code blocks use CODE_FONT, CODE_SIZE and CODE_LINE_SPACING
 HEADER_STYLE = "표 헤더"  # optional: without it, a table's header row is in PLAIN_STYLE like the other rows
+# optional, .format(level) from 1: without "글머리표 1", bullet items are BODY_STYLE with python-hwpx's bullets
+BULLET_STYLE = "글머리표 {}"
 HEADER_FILL = "#D9D9D9"
 TABLE_BORDER = {"border_color": "#000000", "border_width": "0.12 mm"}  # the template's table border
 TABLE_SIDES = ["LEFT", "RIGHT", "TOP", "BOTTOM"]
@@ -197,6 +199,12 @@ class _Writer:
         # A table's header row takes the template's 표 헤더 style if it has one, its rows that line height.
         self.header_style = self.paragraph_styles.get(HEADER_STYLE, self.plain_style)
         self.header_line_height = _line_metrics(doc, self.header_style)[1]
+        # Bullet items take the template's 글머리표 1, 글머리표 2, ... styles, as many as it has in a row from 1,
+        # each with the left margin its paragraph shape gives.
+        self.bullet_styles: list[tuple[Style, int]] = []
+        while style := self.paragraph_styles.get(BULLET_STYLE.format(len(self.bullet_styles) + 1)):
+            left = int(doc.styles.paragraph_property(style.para_pr_id_ref).margin.left)
+            self.bullet_styles.append((style, left))
         # The 표그림 제목 size and line height: a picture leaves room below it for its caption's lines.
         self.caption_size, self.caption_line_height = _line_metrics(doc, self.caption_style)
         # The page body a 본문 paragraph can fill.
@@ -368,11 +376,13 @@ class _Writer:
         body does, however far its paragraph is indented."""
         return self.body_width - self.indent_width(quote, indent)
 
-    def place(self, paragraph, quote: int, indent: int, bar: bool = True) -> None:
-        """Indent *paragraph* by its quote depth and *indent*, with the quote bar on the left."""
+    def place(self, paragraph, quote: int, indent: int, bar: bool = True, left: int | None = None) -> None:
+        """Indent *paragraph* by its quote depth and *indent*, with the quote bar on the left. The indent is
+        from 본문's left margin, or from *left*, the margin of the paragraph's own style."""
         if not quote and not indent:
             return
-        layout: dict = {"margins": {"left": self.body_left + self.indent_width(quote, indent)}}
+        base = self.body_left if left is None else left
+        layout: dict = {"margins": {"left": base + self.indent_width(quote, indent)}}
         if quote and bar:
             line = self.border_fill(active_borders=["LEFT"], **QUOTE_BAR)
             # connect: one bar along consecutive quote paragraphs
@@ -487,29 +497,28 @@ class _Writer:
 
     def blocks(self, nodes: list[SyntaxTreeNode], quote: int = 0, indent: int = 0, level: int = 0,
                numbering: str | None = None) -> None:
-        """Write *nodes*, inside *quote* quotes and *level* list items placed at *indent*.
+        """Write *nodes* at *indent*, inside *quote* quotes and *level* list items.
 
         *numbering* is the numbering id of the numbered list item holding them, if any.
         """
-        content = indent + min(level, LIST_MAX_LEVEL) * LIST_INDENT
         for k, node in enumerate(nodes):
             following = nodes[k + 1] if k + 1 < len(nodes) else None
             if node.type == "heading":
                 self.heading(node)
             elif node.type == "paragraph":
-                self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, content)
+                self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, indent)
             elif node.type == "hwpx_marker":
                 # A comment marker does what the marker line it stands for does (see parser._read_marker).
-                self.pieces([Piece(node.meta["marker"], text=node.meta["words"])], None, quote, content)
+                self.pieces([Piece(node.meta["marker"], text=node.meta["words"])], None, quote, indent)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
-                self.code_block(node.content.split("\n")[:-1], lang, quote, content)
+                self.code_block(node.content.split("\n")[:-1], lang, quote, indent)
             elif node.type == "table":
-                self.table(node, quote, content)
+                self.table(node, quote, indent)
             elif node.type == "hr":
-                self.rule(quote, content)
+                self.rule(quote, indent)
             elif node.type in ("bullet_list", "ordered_list"):
-                self.list_items(node, quote, indent, level + 1, numbering)
+                self.list_items(node, quote, level + 1, numbering)
             elif node.type == "blockquote":
                 self.blocks(node.children, quote + 1, indent, level)
             elif node.type == "container_div":
@@ -716,13 +725,23 @@ class _Writer:
         paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, border={"borderFillIDRef": line})
         self.place(paragraph, quote, indent, bar=False)
 
-    def list_items(self, node: SyntaxTreeNode, quote: int, indent: int, level: int, numbering: str | None) -> None:
+    def list_items(self, node: SyntaxTreeNode, quote: int, level: int, numbering: str | None) -> None:
         """Each item's first paragraph gets the bullet or number; its other blocks follow, indented.
 
         A numbered list starts its own numbering, or numbers on within the *numbering* of the
         numbered item holding it (Hancom numbers sub-levels within one definition).
+
+        A bullet item is in the template's 글머리표 style of its level, if the template has them: the bullet
+        and the margins are that style's, and the item's other blocks start where the next level's bullets
+        do. Levels deeper than the styles go take the last one.
         """
         list_level = min(level, LIST_MAX_LEVEL)
+        item_left, content = (list_level - 1) * LIST_INDENT, list_level * LIST_INDENT
+        style: Style | None = None
+        if node.type == "bullet_list" and self.bullet_styles:
+            styles = self.bullet_styles
+            style, left = styles[min(level, len(styles)) - 1]
+            content = (styles[level][1] if level < len(styles) else left + LIST_INDENT) - self.body_left
         start = int(node.attrs.get("start", 1))
         own: str | None = None  # this list's numbering id
         for k, item in enumerate(node.children):
@@ -733,16 +752,19 @@ class _Writer:
             if item_blocks and item_blocks[0].type == "paragraph":
                 rest = paragraph_pieces(item_blocks.pop(0).children[0])
             first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
-            paragraph = self.doc.add_paragraph(plain_text(first), style=self.body_style)
+            paragraph = self.doc.add_paragraph(plain_text(first), style=style or self.body_style)
             self.write_runs(paragraph, first)
-            if node.type == "bullet_list":
-                self.list_format(paragraph, "bullet", list_level)
+            if style is not None:
+                self.place(paragraph, quote, 0, left=left)
             else:
-                own = self.list_format(paragraph, "number", list_level, own if k else numbering, start)
-            self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
+                if node.type == "bullet_list":
+                    self.list_format(paragraph, "bullet", list_level)
+                else:
+                    own = self.list_format(paragraph, "number", list_level, own if k else numbering, start)
+                self.place(paragraph, quote, item_left)
             following = block_kind(item_blocks[0] if item_blocks else None)
-            self.pieces(rest, following, quote, indent + list_level * LIST_INDENT)
-            self.blocks(item_blocks, quote, indent, level, own if node.type == "ordered_list" else None)
+            self.pieces(rest, following, quote, content)
+            self.blocks(item_blocks, quote, content, level, own if node.type == "ordered_list" else None)
 
     def list_format(self, paragraph, kind: str, level: int, numbering: str | None = None, start: int = 1) -> str:
         """Give *paragraph*, the last one, a bullet or a number at *level* and return the numbering id.

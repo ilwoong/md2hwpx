@@ -66,3 +66,16 @@ def _template_with_code_style(tmp_path):
                 data = data.replace('name="표내부"'.encode(), 'name="코드블록"'.encode())
             dst.writestr(item, data)
     return path
+
+
+def _template_without_bullet_styles(tmp_path):
+    """The bundled template with its 글머리표 styles renamed, as a template that has none: lists then take
+    python-hwpx's bullets in the 본문 style."""
+    path = tmp_path / "no-bullet-styles.hwpx"
+    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item)
+            if item.filename == "Contents/header.xml":
+                data = data.replace('name="글머리표 '.encode(), 'name="옛 글머리표 '.encode())
+            dst.writestr(item, data)
+    return path

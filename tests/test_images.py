@@ -10,7 +10,7 @@ import pytest
 from hwpx import HwpxDocument
 from PIL import Image
 
-from helpers import BODY_HEIGHT, BODY_LEFT, BODY_WIDTH, HP, _paragraph_info, _png, _text
+from helpers import BODY_HEIGHT, BODY_LEFT, BODY_WIDTH, HP, _paragraph_info, _png, _template_without_bullet_styles, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import MISSING_IMAGE, convert
 from md2hwpx.images import length
@@ -348,7 +348,7 @@ def test_convert_indented_picture_fits_the_body(tmp_path):
     md.write_text("- 항목\n\n  ![](wide.png)\n\n> ![](half.png){width=50%}\n", encoding="utf-8")
     out = tmp_path / "indented.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     pictures = [(p, pic) for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
