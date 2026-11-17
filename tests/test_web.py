@@ -381,5 +381,40 @@ def test_page_tells_the_upload_size_limit(monkeypatch):
     assert "{{" not in page
 
 
+def _field(response) -> str | None:
+    """The form field the error is about, for the page to show it there."""
+    assert response.status_code in (400, 413), response.text
+    return response.headers.get(web.FIELD_HEADER)
+
+
+def test_error_names_the_field_it_is_about():
+    md = ("files", ("doc.md", b"# A\n", "text/markdown"))
+    draft = ("files", ("doc.md", b"---\ndraft: true\n---\n# A\n", "text/markdown"))
+    assert _field(client.post("/convert", data={"source": "files"})) == "files"
+    assert _field(client.post("/convert", data={"source": "files"}, files=[("files", ("a.png", b"x"))])) == "files"
+    assert _field(client.post("/convert", data={"source": "zip"})) == "archive"
+    assert _field(client.post("/convert", data={"source": "zip"}, files=[("archive", ("a.zip", b"x"))])) == "archive"
+    assert _field(client.post("/convert", data={"source": "git", "repo": "ssh://host/a.git"})) == "repo"
+    assert _field(client.post("/convert", data={"source": "git", "repo": "http://h/a.git", "ref": "-x"})) == "ref"
+    assert _field(client.post("/convert", data={"source": "files", "chapter_start": "0"}, files=[md])) == "chapter_start"
+    template = ("template", ("t.hwpx", b"not a template"))
+    assert _field(client.post("/convert", data={"source": "files"}, files=[md, template])) == "template"
+
+    archive = ("archive", ("docs.zip", _zip({"doc.md": "---\ndraft: true\n---\n# A\n"}), "application/zip"))
+    assert _field(client.post("/convert", data={"source": "zip", "path": "none"}, files=[archive])) == "path"
+    assert _field(client.post("/convert", data={"source": "zip", "include": "x*.md"}, files=[archive])) == "include"
+    assert _field(client.post("/convert", data={"source": "zip"}, files=[archive])) == "include_draft"
+    # Drafts chosen one by one are converted: what is wrong in a document is about no field.
+    assert client.post("/convert", data={"source": "files"}, files=[draft]).status_code == 200
+    broken = ("files", ("doc.md", b"![x](../out.png)\n", "text/markdown"))
+    assert _field(client.post("/convert", data={"source": "files"}, files=[broken])) is None
+
+
+def test_upload_over_the_limit_names_its_field(monkeypatch):
+    monkeypatch.setattr(web, "MAX_UPLOAD", 10)
+    files = [("files", ("doc.md", b"# 0123456789\n", "text/markdown"))]
+    assert _field(client.post("/convert", data={"source": "files"}, files=files)) == "files"
+
+
 def test_unknown_source():
     assert _error(client.post("/convert", data={"source": "ftp"})) == "알 수 없는 입력 방식입니다: ftp"

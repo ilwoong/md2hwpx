@@ -26,6 +26,8 @@
   .field small { display: block; color: var(--muted); }
   input[type=text], input[type=url], input[type=number] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
   input[type=file] { width: 100%; padding: 10px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
+  .field [aria-invalid] { border-color: var(--error); }
+  .field small.error { color: var(--error); white-space: pre-wrap; }
   details { margin: 8px 0 20px; }
   summary { cursor: pointer; color: var(--muted); }
   details .field { margin-top: 12px; }
@@ -196,6 +198,27 @@
     ].filter(Boolean).join("\n");
   });
 
+  // An error about one input is shown at that input, which the server names (web.py: FIELD_HEADER).
+  const fieldError = document.createElement("small");
+  fieldError.id = "field-error";
+  fieldError.className = "error";
+  function showFieldError(field, message) {
+    const fold = field.closest("details");
+    if (fold) fold.open = true;
+    fieldError.textContent = message;
+    field.closest(".field").append(fieldError);
+    field.setAttribute("aria-invalid", "true");
+    field.setAttribute("aria-describedby", fieldError.id);
+    field.focus();
+  }
+  function clearFieldError() {
+    const field = form.querySelector("[aria-invalid]");
+    if (!field) return;
+    field.removeAttribute("aria-invalid");
+    field.removeAttribute("aria-describedby");
+    fieldError.remove();
+  }
+
   function filename(response) {
     const header = response.headers.get("Content-Disposition") || "";
     const match = header.match(/filename\*=UTF-8''([^;]+)/);
@@ -219,6 +242,7 @@
     if (form.template.files[0]) data.append("template", form.template.files[0]);
 
     button.disabled = true;
+    clearFieldError();
     status.className = "";
     // The seconds show that it is still at work (a repository may take minutes); a screen reader is told once.
     const seconds = document.createElement("span");
@@ -231,7 +255,7 @@
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         const detail = typeof body.detail === "string" ? body.detail : `변환하지 못했습니다 (HTTP ${response.status}).`;
-        throw new Error(detail);
+        throw Object.assign(new Error(detail), { field: form.elements[response.headers.get("X-Md2hwpx-Field")] });
       }
       const blob = await response.blob();
       const link = document.createElement("a");
@@ -248,8 +272,13 @@
         status.append(list);
       }
     } catch (error) {
-      status.className = "error";
-      status.textContent = error.message;
+      if (error.field) {
+        status.textContent = "";
+        showFieldError(error.field, error.message);
+      } else {
+        status.className = "error";
+        status.textContent = error.message;
+      }
     } finally {
       clearInterval(timer);
       button.disabled = false;

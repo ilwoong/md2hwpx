@@ -11,11 +11,13 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
+from hwpx.errors import HwpxError
 
 from md2hwpx import oauth
 from md2hwpx.cli import CONVERSION_ERRORS, NoInputFiles, chapter_number, convert_input, input_files
@@ -38,6 +40,7 @@ _COMMIT = re.compile(r"[0-9a-fA-F]{40}")
 _SHORT_COMMIT = re.compile(r"[0-9a-fA-F]{4,39}")
 HWPX_TYPE = "application/hwp+zip"
 WARNINGS_HEADER = "X-Md2hwpx-Warnings"  # what the HWPX was made despite, one per line
+FIELD_HEADER = "X-Md2hwpx-Field"  # the form field an error is about, for the page to show the error at it
 
 app = FastAPI(title="md2hwpx")
 app.include_router(oauth.router)
@@ -56,6 +59,21 @@ class _Budget:
                 if self.left < 0:
                     raise HTTPException(413, f"올린 파일이 너무 큽니다 (최대 {MAX_UPLOAD // 1024 // 1024} MB).")
                 out.write(chunk)
+
+
+def _error(message: str, field: str) -> HTTPException:
+    """A 400 about the form field *field*."""
+    return HTTPException(400, message, headers={FIELD_HEADER: field})
+
+
+@contextmanager
+def _about(field: str):
+    """Say that an error raised inside is about the form field *field*, unless it names its own."""
+    try:
+        yield
+    except HTTPException as error:
+        error.headers = error.headers or {FIELD_HEADER: field}
+        raise
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -115,7 +133,7 @@ def _clone(repo: str, ref: str, root: Path, request: Request) -> str:
     if not _REPO.fullmatch(repo):
         raise HTTPException(400, "git 저장소 주소는 http:// 또는 https:// 로 시작해야 합니다.")
     if ref and not _REF.fullmatch(ref):
-        raise HTTPException(400, f"브랜치·태그 이름이 올바르지 않습니다: {ref}")
+        raise _error(f"브랜치·태그 이름이 올바르지 않습니다: {ref}", "ref")
     git = [
         "git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.http.allow=always",
         "-c", "core.symlinks=false",
@@ -146,6 +164,7 @@ def _clone(repo: str, ref: str, root: Path, request: Request) -> str:
             hint = f"\n비공개 저장소라면 {server.provider.label} 에 로그인하세요." if server and not auth else ""
             if _SHORT_COMMIT.fullmatch(ref):
                 hint += "\n커밋은 전체 해시(40자)로 지정하세요."
+                raise _error(f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}", "ref")
             raise HTTPException(400, f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}")
     shutil.rmtree(root / ".git", ignore_errors=True)
     return repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git") or "document"
@@ -169,7 +188,7 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
     if path:
         target = root / path
         if not _inside(target, root) or not target.exists():
-            raise HTTPException(400, f"변환할 경로가 없습니다: {path}")
+            raise _error(f"변환할 경로가 없습니다: {path}", "path")
         target = target.resolve()
         return target, (target.stem if target.is_file() else target.name)
     entries = list(root.iterdir())
@@ -182,8 +201,11 @@ def _input_path(root: Path, path: str, name: str) -> tuple[Path, str]:
     return root, name
 
 
-def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: list[str]) -> None:
-    """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX."""
+def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: list[str], chosen: str) -> None:
+    """Refuse images outside *root*: "../x.png" or "/etc/x" would put the server's files in the HWPX.
+
+    *chosen* is the form field that chose the files to convert, which an error for having none is about
+    unless the patterns or the drafts left none."""
     try:
         files = input_files(input_path, include_draft, patterns)
     except NoInputFiles as error:
@@ -191,7 +213,8 @@ def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: l
             "folder": "변환할 .md 파일이 없습니다",
             "draft": f"{error.what} ('draft 파일도 변환' 을 켜세요)",
         }.get(error.reason, error.what)
-        raise HTTPException(400, f"{what}: {_relative(input_path, root) or '/'}") from None
+        field = {"pattern": "include", "draft": "include_draft"}.get(error.reason, chosen)
+        raise _error(f"{what}: {_relative(input_path, root) or '/'}", field) from None
     for md in files:
         for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
             if not _inside(image, root):
@@ -236,36 +259,44 @@ def convert(
     try:
         first_chapter = chapter_number(chapter_start.strip() or "1")
     except ValueError as error:
-        raise HTTPException(400, f"시작 장 번호는 {error}") from None
+        raise _error(f"시작 장 번호는 {error}", "chapter_start") from None
     budget = _Budget()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp).resolve()
         root = work / "input"
         root.mkdir()
         if source == "files":
-            name = _save_files(files, root, budget)
+            with _about("files"):
+                name = _save_files(files, root, budget)
             # The user chose each file: no patterns pick among them, and drafts go in too.
             patterns, include_draft = [], True
         elif source == "zip":
-            name = _extract_zip(archive, root, work, budget)
+            with _about("archive"):
+                name = _extract_zip(archive, root, work, budget)
         elif source == "git":
-            name = _clone(repo.strip(), ref.strip(), root, request)
+            with _about("repo"):
+                name = _clone(repo.strip(), ref.strip(), root, request)
         else:
             raise HTTPException(400, f"알 수 없는 입력 방식입니다: {source}")
         _remove_symlinks(root)
         input_path, name = _input_path(root, path.strip().strip("/"), name)
-        _check_images(input_path, root, include_draft, patterns)
+        _check_images(input_path, root, include_draft, patterns, "files" if source == "files" else "path")
 
         template_path = DEFAULT_TEMPLATE
         if template is not None and template.filename:
             template_path = work / "template.hwpx"
-            budget.copy(template.file, template_path)
+            with _about("template"):
+                budget.copy(template.file, template_path)
         output = work / "output.hwpx"
         try:
             found = convert_input(input_path, template_path, output, include_draft, patterns, first_chapter)
         except CONVERSION_ERRORS as error:
             # Paths in the message are the request's temporary folder: show them from the upload's root.
-            raise HTTPException(400, str(error).replace(f"{root}/", "").replace(f"{work}/", "")) from None
+            message = str(error).replace(f"{root}/", "").replace(f"{work}/", "")
+            # An uploaded template that is not HWPX. Anything else is about the documents, and names their lines.
+            if template_path != DEFAULT_TEMPLATE and isinstance(error, (HwpxError, zipfile.BadZipFile)):
+                raise _error(message, "template") from None
+            raise HTTPException(400, message) from None
         data = output.read_bytes()
         # Every image is inside root (_check_images): name them from there.
         warnings = [
