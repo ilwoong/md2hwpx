@@ -120,7 +120,9 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 - `/` 로 끝나는 출력 폴더는 호스트에서 먼저 만든다.
 - 인자 없이 또는 `-h` 로 실행하면 md2hwpx 의 도움말 아래에 예와 `--include` 패턴을 따옴표로 감싸라는 안내를 붙인다.
   도움말이 인자 오류로 끝나면 안내 없이 그 종료 코드로 끝난다.
-- `--platform linux/amd64` 로 실행한다. 현재 폴더가 `/` 이면 그것은 마운트하지 않는다.
+- `--platform linux/amd64` 로 실행한다. 그래서 이미지가 amd64 여야 한다: arm64 호스트에서 빌드한 이미지로는
+  Docker 가 amd64 이미지를 내려받으려다 `pull access denied for md2hwpx-web` 로 실패한다.
+- 현재 폴더가 `/` 이면 그것은 마운트하지 않는다.
 
 ## 빌드 스크립트 (`build-images.sh`)
 

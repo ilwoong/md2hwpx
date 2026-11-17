@@ -23,7 +23,7 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 - 저장: `HwpxDocument.save_to_path`
 
 Markdown 파싱에는 [markdown-it-py](https://github.com/executablebooks/markdown-it-py) 와
-[mdit-py-plugins](https://github.com/executablebooks/mdit-py-plugins) (각주) 를,
+[mdit-py-plugins](https://github.com/executablebooks/mdit-py-plugins) (각주, 펜스 div) 를,
 코드블록 구문 강조에는 [Pygments](https://pygments.org/) 를 사용한다.
 
 ## 템플릿 요구사항
@@ -67,7 +67,7 @@ caption-numbering: document
 ---
 ```
 
-- `chapter`(기본): 장 단위 번호 `[표 2-1]`. 장마다 1부터 다시 매긴다 (아래 "표·그림 캡션").
+- `chapter`(기본): 장 단위 번호 `[표 2-1]`. 장마다 1부터 다시 매긴다 (아래 "캡션").
 - `document`: 문서 전체 번호 `[표 7]`. 장 번호를 붙이지 않고, 수준 1 헤딩에서 다시 매기지 않는다
   (`hp:newNum` 을 넣지 않는다). `[새 번호 표]`·`[새 번호 그림]` 은 그대로 다시 매긴다.
 - 값을 따옴표로 감싸도 된다 (`'document'`). 줄 맨 앞(들여쓰지 않은)의 키만 읽는다. front matter 밖의 같은 줄은 본문이다.
@@ -96,7 +96,8 @@ draft: true
 
 Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py) 로 파싱한다.
 
-- 프리셋: `commonmark` + GFM 표(`table`) + 취소선(`strikethrough`), 각주는 `mdit-py-plugins` 의 `footnote_plugin`.
+- 프리셋: `commonmark` + GFM 표(`table`) + 취소선(`strikethrough`), 각주는 `mdit-py-plugins` 의 `footnote_plugin`,
+  `custom-style` 펜스 div 는 `container_plugin`(이름 `div`, 여는 줄이 `{custom-style="이름"}` 일 때만).
 - 이미지 바로 뒤(공백 없이)의 `{...}` 는 이미지 속성이다 (pandoc 표기, 아래 "이미지" 참고). 이 프로젝트의 인라인 규칙이 읽는다.
   `mdit-py-plugins` 의 `attrs_plugin` 은 쓰지 않는다: djot 문법이라 `%` 를 주석으로 읽어 `{width=50%}` 를 받지 못한다.
 - `html` 옵션은 끈다: 원시 HTML 은 글자 그대로 들어간다.
@@ -147,8 +148,9 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 문단 하나를 `본문` 문단 하나로 만든다. 줄바꿈(soft break)은 공백 하나로,
   강제 줄바꿈(줄 끝 공백 2칸 이상 또는 `\`)은 한/글 줄바꿈(`lineBreak`)으로 넣는다.
 - 문단 안의 줄 가운데 다음 줄은 문단을 나눈다:
-  - `[TOC]`·`[TOC 표 그림 링크없음]`(대소문자 무시), `\newpage`, `\pagebreak`, `[새 번호 쪽 표 그림 수식]`, `[감추기]`, `[빈 줄 N]` 만 있는 줄
-    → 아래 "차례", "쪽 나누기", "번호 새로 시작", "쪽 감추기", "빈 줄".
+  - `[TOC]`·`[TOC 표 그림 링크없음]`(대소문자 무시), `\newpage`, `\pagebreak`, `[새 번호 쪽 표 그림 수식]`, `[감추기]`,
+    `[여백면]`·`[여백면] 문구`, `[빈 줄 N]` 만 있는 줄
+    → 아래 "차례", "쪽 나누기", "번호 새로 시작", "쪽 감추기", "여백 면", "빈 줄".
   - 이미지 → 아래 "이미지". 이미지 앞뒤의 글은 따로 문단이 된다.
 - 앞뒤 공백만 남는 조각은 버린다.
 
@@ -280,7 +282,7 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
       단, 크기 속성의 `%` 는 들여쓰기와 상관없이 본문 폭 기준이다 (아래).
     - 본문 높이: 쪽 높이 − 위쪽·아래쪽 여백 − 머리말·꼬리말 여백.
       그림 위아래 여백(아래)을 빼고, 캡션이 있으면 캡션 자리로 간격 850 HWPUNIT 과 캡션 줄 수 × 한 줄 높이를 뺀다.
-      줄 수는 캡션이 쓰는 폭(위 폭 전체, 아래)에서 표의 행 높이처럼 한/글 줄바꿈 규칙으로 센다 (`tables.line_count`, 아래 "표").
+      줄 수는 캡션이 쓰는 폭(위 폭 전체, 아래)에서 표의 행 높이처럼 한/글 줄바꿈 규칙으로 센다 (`tables.line_count`, 위 "표").
       글자 폭은 run 마다 그 글자 모양으로 재고, 한 줄 높이는 `표그림 제목` 스타일의 글자 크기 × 줄간격(템플릿에서 읽는다:
       10pt × 180% = 1800)이다. 캡션이 쓰는 폭이 그림 크기와 상관없으므로 그림 크기를 정하기 전에 셀 수 있다.
 - 그림 바깥 위아래에 표와 같은 여백(1400 HWPUNIT)을 둔다. 좌우 여백은 0 이다 (캡션이 있는 좁은 그림은 아래).
@@ -343,7 +345,8 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 ```
 
 - 캡션 줄을 `[표 #이름] 제목` / `[그림 #이름] 제목` 으로 쓰면 그 표·그림에 이름이 붙는다. 이름은 캡션 문구에 들어가지 않는다.
-  이름에는 공백과 `[`, `]` 를 쓸 수 없다. `[`·`]` 와 `표`·`그림` 사이, `#이름` 앞의 공백은 위 캡션 줄과 같다.
+  이름에는 공백과 `[`, `]` 를 쓸 수 없다. `[` 와 `표`·`그림` 사이, `]` 앞에는 공백을 둘 수 없고,
+  `#이름` 앞에는 공백이나 탭이 하나 이상 있어야 한다 (`[표#이름]` 은 캡션 줄이 아니다).
 - 글 안의 `[@이름]` 은 그 캡션의 번호 글자(`표 2-1`, `caption-numbering: document` 면 `표 7`)로 바뀐다.
   캡션 문구에서 `[`·`]` 를 뺀 것이다. 바깥에 괄호 등을 쓰면 그대로 남는다 (`[[@결과]]` → `[표 2-1]`).
 - 문단·헤딩·목록·인용문·표 셀·캡션·각주·링크 글자 안 어디서든 쓸 수 있고, 뒤에 나오는 표·그림도 참조한다.
@@ -435,7 +438,7 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 처음 저장하는 항목은 그 방식으로 모은 문단(개요는 3수준까지)을 문서 순서대로 넣는다. 한/글이 열 때 다시 모은다.
 - 템플릿에 없는 스타일 이름도 차례에 그대로 적되 경고한다 (아래 "명령줄"):
   `<입력 파일>:<줄>: 템플릿에 '<이름>' 문단 스타일이 없어 차례에 모을 수 없습니다`. 줄은 `[TOC]` 줄이다.
-- `custom-style` div(위 "문단 스타일 지정")로 스타일을 준 문단을 차례에 모을 수 있다.
+- `custom-style` div(아래 "문단 스타일 지정")로 스타일을 준 문단을 차례에 모을 수 있다.
 
 ### 여백 면
 
@@ -672,7 +675,7 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]
   이유는 `missing`(그 이름의 캡션이 없음) 또는 `duplicate`(둘 이상). 모두 바꿨으면 빈 dict 다.
   `references` 는 코드 밖 `[@이름]` 참조의 (줄, 이름) 목록이다. 표 셀 안이면 그 행의 줄이다.
   명령줄은 둘을 맞춰 경고한다. 폴더 입력은 파일을 이어 붙여 변환하므로 다른 파일의 이름도 참조한다.
-- `marker_problems` 는 무시한 주석 마커의 (줄, `@hwpx 명령 인자`, 이유) 목록을 줄 순서로 돌려준다 (아래 "주석 마커").
+- `marker_problems` 는 무시한 주석 마커의 (줄, `@hwpx 명령 인자`, 이유) 목록을 줄 순서로 돌려준다 (위 "주석 마커").
 - `old_markers` 는 없어질 표기 줄의 (줄, 그 줄, 대신 쓸 주석 마커) 목록을 (위 "없어질 표기"),
   `marker_typos` 는 글자로 남은 표기 오타의 (줄, 그 줄) 목록을 (위 "표기 오타"), `footnote_leftovers` 는 각주가 넣지 않은
   블록·각주 참조의 (줄, 조사를 붙인 이름) 목록을 줄 순서로 돌려준다 (위 "각주"). 줄 번호는 front matter 를 포함한다.
