@@ -12,7 +12,8 @@
   README 에 uv 최소 버전(0.4.27)을 적었다: 그보다 옛 uv 나 `UV_NO_DEV` 에서 `uv run pytest` 가 `Failed to spawn: pytest` 로 실패한다.
 - 두 브랜치 모두 main 에 합쳤다 (`feature/marker-near-miss` 의 PR #76 에 둘 다 들어 있다).
 - `feature/web-ui-spacing-a11y`: 웹 페이지의 간격·키보드 접근·다크 모드, 선택 옵션 묶음, 고른 파일 목록, 입력 아래의 오류,
-  `.env` 의 업로드 크기 제한 (`MD2HWPX_MAX_UPLOAD_MB`). 아직 main 에 합치지 않았다. 아래 3 을 확인한 뒤 합친다.
+  `.env` 의 업로드 크기 제한 (`MD2HWPX_MAX_UPLOAD_MB`), 명령줄 클라이언트(`md2hwpx-remote.py`)와 "스크립트" 탭, 제목 옆의 빌드 날짜.
+  main 에 합쳤다. 실제 환경에서 보지 못한 것은 아래 3 에 남겼다.
 
 ## 할 일
 
@@ -34,7 +35,7 @@
 
 ### 3. 웹 페이지 변경을 실제 환경에서 확인하기
 
-`feature/web-ui-spacing-a11y` 에서 웹 페이지(`static/index.html`)와 `web.py` 를 고쳤다 (2026-11-17). 테스트와
+`feature/web-ui-spacing-a11y` 에서 웹 페이지(`static/index.html`)와 `web.py` 를 고쳤다 (2026-11-17, main 에 합침). 테스트와
 헤드리스 Chromium 으로만 확인했고, 아래는 실제 환경에서 보지 못했다. `web` 이미지를 다시 빌드해 띄운 뒤 확인한다.
 
 - [ ] `.env` 의 `MD2HWPX_MAX_UPLOAD_MB` 가 페이지 안내(파일·zip 탭 도움말, 선택한 파일 용량 표시)와 실제 제한에 반영되는가.
@@ -50,3 +51,4 @@
 - [ ] 휴대폰 폭에서 화면이 잘리거나 가로로 밀리지 않는가.
 - [ ] "스크립트" 탭: 다크 모드와 휴대폰 폭에서 사용법이 잘 보이는가. 내려받은 `md2hwpx-remote.py` 가 다른 PC 에서
       이 서비스로 변환하는가 (Python 3.13 으로만 돌려 보았다: 3.9, Windows 의 `python`·`py` 에서도 되는가).
+- [ ] `src/` 의 코드를 바꿔 이미지를 다시 빌드하면 제목 옆의 빌드 날짜가 그날로 바뀌는가 (바꾸지 않고 다시 빌드하면 그대로인가).
