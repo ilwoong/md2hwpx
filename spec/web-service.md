@@ -24,6 +24,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
 | `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs |
+| `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 (아래 "명령줄 클라이언트") |
 | `.env.example` | 업로드 크기 제한과 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
 의존성은 `pyproject.toml` 의 `web` 그룹(`fastapi`, `uvicorn`, `python-multipart`)이다.
@@ -35,7 +36,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 변환 페이지 (`static/index.html`). 페이지의 `{{MAX_UPLOAD_MB}}` 자리에 업로드 크기 제한(MB)을 채워 보낸다.
 
-- 입력 방식(파일 / zip / git 저장소)을 탭으로 고른다. 탭마다 꼭 필요한 입력은 하나(파일, zip 파일, 저장소 주소)이고,
+- 입력 방식(파일 / zip / git 저장소)을 탭으로 고른다. 네 번째 탭 "스크립트" 는 입력 방식이 아니라 명령줄 클라이언트를 내려받는 곳이다. 탭마다 꼭 필요한 입력은 하나(파일, zip 파일, 저장소 주소)이고,
   비어 있으면 브라우저가 제출을 막는다. 보이지 않는 탭의 입력은 검사하지 않는다.
 - 나머지 입력은 접어 둔 "선택 옵션" 에 있다: 브랜치·태그·커밋(git), 변환할 경로·파일 이름 패턴·draft 파일도 변환(zip·git),
   시작 장 번호, 템플릿 HWPX 바꾸기.
@@ -47,6 +48,12 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - 실패하면 `detail` 메시지를 보여 준다: 한 입력 때문이면 그 입력 아래에, 아니면 버튼 아래에 (아래 `POST /convert` 의 실패).
 - 로그인하러 떠날 때 저장소 주소·브랜치·경로·패턴을 브라우저의 `sessionStorage` 에 두었다가, 돌아오면 git 저장소 탭을 고르고
   그 값을 되살린다. 브랜치·경로·패턴 중 적은 것이 있으면 "선택 옵션" 을 펼친다.
+
+### `GET /md2hwpx-remote.py`
+
+명령줄 클라이언트(아래 "명령줄 클라이언트")를 내려준다. `Content-Disposition: attachment; filename="md2hwpx-remote.py"`.
+페이지의 "스크립트" 탭에 이 주소의 링크와 사용법이 있다. 사용법의 `--server` 에는 페이지가 열린 주소를 채워 보여 준다.
+이 탭에는 "선택 옵션" 과 변환 버튼이 없다.
 
 ### `GET /template`
 
@@ -120,6 +127,28 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - 시작 장 번호: 1 이상의 정수가 아니면 `시작 장 번호는 1 이상의 정수여야 합니다: <값>`.
 - 내려받는 파일 이름: 대상이 파일이면 확장자를 뺀 이름, 폴더면 `path` 의 마지막 이름,
   `path` 가 없으면 zip 파일 이름 / 저장소 이름 / 처음 올린 md 이름 (없으면 `document`).
+
+## 명령줄 클라이언트 (`md2hwpx-remote.py`)
+
+md2hwpx 도 Docker 도 없는 곳에서 웹 서비스에 변환을 맡긴다. 표준 라이브러리만 쓰는 한 파일이다 (Python 3.9 이상).
+웹 서비스가 `GET /md2hwpx-remote.py` 로 내주려고 패키지의 `static/` 에 둔다 (`web` 이미지에는 `src/` 만 들어간다).
+
+```sh
+md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include PATTERN ...] [--chapter-start N] [--server URL]
+```
+
+- INPUT 은 md 파일 또는 폴더(바로 안의 `.md` 파일). 그 md 와 그것이 쓰는 이미지 파일을 zip 으로 묶어
+  `POST /convert` 에 `source=zip` 으로 보낸다. 옵션은 같은 이름의 폼 필드로 넘긴다 (`--include` 여러 개는 쉼표로 이어서).
+- zip 의 맨 위 폴더는 INPUT 과 그 md 가 쓰는 이미지를 모두 담는 가장 가까운 폴더다. 그래서 `../shared/a.png` 처럼
+  md 폴더 밖의 이미지도 보낸다. INPUT 의 위치는 `path` 로 알린다 (맨 위 폴더가 INPUT 이면 비운다).
+  없는 이미지의 경로도 맨 위 폴더를 정할 때 넣는다: 서비스는 올린 폴더 밖의 이미지는 거부하고, 없는 이미지는 경고만 하기 때문이다.
+- 이미지는 `![..](경로)` 와 `[이름]: 경로` 에서 찾는다. 코드블록과 코드 스팬 안, 주소(`http:` 등)·절대 경로는 뺀다.
+  서비스의 파서보다 거칠게 읽는다: 이미지가 아닌 것을 이미지로 보면 파일 하나를 더 보낼 뿐이고,
+  놓친 이미지는 서비스가 "이미지 파일이 없어" 경고로 알려 준다. `[이름]: 경로` 는 링크의 것일 수도 있어 파일이 있을 때만 보낸다.
+- 서비스 주소: `--server`, 환경 변수 `MD2HWPX_SERVER`, `http://localhost:8000` 순. 응답을 600 초까지 기다린다.
+- 저장 위치와 이름은 명령줄과 같다 (`<입력 이름>.hwpx`, 있으면 `-1`, `-2`…, `/` 로 끝나는 `-o` 는 폴더).
+  저장한 경로를 출력하고, 경고는 `md2hwpx-remote: 경고: …` 로 stderr 에 출력한다.
+- 실패하면 서비스의 `detail` 을 stderr 에 출력하고 종료 코드 1 (연결 실패, 없는 입력·템플릿도 1). 옵션 오류는 argparse 의 2.
 
 ## GitLab·Gitea 로그인 (OAuth2)
 
@@ -201,5 +230,6 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | 템플릿 | 올린 템플릿으로 변환, HWPX 가 아닌 템플릿은 오류, `GET /template` 가 내장 템플릿 그대로·내려받기 헤더, 페이지에 그 링크 |
 | 오류의 입력 | 오류마다 `X-Md2hwpx-Field` 의 입력 이름 (문서 내용의 오류에는 없음), 크기 초과의 입력 이름, git 받기 실패가 저장소가 응답하면 `ref`·아니면 `repo` |
 | 크기 제한 | 페이지에 제한 값이 채워짐 |
+| 명령줄 클라이언트 | 이미지 찾기(코드·주소·절대 경로 제외, 공백·퍼센트 경로, 참조 정의), 파일·폴더 입력의 맨 위 폴더와 보낼 파일, 덮어쓰지 않는 출력 이름, 서비스로 변환해 md 폴더 밖 이미지 포함·없는 이미지 경고, 서비스 오류 표시, 스크립트 내려받기와 페이지의 탭 (`tests/test_remote.py`) |
 | 컨테이너 | `docker compose up` 후 세 입력 방식 모두 다이어그램 포함 변환, PlantUML `!include /etc/passwd` 실패, `nobody` 실행 |
 | 페이지 | 헤드리스 Chromium 으로 파일 올려 내려받기, 탭 전환, 오류 메시지 표시. 실제 환경에서 볼 것은 [remaining-work.md](remaining-work.md) 의 3 |

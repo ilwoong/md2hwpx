@@ -28,6 +28,10 @@
   input[type=file] { width: 100%; padding: 10px; border: 1px dashed var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
   .field [aria-invalid] { border-color: var(--error); }
   .field small.error { color: var(--error); white-space: pre-wrap; }
+  pre { margin: 6px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow-x: auto; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, "D2Coding", monospace; }
+  [data-source=script] p { margin: 0 0 14px; }
+  [data-source=script] a { color: var(--accent); }
+  [data-source=script] ul { margin: 0 0 14px; padding-left: 20px; color: var(--muted); font-size: smaller; }
   details { margin: 8px 0 20px; }
   summary { cursor: pointer; color: var(--muted); }
   details .field { margin-top: 12px; }
@@ -56,6 +60,7 @@
       <label><input type="radio" name="source" value="files" checked><span>파일</span></label>
       <label><input type="radio" name="source" value="zip"><span>zip</span></label>
       <label><input type="radio" name="source" value="git"><span>git 저장소</span></label>
+      <label><input type="radio" name="source" value="script"><span>스크립트</span></label>
     </div>
 
     <fieldset data-source="files">
@@ -79,6 +84,28 @@
         <small>http·https 저장소 (폐쇄망 http 저장소 포함).<span id="login-hint" hidden> 비공개 저장소는 아래에서 그 서버에 로그인하세요.</span></small>
       </label>
       <div id="accounts" hidden></div>
+    </fieldset>
+
+    <fieldset data-source="script" hidden>
+      <p>내 PC 의 명령줄에서 이 서비스로 변환하는 스크립트입니다. md 파일과 그 문서가 쓰는 이미지 파일을 찾아 zip 으로 묶어 보내고, HWPX 를 받아 저장합니다. Python 3.9 이상만 있으면 되고 다른 패키지는 필요 없습니다.</p>
+      <p><a href="md2hwpx-remote.py" download="md2hwpx-remote.py">md2hwpx-remote.py 내려받기</a></p>
+      <div class="field"><span>사용법</span>
+<pre># md 파일 하나 → 현재 폴더의 guide.hwpx
+python3 md2hwpx-remote.py docs/guide.md --server <span class="server"></span>
+
+# 폴더의 .md 파일을 이름 순으로 이어 붙여 out/ 폴더에
+python3 md2hwpx-remote.py docs/chapters/ -o out/ --server <span class="server"></span>
+
+# 주소를 한 번 정해 두면 --server 를 생략할 수 있습니다
+export MD2HWPX_SERVER=<span class="server"></span>
+python3 md2hwpx-remote.py docs/guide.md -t my-template.hwpx --chapter-start 2</pre>
+      </div>
+      <ul>
+        <li>이미지는 폴더 구조 그대로 보내므로 <code>images/a.png</code>, <code>../shared/a.png</code> 같은 경로를 그대로 쓸 수 있습니다. 문서가 쓰지 않는 파일은 보내지 않습니다.</li>
+        <li>옵션: <code>-o</code> 저장할 파일 또는 폴더, <code>-t</code> 템플릿 HWPX, <code>--include 'ch_2*.md'</code> 파일 이름 패턴, <code>--include-draft</code> draft 파일도 변환, <code>--chapter-start N</code> 시작 장 번호. <code>-h</code> 로 모두 볼 수 있습니다.</li>
+        <li>같은 이름의 파일이 있으면 덮어쓰지 않고 <code>-1</code>, <code>-2</code> 를 붙여 저장합니다. 경고와 오류는 화면에 출력합니다.</li>
+        <li>Windows 에서는 <code>python3</code> 대신 <code>python</code> 또는 <code>py</code> 를 씁니다.</li>
+      </ul>
     </fieldset>
 
     <details id="options">
@@ -124,10 +151,14 @@
     const source = form.source.value;
     // Disabled as well as hidden: the browser checks only the shown tab's inputs before a submit.
     for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.disabled = set.dataset.source !== source;
+    // The script's tab converts nothing here: it has no options, button or result.
+    for (const part of [document.getElementById("options"), button, status]) part.hidden = source === "script";
     document.getElementById("ref-field").hidden = source !== "git";
     document.getElementById("path-field").hidden = source === "files";
   }
   for (const radio of form.source) radio.addEventListener("change", showSource);
+  // This service's own address, in the commands to copy.
+  for (const server of form.querySelectorAll(".server")) server.textContent = new URL(".", location.href).href.replace(/\/$/, "");
 
   // Signing in leaves the page: keep what was typed about the repository, and come back to its tab.
   const KEPT = ["repo", "ref", "path", "include"];

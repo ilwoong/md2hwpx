@@ -25,6 +25,7 @@ from md2hwpx.convert import DEFAULT_TEMPLATE
 from md2hwpx.source import image_paths
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
+REMOTE = INDEX.with_name("md2hwpx-remote.py")  # the script that sends Markdown here from a command line
 # bytes: all uploads of a request, and a zip's extracted files. Set in megabytes by the environment (see
 # .env.example).
 MAX_UPLOAD = int(os.environ.get("MD2HWPX_MAX_UPLOAD_MB", "").strip() or 50) * 1024 * 1024
@@ -245,6 +246,12 @@ def index() -> str:
 def template() -> FileResponse:
     """The template a conversion uses when none is uploaded, to download and change."""
     return FileResponse(DEFAULT_TEMPLATE, media_type=HWPX_TYPE, filename="template.hwpx")
+
+
+@app.get("/md2hwpx-remote.py")
+def remote() -> FileResponse:
+    """The command-line script that has this service convert, to download from the page."""
+    return FileResponse(REMOTE, media_type="text/x-python", filename=REMOTE.name)
 
 
 @app.post("/convert")

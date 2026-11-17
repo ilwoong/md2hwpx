@@ -174,6 +174,25 @@ docker compose up -d --build    # http://localhost:8000
   설정은 아래 "GitLab·Gitea 로그인 설정" 을 따릅니다.
 - 웹 서비스 자체의 접근 인증은 없으니 외부에 공개할 때는 앞단에서 접근을 제한하세요. 자세한 내용은 [웹 서비스 스펙](spec/web-service.md).
 
+#### 명령줄에서 웹 서비스로 변환
+
+Docker 나 md2hwpx 를 설치하지 않은 PC 에서도 `md2hwpx-remote.py` 하나로 웹 서비스에 변환을 맡길 수 있습니다.
+페이지의 "스크립트" 탭에서 내려받습니다 (사용법도 거기 있습니다). 저장소에서는 `src/md2hwpx/static/md2hwpx-remote.py` 입니다.
+md 파일과 그 문서가 쓰는 이미지 파일을 찾아 zip 으로 묶어 보내고, HWPX 를 받아 저장합니다. Python 3.9 이상만 있으면 됩니다.
+
+```sh
+python3 md2hwpx-remote.py docs/guide.md --server http://md2hwpx.internal:8000   # → guide.hwpx
+python3 md2hwpx-remote.py docs/chapters/ -o out/                                  # 폴더의 .md 를 이름 순으로
+```
+
+- 서비스 주소는 `--server`, 없으면 환경 변수 `MD2HWPX_SERVER`, 그것도 없으면 `http://localhost:8000` 입니다.
+- 옵션(`-o`, `-t`, `--include-draft`, `--include`, `--chapter-start`)과 출력 이름 규칙은 `md2hwpx` 명령과 같습니다.
+  템플릿을 주지 않으면 서비스의 내장 템플릿을 씁니다.
+- 이미지는 디스크에 놓인 폴더 구조대로 보내므로 `images/a.png`, `../shared/a.png` 같은 경로를 그대로 쓸 수 있습니다.
+  문서가 쓰지 않는 파일은 보내지 않습니다. 없는 이미지는 서비스가 대체 이미지로 넣고 경고합니다.
+- 스크립트 없이 직접 보내려면 `curl -o guide.hwpx -F source=files -F files=@guide.md -F files=@pic.png http://localhost:8000/convert`
+  처럼 `POST /convert` 를 씁니다 (필드는 [웹 서비스 스펙](spec/web-service.md) 의 "API").
+
 #### GitLab·Gitea 로그인 설정
 
 로그인을 쓰지 않으면 이 설정은 필요 없습니다. 공개 저장소는 로그인 없이 받습니다.
