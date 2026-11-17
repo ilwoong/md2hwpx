@@ -35,7 +35,9 @@
   button:disabled { opacity: .6; cursor: progress; }
   #status { margin-top: 16px; white-space: pre-wrap; }
   #status.error { color: var(--error); }
-  #status.warning { color: var(--warning); }
+  #status .warning { margin-top: 12px; color: var(--warning); }
+  #chosen { margin-top: 4px; color: var(--fg); white-space: pre-wrap; }
+  #chosen.error { color: var(--error); }
   #accounts { margin: -6px 0 14px; color: var(--muted); }
   #accounts a, #accounts .link { color: var(--accent); }
   #accounts .link { padding: 0; border: 0; background: none; font: inherit; font-weight: normal; cursor: pointer; text-decoration: underline; }
@@ -56,21 +58,22 @@
 
     <fieldset data-source="files">
       <label class="field"><span>Markdown 과 이미지 파일</span>
-        <input type="file" name="files" multiple accept=".md,image/*">
-        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다.</small>
+        <input type="file" name="files" multiple accept=".md,image/*" required>
+        <small>md 파일과 그 문서가 참조하는 이미지를 함께 선택하세요. 이미지는 파일 이름으로 찾습니다. md 가 여러 개면 이름 순으로 이어 붙입니다. 모두 합쳐 50 MB 까지 올릴 수 있습니다.</small>
+        <small id="chosen" hidden></small>
       </label>
     </fieldset>
 
     <fieldset data-source="zip" hidden>
       <label class="field"><span>zip 파일</span>
-        <input type="file" name="archive" accept=".zip">
-        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다.</small>
+        <input type="file" name="archive" accept=".zip" required>
+        <small>md 와 이미지가 든 폴더를 압축해 올리세요. 하위 폴더의 이미지 경로도 그대로 쓸 수 있습니다. zip 과 그 안의 파일을 합쳐 50 MB 까지 올릴 수 있습니다.</small>
       </label>
     </fieldset>
 
     <fieldset data-source="git" hidden>
       <label class="field"><span>저장소 주소</span>
-        <input type="url" name="repo" placeholder="https://github.com/user/repo.git">
+        <input type="url" name="repo" placeholder="https://github.com/user/repo.git" required>
         <small>http·https 저장소 (폐쇄망 http 저장소 포함).<span id="login-hint" hidden> 비공개 저장소는 아래에서 그 서버에 로그인하세요.</span></small>
       </label>
       <div id="accounts" hidden></div>
@@ -98,7 +101,7 @@
         <input type="number" name="chapter_start" min="1" step="1" placeholder="1">
         <small>캡션의 장 번호를 이 번호부터 셉니다. 예: 2 면 첫 장의 표가 [표 2-1]. 비우면 1.</small>
       </label>
-      <label class="field"><span>템플릿 HWPX</span>
+      <label class="field"><span>템플릿 HWPX 바꾸기</span>
         <input type="file" name="template" accept=".hwpx">
         <small>개요 1~6, 본문, 바탕글, 표그림 제목 스타일이 있어야 합니다. 비우면 기본 템플릿을 씁니다.</small>
         <small>코드블록 스타일이 있으면 코드블록은 그 스타일로, 문장 안 코드는 그 글꼴로 씁니다 (없으면 D2Coding).</small>
@@ -117,7 +120,8 @@
 
   function showSource() {
     const source = form.source.value;
-    for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.dataset.source !== source;
+    // Disabled as well as hidden: the browser checks only the shown tab's inputs before a submit.
+    for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.disabled = set.dataset.source !== source;
     document.getElementById("ref-field").hidden = source !== "git";
     document.getElementById("path-field").hidden = source === "files";
   }
@@ -174,6 +178,24 @@
     history.replaceState(null, "", location.pathname);
   }
 
+  // The files chosen, as the conversion will take them.
+  const MAX_MB = 50;  // web.py: MAX_UPLOAD
+  const chosen = document.getElementById("chosen");
+  form.files.addEventListener("change", () => {
+    const files = [...form.files.files];
+    const names = (isMarkdown) => files.map((f) => f.name).filter((name) => name.endsWith(".md") === isMarkdown).sort();
+    const md = names(true);
+    const images = names(false);
+    const mb = files.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024;
+    chosen.hidden = files.length === 0;
+    chosen.classList.toggle("error", mb > MAX_MB);
+    chosen.textContent = [
+      `선택한 파일 ${files.length}개 (${mb.toFixed(1)} MB${mb > MAX_MB ? `, ${MAX_MB} MB 를 넘습니다` : ""})`,
+      md.length ? `md ${md.length}개${md.length > 1 ? " (이 순서로 이어 붙임)" : ""}: ${md.join(", ")}` : "md 파일이 없습니다",
+      images.length ? `이미지 ${images.length}개: ${images.join(", ")}` : "",
+    ].filter(Boolean).join("\n");
+  });
+
   function filename(response) {
     const header = response.headers.get("Content-Disposition") || "";
     const match = header.match(/filename\*=UTF-8''([^;]+)/);
@@ -198,7 +220,12 @@
 
     button.disabled = true;
     status.className = "";
-    status.textContent = "변환하는 중입니다…";
+    // The seconds show that it is still at work (a repository may take minutes); a screen reader is told once.
+    const seconds = document.createElement("span");
+    seconds.ariaHidden = "true";
+    status.replaceChildren(source === "git" ? "저장소를 받아 변환하는 중입니다…" : "변환하는 중입니다…", seconds);
+    const started = Date.now();
+    const timer = setInterval(() => { seconds.textContent = ` (${Math.round((Date.now() - started) / 1000)}초)`; }, 1000);
     try {
       const response = await fetch("convert", { method: "POST", body: data });
       if (!response.ok) {
@@ -215,13 +242,16 @@
       status.textContent = `${link.download} 을 내려받았습니다.`;
       const warnings = response.headers.get("X-Md2hwpx-Warnings");
       if (warnings) {
-        status.className = "warning";
-        status.textContent += `\n\n경고:\n${decodeURIComponent(warnings)}`;
+        const list = document.createElement("div");
+        list.className = "warning";
+        list.textContent = `경고:\n${decodeURIComponent(warnings)}`;
+        status.append(list);
       }
     } catch (error) {
       status.className = "error";
       status.textContent = error.message;
     } finally {
+      clearInterval(timer);
       button.disabled = false;
     }
   });
