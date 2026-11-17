@@ -42,7 +42,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 기본 템플릿(내장 템플릿 `src/md2hwpx/template.hwpx`, `template` 을 비우고 변환할 때 쓰는 것)을 내려준다.
 `Content-Type: application/hwp+zip`, `Content-Disposition: attachment; filename="template.hwpx"`.
-변환 페이지의 "템플릿 바꾸기" 에 이 주소로 내려받는 링크가 있다.
+변환 페이지의 "선택 옵션" 에 이 주소로 내려받는 링크가 있다.
 
 ### `POST /convert`
 

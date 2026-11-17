@@ -74,33 +74,31 @@
         <small>http·https 저장소 (폐쇄망 http 저장소 포함).<span id="login-hint" hidden> 비공개 저장소는 아래에서 그 서버에 로그인하세요.</span></small>
       </label>
       <div id="accounts" hidden></div>
-      <label class="field"><span>브랜치, 태그 또는 커밋 (선택)</span>
-        <input type="text" name="ref" placeholder="기본 브랜치">
-      </label>
     </fieldset>
 
-    <div id="path-field" hidden>
-      <label class="field"><span>변환할 경로 (선택)</span>
-        <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
-        <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
+    <details id="options">
+      <summary>선택 옵션</summary>
+      <label class="field" id="ref-field" hidden><span>브랜치, 태그 또는 커밋</span>
+        <input type="text" name="ref" placeholder="기본 브랜치">
       </label>
-      <label class="field"><span>파일 이름 패턴 (선택)</span>
-        <input type="text" name="include" placeholder="ch_2*.md, appendix*.md">
-        <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
+      <div id="path-field" hidden>
+        <label class="field"><span>변환할 경로</span>
+          <input type="text" name="path" placeholder="docs/guide.md 또는 docs/chapters">
+          <small>md 파일이나 폴더. 폴더면 바로 안의 .md 파일을 이름 순으로 이어 붙입니다. 비우면 맨 위 폴더를 씁니다.</small>
+        </label>
+        <label class="field"><span>파일 이름 패턴</span>
+          <input type="text" name="include" placeholder="ch_2*.md, appendix*.md">
+          <small>폴더 안에서 이름이 패턴에 맞는 .md 파일만 변환합니다. 쉼표로 여러 개. 비우면 모두 변환합니다.</small>
+        </label>
+        <label class="field"><input type="checkbox" name="include_draft"> draft 파일도 변환
+          <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
+        </label>
+      </div>
+      <label class="field"><span>시작 장 번호</span>
+        <input type="number" name="chapter_start" min="1" step="1" placeholder="1">
+        <small>캡션의 장 번호를 이 번호부터 셉니다. 예: 2 면 첫 장의 표가 [표 2-1]. 비우면 1.</small>
       </label>
-      <label class="field"><input type="checkbox" name="include_draft"> draft 파일도 변환
-        <small>front matter 에 draft: true 가 있는 파일은 켜야 변환합니다.</small>
-      </label>
-    </div>
-
-    <label class="field"><span>시작 장 번호 (선택)</span>
-      <input type="number" name="chapter_start" min="1" step="1" placeholder="1">
-      <small>캡션의 장 번호를 이 번호부터 셉니다. 예: 2 면 첫 장의 표가 [표 2-1]. 비우면 1.</small>
-    </label>
-
-    <details>
-      <summary>템플릿 바꾸기</summary>
-      <label class="field"><span>템플릿 HWPX (선택)</span>
+      <label class="field"><span>템플릿 HWPX</span>
         <input type="file" name="template" accept=".hwpx">
         <small>개요 1~6, 본문, 바탕글, 표그림 제목 스타일이 있어야 합니다. 비우면 기본 템플릿을 씁니다.</small>
         <small>코드블록 스타일이 있으면 코드블록은 그 스타일로, 문장 안 코드는 그 글꼴로 씁니다 (없으면 D2Coding).</small>
@@ -120,6 +118,7 @@
   function showSource() {
     const source = form.source.value;
     for (const set of form.querySelectorAll("fieldset[data-source]")) set.hidden = set.dataset.source !== source;
+    document.getElementById("ref-field").hidden = source !== "git";
     document.getElementById("path-field").hidden = source === "files";
   }
   for (const radio of form.source) radio.addEventListener("change", showSource);
@@ -131,6 +130,8 @@
     sessionStorage.removeItem("git");
     form.source.value = "git";
     JSON.parse(kept).forEach((value, i) => { form[KEPT[i]].value = value; });
+    // Not folded away, if any of the options was filled in.
+    document.getElementById("options").open = KEPT.slice(1).some((name) => form[name].value);
   }
   showSource();
 
