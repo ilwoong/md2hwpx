@@ -396,6 +396,13 @@ def test_git_failure_is_about_the_ref_if_the_repository_answers(monkeypatch, ans
     assert _field(client.post("/convert", data=data)) == "repo"
 
 
+def test_page_shows_the_day_the_image_was_built(tmp_path, monkeypatch):
+    assert "<h1>md2hwpx<small></small></h1>" in client.get("/").text  # not in an image: no date
+    (tmp_path / "build-date").write_text("2026-11-17\n", encoding="utf-8")
+    monkeypatch.setattr(web, "BUILD_DATE", tmp_path / "build-date")
+    assert "<h1>md2hwpx<small>2026-11-17 빌드</small></h1>" in client.get("/").text
+
+
 def _field(response) -> str | None:
     """The form field the error is about, for the page to show it there."""
     assert response.status_code in (400, 413), response.text

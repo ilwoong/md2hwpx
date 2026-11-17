@@ -13,6 +13,7 @@
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, -apple-system, "Malgun Gothic", sans-serif; }
   main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
   h1 { font-size: 24px; margin: 0 0 4px; }
+  h1 small { margin-left: 8px; font-size: 13px; font-weight: normal; color: var(--muted); }
   p.lead { margin: 0 0 24px; color: var(--muted); }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
   .tabs label { position: relative; padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); }
@@ -52,7 +53,7 @@
 </head>
 <body>
 <main>
-  <h1>md2hwpx</h1>
+  <h1>md2hwpx<small>{{BUILD}}</small></h1>
   <p class="lead">Markdown 문서를 한/글 HWPX 파일로 변환합니다.</p>
 
   <form id="form">

@@ -26,6 +26,7 @@ from md2hwpx.source import image_paths
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 REMOTE = INDEX.with_name("md2hwpx-remote.py")  # the script that sends Markdown here from a command line
+BUILD_DATE = INDEX.with_name("build-date")  # the day the web image was built, written by the Dockerfile
 # bytes: all uploads of a request, and a zip's extracted files. Set in megabytes by the environment (see
 # .env.example).
 MAX_UPLOAD = int(os.environ.get("MD2HWPX_MAX_UPLOAD_MB", "").strip() or 50) * 1024 * 1024
@@ -239,7 +240,10 @@ def _relative(path: Path, root: Path) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    return INDEX.read_text(encoding="utf-8").replace("{{MAX_UPLOAD_MB}}", str(MAX_UPLOAD // 1024 // 1024))
+    # Outside the image there is no build date, and the page shows none.
+    build = f"{BUILD_DATE.read_text(encoding='utf-8').strip()} 빌드" if BUILD_DATE.is_file() else ""
+    page = INDEX.read_text(encoding="utf-8").replace("{{BUILD}}", build)
+    return page.replace("{{MAX_UPLOAD_MB}}", str(MAX_UPLOAD // 1024 // 1024))
 
 
 @app.get("/template")

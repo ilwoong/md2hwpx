@@ -11,7 +11,7 @@ Dockerfile 은 네 단계다.
 |------|------|------|
 | `jre` | PlantUML 에 필요한 모듈만 담은 Java 런타임(`/opt/jre`)을 만든다. `tools` 가 이것만 복사한다 | (빌드용) |
 | `tools` | 아래 "이미지 내용" 의 도구와 Python 의존성 | (다른 단계의 바탕) |
-| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
+| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함), 빌드한 날짜(`static/build-date`, 페이지 제목 옆에 보인다). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
 | `dev` (기본) | `tools` 그대로. 코드는 실행 시 `/work` 에 마운트한다 | `docker build -t md2hwpx .` |
 
 아래 "실행 환경 변수", "사용법", "실행 스크립트" 는 `dev` 이미지 이야기다.
