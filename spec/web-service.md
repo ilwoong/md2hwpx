@@ -88,6 +88,8 @@ docker run --rm -p 8000:8000 md2hwpx-web
   - UTF-8 플래그가 없는 항목 이름은 cp949 로 읽는다 (한국어 Windows 의 zip). cp949 로 읽을 수 없으면 zipfile 기본(cp437)대로 둔다.
   - 암호가 걸렸거나 zip 이 아니면 오류.
 - `git`: `git clone --depth 1 [--branch <ref>]` 로 root 에 받고 `.git` 을 지운다. 제한 시간 120 초 (git 명령마다).
+  - `ref` 를 주고 받기에 실패하면 `git ls-remote` 로 저장소가 응답하는지 본다. 응답하면 `ref` 가 틀린 것이므로
+    오류를 `ref` 입력의 것으로 알리고 로그인 안내는 붙이지 않는다. 응답하지 않으면 `repo` 입력의 것이다.
   - `ref` 가 16진수 40자면 커밋이다. `clone --branch` 는 커밋을 받지 못하므로 `git init` → `git fetch --depth 1 -- <repo> <해시>`
     → `git checkout FETCH_HEAD` 로 그 커밋 하나만 받는다. 서버는 짧은 해시로 받기를 허용하지 않으므로 커밋은 전체 해시로 지정한다.
   - 받기에 실패했고 `ref` 가 짧은 해시 모양(16진수 4~39자)이면 오류 끝에 `커밋은 전체 해시(40자)로 지정하세요.` 를 붙인다.

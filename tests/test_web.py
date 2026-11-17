@@ -381,6 +381,21 @@ def test_page_tells_the_upload_size_limit(monkeypatch):
     assert "{{" not in page
 
 
+@pytest.mark.parametrize("answers, field", [(True, "ref"), (False, "repo")])
+def test_git_failure_is_about_the_ref_if_the_repository_answers(monkeypatch, answers, field):
+    def fake_run(command, **kwargs):
+        if "ls-remote" in command:
+            assert command[command.index("ls-remote"):] == ["ls-remote", "--quiet", "--", "https://example.com/manual.git", "HEAD"]
+            return web.subprocess.CompletedProcess(command, 0 if answers else 128, "", "")
+        return web.subprocess.CompletedProcess(command, 128, "", "fatal: Remote branch none not found")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    data = {"source": "git", "repo": "https://example.com/manual.git"}
+    assert _field(client.post("/convert", data={**data, "ref": "none"})) == field
+    # Without a ref, the repository is all there is to be wrong.
+    assert _field(client.post("/convert", data=data)) == "repo"
+
+
 def _field(response) -> str | None:
     """The form field the error is about, for the page to show it there."""
     assert response.status_code in (400, 413), response.text

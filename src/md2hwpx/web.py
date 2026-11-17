@@ -161,13 +161,24 @@ def _clone(repo: str, ref: str, root: Path, request: Request) -> str:
         except subprocess.TimeoutExpired:
             raise HTTPException(400, f"git 저장소를 {GIT_TIMEOUT}초 안에 받지 못했습니다.") from None
         if result.returncode != 0:
-            hint = f"\n비공개 저장소라면 {server.provider.label} 에 로그인하세요." if server and not auth else ""
+            # The repository is given out, only not at this ref: the ref is what is wrong, not the address or
+            # the sign-in. Asked of the server rather than read from git's message, which is not ours to rely on.
+            wrong_ref = bool(ref) and _answers(git, repo, env)
+            hint = f"\n비공개 저장소라면 {server.provider.label} 에 로그인하세요." if server and not auth and not wrong_ref else ""
             if _SHORT_COMMIT.fullmatch(ref):
                 hint += "\n커밋은 전체 해시(40자)로 지정하세요."
-                raise _error(f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}", "ref")
-            raise HTTPException(400, f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}")
+            raise _error(f"git 저장소를 받지 못했습니다: {result.stderr.strip()}{hint}", "ref" if wrong_ref else "repo")
     shutil.rmtree(root / ".git", ignore_errors=True)
     return repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git") or "document"
+
+
+def _answers(git: list[str], repo: str, env: dict[str, str]) -> bool:
+    """Whether the server gives out *repo* at all, to the *git* command with *env* that a clone was tried with."""
+    command = [*git, "ls-remote", "--quiet", "--", repo, "HEAD"]
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def _remove_symlinks(root: Path) -> None:
