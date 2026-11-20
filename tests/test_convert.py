@@ -1,12 +1,14 @@
 """Converting Markdown to HWPX: text blocks, lists, quotes, footnotes, styles and validation."""
 
 import re
-import zipfile
 
 import pytest
 from hwpx import HwpxDocument
 
-from helpers import BODY_LEFT, HH, HP, _paragraph_info, _png, _template_with_code_style, _template_without_bullet_styles
+from helpers import (
+    BODY_LEFT, HH, HP, _paragraph_info, _png, _template_renaming, _template_with_code_style, _template_with_header,
+    _template_without_bullet_styles,
+)
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert, paragraph_styles
 from md2hwpx.source import unknown_styles
@@ -205,16 +207,6 @@ def test_convert_bullets_in_the_template_styles(tmp_path):
 
 def test_convert_bullet_styles_count_from_one_in_a_row(tmp_path):
     # Only 글머리표 1 and 2: the third level takes 2. Without 글머리표 1 the others are not used.
-    def template(name, old, new):
-        path = tmp_path / name
-        with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
-            for item in src.infolist():
-                data = src.read(item)
-                if item.filename == "Contents/header.xml":
-                    data = data.replace(f'name="{old}"'.encode(), f'name="{new}"'.encode())
-                dst.writestr(item, data)
-        return path
-
     md = tmp_path / "list.md"
     md.write_text("- 하나\n  - 둘\n    - 셋\n", encoding="utf-8")
 
@@ -225,20 +217,8 @@ def test_convert_bullet_styles_count_from_one_in_a_row(tmp_path):
         names = {int(style.id): style.name for style in doc.styles.values()}
         return [names[int(p.style_id_ref)] for p in doc.paragraphs[1:]]
 
-    assert styles(template("two.hwpx", "글머리표 3", "다른 이름")) == ["글머리표 1", "글머리표 2", "글머리표 2"]
-    assert styles(template("none.hwpx", "글머리표 1", "다른 이름")) == ["본문", "본문", "본문"]
-
-
-def _template_with_header(tmp_path, name, change):
-    """The bundled template with its header.xml as *change* makes it."""
-    path = tmp_path / name
-    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
-        for item in src.infolist():
-            data = src.read(item)
-            if item.filename == "Contents/header.xml":
-                data = change(data.decode("utf-8")).encode("utf-8")
-            dst.writestr(item, data)
-    return path
+    assert styles(_template_renaming(tmp_path, {"글머리표 3": "다른 이름"}, "two.hwpx")) == ["글머리표 1", "글머리표 2", "글머리표 2"]
+    assert styles(_template_renaming(tmp_path, {"글머리표 1": "다른 이름"}, "none.hwpx")) == ["본문", "본문", "본문"]
 
 
 def _bullet_shape(header: str, level: int) -> tuple[int, int]:

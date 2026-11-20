@@ -56,26 +56,36 @@ def _paragraph_info(doc, p):
     return p.text, pp.heading.type, int(pp.margin.left)
 
 
-def _template_with_code_style(tmp_path):
-    """The bundled template with its 표내부 style (한컴돋움 12pt, 160%) renamed 코드블록."""
-    path = tmp_path / "code-style.hwpx"
+def _template_with_header(tmp_path, name: str, change):
+    """The bundled template saved as *name*, its header.xml as *change* (text to text) makes it."""
+    path = tmp_path / name
     with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
         for item in src.infolist():
             data = src.read(item)
             if item.filename == "Contents/header.xml":
-                data = data.replace('name="표내부"'.encode(), 'name="코드블록"'.encode())
+                data = change(data.decode("utf-8")).encode("utf-8")
             dst.writestr(item, data)
     return path
+
+
+def _template_renaming(tmp_path, names: dict[str, str], name: str = "renamed.hwpx"):
+    """The bundled template with its styles renamed: *names* maps each old name to its new one."""
+    def change(header: str) -> str:
+        for old, new in names.items():
+            header = header.replace(f'name="{old}"', f'name="{new}"')
+        return header
+
+    return _template_with_header(tmp_path, name, change)
+
+
+def _template_with_code_style(tmp_path):
+    """The bundled template with its 표내부 style (한컴돋움 12pt, 160%) renamed 코드블록."""
+    return _template_renaming(tmp_path, {"표내부": "코드블록"}, "code-style.hwpx")
 
 
 def _template_without_bullet_styles(tmp_path):
     """The bundled template with its 글머리표 styles renamed, as a template that has none: lists then take
     python-hwpx's bullets in the 본문 style."""
-    path = tmp_path / "no-bullet-styles.hwpx"
-    with zipfile.ZipFile(TEMPLATE) as src, zipfile.ZipFile(path, "w") as dst:
-        for item in src.infolist():
-            data = src.read(item)
-            if item.filename == "Contents/header.xml":
-                data = data.replace('name="글머리표 '.encode(), 'name="옛 글머리표 '.encode())
-            dst.writestr(item, data)
-    return path
+    return _template_with_header(
+        tmp_path, "no-bullet-styles.hwpx", lambda header: header.replace('name="글머리표 ', 'name="옛 글머리표 ')
+    )
