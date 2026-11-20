@@ -13,6 +13,7 @@ services:
         required: false
     # 요청마다 만드는 임시 폴더(올린 파일·zip·git 저장소)가 메모리에만 있게 한다.
     # 변환 중에 프로세스가 강제로 끝나도, 컨테이너가 다시 시작되면 남지 않는다.
+    # 1GB 까지: 올린 파일과 받은 git 저장소가 그보다 크면 그 요청만 실패한다. 적지 않으면 호스트 메모리의 절반까지 쓴다.
     tmpfs:
-      - /tmp
+      - /tmp:size=1g
     restart: unless-stopped

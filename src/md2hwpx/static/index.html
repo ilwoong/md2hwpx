@@ -252,12 +252,6 @@ python3 md2hwpx-remote.py docs/guide.md -t my-template.hwpx --chapter-start 2</p
     fieldError.remove();
   }
 
-  function filename(response) {
-    const header = response.headers.get("Content-Disposition") || "";
-    const match = header.match(/filename\*=UTF-8''([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : "document.hwpx";
-  }
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const source = form.source.value;
@@ -290,18 +284,19 @@ python3 md2hwpx-remote.py docs/guide.md -t my-template.hwpx --chapter-start 2</p
         const detail = typeof body.detail === "string" ? body.detail : `변환하지 못했습니다 (HTTP ${response.status}).`;
         throw Object.assign(new Error(detail), { field: form.elements[response.headers.get("X-Md2hwpx-Field")] });
       }
-      const blob = await response.blob();
+      // The answer holds the file in base64, with its name and the warnings (web.py: convert).
+      const result = await response.json();
+      const blob = await (await fetch(`data:application/hwp+zip;base64,${result.hwpx}`)).blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = filename(response);
+      link.download = result.filename;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 60000);  // after the download has started
       status.textContent = `${link.download} 을 내려받았습니다.`;
-      const warnings = response.headers.get("X-Md2hwpx-Warnings");
-      if (warnings) {
+      if (result.warnings.length) {
         const list = document.createElement("div");
         list.className = "warning";
-        list.textContent = `경고:\n${decodeURIComponent(warnings)}`;
+        list.textContent = `경고:\n${result.warnings.join("\n")}`;
         status.append(list);
       }
     } catch (error) {

@@ -363,3 +363,12 @@ def test_length_of_a_size_too_small_to_round_is_kept():
     assert length("0.001%", 40000) == 1
     assert length("30mm", 40000) == round(30 * 7200 / 25.4)
     assert [length(v, 40000) for v in (None, "0mm", "0%", "50px", "50", "mm")] == [None] * 6
+
+
+def test_only_images_that_go_in_as_pictures_are_checked(tmp_path):
+    # In a heading, table cell, link, emphasis or footnote an image gives its alt text: no placeholder to warn of.
+    markdown = (
+        "# 제목 ![a](h.png)\n\n| a |\n|---|\n| ![b](cell.png) |\n\n[![c](link.png)](https://example.com)\n\n"
+        "**![d](bold.png)** 글[^1]\n\n![e](own.png)\n\n[^1]: 각주 ![f](note.png)\n"
+    )
+    assert unusable_images(markdown, tmp_path) == [(11, tmp_path / "own.png", "이미지 파일이 없어")]

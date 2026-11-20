@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from md2hwpx.parser import PARSER
+from md2hwpx.parser import PARSER, source_lines
 
 LANGS = ("mermaid", "plantuml")
 DIAGRAM_TIMEOUT = 60  # seconds for one diagram
@@ -33,7 +33,7 @@ class DiagramBlock:
 def find_diagram_blocks(markdown: str) -> list[DiagramBlock]:
     """The closed mermaid / plantuml fenced code blocks, found as CommonMark reads them,
     so also inside list items and block quotes."""
-    lines = markdown.splitlines()
+    lines = source_lines(markdown)
     blocks = []
     for token in PARSER.parse(markdown):
         info = token.info.split() if token.type == "fence" else []
@@ -96,7 +96,7 @@ def render_diagrams(markdown: str, out_dir: Path, link_base: Path | None = None)
     if not blocks:
         return markdown
     out_dir.mkdir(parents=True, exist_ok=True)
-    lines = markdown.splitlines(keepends=True)
+    lines = source_lines(markdown, keepends=True)
     for block in reversed(blocks):
         digest = hashlib.sha256(block.code.encode("utf-8")).hexdigest()[:12]
         out_path = out_dir / f"{block.lang}-{digest}.png"

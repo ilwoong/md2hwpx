@@ -144,6 +144,7 @@ convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"
 반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
 이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
 `convert_markdown` 은 글자 그대로 둔 `[@이름]` 참조를 `{이름: 이유}` 로 돌려줍니다.
+파일 여러 개를 문서 하나로 만들 때는 문자열 목록을 넘깁니다: 각주와 링크 정의는 파일마다 따로 읽습니다.
 `read_markdown` 은 front matter 를 지우므로 캡션 번호 방식은 `caption_numbering` 으로 따로 읽어 넘깁니다 (생략하면 `chapter`).
 `DEFAULT_TEMPLATE` 은 내장 템플릿입니다. 다른 템플릿은 그 경로를 넘깁니다.
 파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
@@ -192,7 +193,7 @@ python3 md2hwpx-remote.py docs/chapters/ -o out/                                
   템플릿을 주지 않으면 서비스의 내장 템플릿을 씁니다.
 - 이미지는 디스크에 놓인 폴더 구조대로 보내므로 `images/a.png`, `../shared/a.png` 같은 경로를 그대로 쓸 수 있습니다.
   문서가 쓰지 않는 파일은 보내지 않습니다. 없는 이미지는 서비스가 대체 이미지로 넣고 경고합니다.
-- 스크립트 없이 직접 보내려면 `curl -o guide.hwpx -F source=files -F files=@guide.md -F files=@pic.png http://localhost:8000/convert`
+- 스크립트 없이 직접 보내려면 `curl -s -F source=files -F files=@guide.md -F files=@pic.png http://localhost:8000/convert | jq -r .hwpx | base64 -d > guide.hwpx`
   처럼 `POST /convert` 를 씁니다 (필드는 [웹 서비스 스펙](spec/web-service.md) 의 "API").
 
 #### GitLab·Gitea 로그인 설정

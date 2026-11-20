@@ -14,6 +14,7 @@ http://localhost:8000, or MD2HWPX_SERVER, or --server.
 from __future__ import annotations
 
 import argparse
+import base64
 import io
 import json
 import os
@@ -162,8 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     request = urllib.request.Request(args.server.rstrip("/") + "/convert", data=body, headers={"Content-Type": content_type})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-            data = response.read()
-            warnings = unquote(response.headers.get("X-Md2hwpx-Warnings", ""))
+            result = json.load(response)  # the file in base64 and the warnings
     except urllib.error.HTTPError as error:
         try:
             detail = json.load(error)["detail"]
@@ -175,8 +175,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"md2hwpx-remote: 웹 서비스에 연결하지 못했습니다 ({args.server}): {error}", file=sys.stderr)
         return 1
     output = output_path(args.input, args.output)
-    output.write_bytes(data)
-    for warning in filter(None, warnings.split("\n")):
+    output.write_bytes(base64.b64decode(result["hwpx"]))
+    for warning in result["warnings"]:
         print(f"md2hwpx-remote: 경고: {warning}", file=sys.stderr)
     print(output)
     return 0

@@ -22,6 +22,8 @@ from fastapi.responses import RedirectResponse
 
 COOKIE = "md2hwpx_session"
 SESSION_TTL = 12 * 60 * 60  # seconds a session lasts unused
+LOGIN_TTL = 10 * 60  # seconds it lasts unused while it holds no token: a sign-in under way, or never finished
+MAX_SESSIONS = 10_000  # kept at once: past it, the one unused longest goes, and that user signs in again
 TOKEN_TIMEOUT = 30  # seconds for the token request
 
 
@@ -99,8 +101,12 @@ def _session(request: Request) -> _Session | None:
 
 def _new_session(response: Response) -> _Session:
     now = time.time()
-    for sid in [sid for sid, session in _sessions.items() if now - session.used > SESSION_TTL]:
-        del _sessions[sid]
+    for sid, session in list(_sessions.items()):
+        if now - session.used > (SESSION_TTL if session.tokens else LOGIN_TTL):
+            del _sessions[sid]
+    # Anyone can start a sign-in, and each start is a session: they do not add up without end.
+    while len(_sessions) >= MAX_SESSIONS:
+        del _sessions[min(_sessions, key=lambda sid: _sessions[sid].used)]
     sid = secrets.token_urlsafe(32)
     _sessions[sid] = session = _Session(now)
     response.set_cookie(COOKIE, sid, httponly=True, samesite="lax", secure=base_url().startswith("https://"))

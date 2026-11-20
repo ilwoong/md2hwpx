@@ -11,12 +11,17 @@ from urllib.parse import unquote
 from markdown_it.tree import SyntaxTreeNode
 
 from md2hwpx.images import ImageError, picture_data
-from md2hwpx.parser import COLUMN_PROBLEMS, PARSER, custom_style
+from md2hwpx.parser import COLUMN_PROBLEMS, PARSER, custom_style, source_lines
 from md2hwpx.pieces import REFERENCE, marker_lines, marker_typo_lines
 from md2hwpx.toc import toc_request
 
-# YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line.
-_FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
+# YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line. The line after the
+# first is a "key:" line, or the closing one: a document that opens with a thematic break is not front matter.
+_FRONT_MATTER = re.compile(
+    r"\A\ufeff?---[ \t]*\r?\n(?=[^\W\d][\w.-]*[ \t]*:(?:[ \t]|\r?$)|(?:---|\.\.\.)[ \t]*\r?$)"
+    r".*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
 # The front matter key that says how captions are numbered (see caption_numbering), and its values.
 CAPTION_NUMBERING = "caption-numbering"
 CAPTION_NUMBERINGS = ("chapter", "document")
@@ -57,14 +62,16 @@ def _nodes(markdown: str) -> Iterable[SyntaxTreeNode]:
 
 
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
-    """(line number, path) of each image outside code blocks, its path taken from *base_dir*."""
+    """(line number, path) of each image that goes in as a picture, its path taken from *base_dir*: a
+    paragraph's own images (see pieces.paragraph_pieces). One in a heading, table cell, footnote, link or
+    emphasis gives only its alt text, and its file is not read."""
     markdown = _blank_front_matter(markdown)
-    lines = markdown.splitlines()
+    lines = source_lines(markdown)
     images: list[tuple[int, Path]] = []
     for node in _nodes(markdown):
-        if node.type != "inline" or node.map is None:
+        if node.type != "paragraph" or _in_footnote(node):
             continue
-        for image in (n for n in _walk(node) if n.type == "image"):
+        for image in (n for n in node.children[0].children if n.type == "image"):
             src = image.attrs["src"]
             # The line of the paragraph that names the image.
             start, end = node.map
@@ -77,7 +84,7 @@ def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
 def references(markdown: str) -> list[tuple[int, str]]:
     """(line number, name) of each "[@name]" reference outside code, as the conversion finds them."""
     markdown = _blank_front_matter(markdown)
-    lines = markdown.splitlines()
+    lines = source_lines(markdown)
     found = []
     for node in _nodes(markdown):
         if node.type != "inline":
@@ -141,7 +148,7 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]:
     """(line number, what with its particle) of each block in a footnote that is not a paragraph, and each
     footnote reference in a footnote: the footnote goes in without them."""
     markdown = _blank_front_matter(markdown)
-    lines = markdown.splitlines()
+    lines = source_lines(markdown)
     found = []
     for note in (n for n in _nodes(markdown) if n.type == "footnote"):
         for block in note.children:
@@ -209,14 +216,22 @@ def marker_problems(markdown: str) -> list[tuple[int, str, str]]:
     return sorted((line + 1, marker, why) for line, marker, why in env.get("marker_problems", []))
 
 
+def read_text(md_path: Path) -> str:
+    """The text of *md_path*. Raises ConversionError if it is not UTF-8 (a file saved as CP949, say)."""
+    try:
+        return md_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise ConversionError(f"{md_path}: UTF-8 로 저장한 파일이 아닙니다") from None
+
+
 def read_markdown(md_path: Path) -> str:
     """Read *md_path* (UTF-8) without its front matter, which is metadata, not document content."""
-    return _FRONT_MATTER.sub("", md_path.read_text(encoding="utf-8"), count=1)
+    return _FRONT_MATTER.sub("", read_text(md_path), count=1)
 
 
 def is_draft(md_path: Path) -> bool:
     """Whether *md_path*'s front matter says "draft: true": a file left out of the conversion unless asked for."""
-    front = _FRONT_MATTER.match(md_path.read_text(encoding="utf-8"))
+    front = _FRONT_MATTER.match(read_text(md_path))
     return bool(front and _DRAFT.search(front[0]))
 
 
@@ -229,7 +244,7 @@ def caption_numbering(md_paths: Iterable[Path]) -> str:
     """
     said: dict[str, Path] = {}  # value -> the first file that says it
     for path in md_paths:
-        front = _FRONT_MATTER.match(path.read_text(encoding="utf-8"))
+        front = _FRONT_MATTER.match(read_text(path))
         match = _CAPTION_NUMBERING.search(front[0]) if front else None
         if match is None:
             continue

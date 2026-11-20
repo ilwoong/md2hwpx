@@ -131,12 +131,13 @@ def convert_input(
     files = input_files(input_path, include_draft, patterns)
     numbering = caption_numbering(files)
     styles = paragraph_styles(template)
-    # A blank line between files keeps the last block of one file from running into the next.
-    markdown = "\n\n".join(read_markdown(f) for f in files)
+    # Each file is converted as a text of its own (see convert_markdown): what the warnings find in a file is
+    # what the conversion reads in it.
+    markdowns = [read_markdown(f) for f in files]
     # Diagram PNGs are embedded in the HWPX, so they only need to live until it is saved.
     with tempfile.TemporaryDirectory() as image_dir:
-        markdown = render_diagrams(markdown, out_dir=Path(image_dir), link_base=base_dir)
-        unresolved = convert_markdown(markdown, base_dir, template, output, numbering, chapter_start)
+        markdowns = [render_diagrams(text, out_dir=Path(image_dir), link_base=base_dir) for text in markdowns]
+        unresolved = convert_markdown(markdowns, base_dir, template, output, numbering, chapter_start)
     return [w for f in files for w in _warnings(f, styles, unresolved)]
 
 

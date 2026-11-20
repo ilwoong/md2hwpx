@@ -148,3 +148,10 @@ def test_render_times_out_and_ends_what_the_tool_started(tmp_path, monkeypatch):
         time.sleep(0.05)
     assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
     assert not (tmp_path / "out.png").exists()
+
+
+@pytest.mark.parametrize("char", ["\u2028", "\x0c", "\x85"])
+def test_find_blocks_after_a_character_only_python_ends_a_line_at(char):
+    # markdown-it counts lines by "\n" alone: the block's lines are read as it counts them.
+    md = f"앞{char}뒤\n\n```mermaid\ngraph TD\n```\n"
+    assert [(b.start, b.end) for b in find_diagram_blocks(md)] == [(2, 4)]

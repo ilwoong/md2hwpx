@@ -47,6 +47,14 @@ _LENGTH = re.compile(r"(\d+(?:\.\d+)?)(%|mm)")
 _MARKER_ARGUMENTS = "인자가 맞지 않아"
 _MARKER_ALONE = "줄에 따로 있지 않아"
 _MARKER_FORM = "'@hwpx 명령' 꼴이 아니어서"
+_LINE = re.compile(r"[^\r\n]*(?:\r\n?|\n)|[^\r\n]+")
+
+
+def source_lines(markdown: str, keepends: bool = False) -> list[str]:
+    """The lines of *markdown* as markdown-it counts them, so a token's map indexes them: str.splitlines also
+    ends a line at a form feed, U+2028 and the like, which markdown-it does not."""
+    lines = _LINE.findall(markdown)
+    return lines if keepends else [line.rstrip("\r\n") for line in lines]
 
 
 def _image_attributes(state: StateInline, silent: bool) -> bool:
