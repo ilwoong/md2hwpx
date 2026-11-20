@@ -10,7 +10,7 @@ import pytest
 from hwpx import HwpxDocument
 from PIL import Image
 
-from helpers import BODY_HEIGHT, BODY_LEFT, BODY_WIDTH, HP, _paragraph_info, _png, _text
+from helpers import BODY_HEIGHT, BODY_LEFT, BODY_WIDTH, HP, _paragraph_info, _png, _template_without_bullet_styles, _text
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import MISSING_IMAGE, convert
 from md2hwpx.images import length
@@ -348,7 +348,7 @@ def test_convert_indented_picture_fits_the_body(tmp_path):
     md.write_text("- 항목\n\n  ![](wide.png)\n\n> ![](half.png){width=50%}\n", encoding="utf-8")
     out = tmp_path / "indented.hwpx"
 
-    convert(md, TEMPLATE, out)
+    convert(md, _template_without_bullet_styles(tmp_path), out)
 
     doc = HwpxDocument.open(out)
     pictures = [(p, pic) for p in doc.paragraphs for pic in p.element.iter(f"{HP}pic")]
@@ -363,3 +363,12 @@ def test_length_of_a_size_too_small_to_round_is_kept():
     assert length("0.001%", 40000) == 1
     assert length("30mm", 40000) == round(30 * 7200 / 25.4)
     assert [length(v, 40000) for v in (None, "0mm", "0%", "50px", "50", "mm")] == [None] * 6
+
+
+def test_only_images_that_go_in_as_pictures_are_checked(tmp_path):
+    # In a heading, table cell, link, emphasis or footnote an image gives its alt text: no placeholder to warn of.
+    markdown = (
+        "# 제목 ![a](h.png)\n\n| a |\n|---|\n| ![b](cell.png) |\n\n[![c](link.png)](https://example.com)\n\n"
+        "**![d](bold.png)** 글[^1]\n\n![e](own.png)\n\n[^1]: 각주 ![f](note.png)\n"
+    )
+    assert unusable_images(markdown, tmp_path) == [(11, tmp_path / "own.png", "이미지 파일이 없어")]

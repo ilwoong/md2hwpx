@@ -1,16 +1,16 @@
+import base64
 import io
 import os
 import struct
 import zipfile
 import zlib
 from pathlib import Path
-from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
 from hwpx import HwpxDocument
 
-from helpers import _text
+from helpers import HP, _text
 from md2hwpx import web
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 
@@ -40,12 +40,12 @@ def _zip(entries: dict[str, bytes]) -> bytes:
 def _hwpx(response, tmp_path: Path) -> HwpxDocument:
     assert response.status_code == 200, response.text
     out = tmp_path / "out.hwpx"
-    out.write_bytes(response.content)
+    out.write_bytes(base64.b64decode(response.json()["hwpx"]))
     return HwpxDocument.open(out)
 
 
 def _filename(response) -> str:
-    return unquote(response.headers["content-disposition"].split("filename*=UTF-8''")[1])
+    return response.json()["filename"]
 
 
 def _error(response, status: int = 400) -> str:
@@ -67,12 +67,12 @@ def test_files_with_image(tmp_path):
     ]
     response = client.post("/convert", data={"source": "files"}, files=files)
 
-    assert response.headers["content-type"] == "application/hwp+zip"
+    assert response.headers["content-type"] == "application/json"
     assert _filename(response) == "보고서.hwpx"
     doc = _hwpx(response, tmp_path)
     assert [p.text for p in doc.paragraphs if p.text][:2] == ["제목", "본문"]
     assert len(doc.media.picture_references()) == 1
-    assert "x-md2hwpx-warnings" not in response.headers
+    assert response.json()["warnings"] == []
 
 
 def test_files_missing_image_is_a_placeholder_and_a_warning(tmp_path):
@@ -81,8 +81,8 @@ def test_files_missing_image_is_a_placeholder_and_a_warning(tmp_path):
 
     doc = _hwpx(response, tmp_path)
     assert len(doc.media.picture_references()) == 2
-    # Named from the upload's root, one per line, URL-encoded as a header holds Latin-1 only.
-    assert unquote(response.headers["x-md2hwpx-warnings"]).splitlines() == [
+    # Named from the upload's root.
+    assert response.json()["warnings"] == [
         "doc.md:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: missing.png",
         "doc.md:5: 이미지 파일이 없어 대체 이미지를 넣었습니다: img/gone.png",
     ]
@@ -93,7 +93,7 @@ def test_unknown_style_is_a_warning(tmp_path):
     response = client.post("/convert", data={"source": "files"}, files=files)
 
     _hwpx(response, tmp_path)
-    assert unquote(response.headers["x-md2hwpx-warnings"]).splitlines() == [
+    assert response.json()["warnings"] == [
         "doc.md:1: 템플릿에 '없는 스타일' 문단 스타일이 없어 본문 스타일로 넣었습니다",
     ]
 
@@ -440,3 +440,41 @@ def test_upload_over_the_limit_names_its_field(monkeypatch):
 
 def test_unknown_source():
     assert _error(client.post("/convert", data={"source": "ftp"})) == "알 수 없는 입력 방식입니다: ftp"
+
+
+def test_file_that_is_not_utf8_is_refused():
+    files = [("files", ("doc.md", "# 제목\n".encode("cp949"), "text/markdown"))]
+    detail = _error(client.post("/convert", data={"source": "files"}, files=files))
+    assert detail == "doc.md: UTF-8 로 저장한 파일이 아닙니다"
+
+
+def test_image_outside_the_upload_that_is_only_alt_text_is_not_read():
+    # A table cell's image gives its alt text: its file is not read, so it is not refused.
+    files = [("files", ("doc.md", "| a |\n|---|\n| ![alt](../secret.png) |\n".encode(), "text/markdown"))]
+    assert client.post("/convert", data={"source": "files"}, files=files).status_code == 200
+
+
+def test_many_warnings_all_come_back(tmp_path):
+    # More than a header would hold (a proxy takes a few kilobytes of it).
+    markdown = "".join(f"![](없는-그림-{k}.png)\n\n" for k in range(300))
+    files = [("files", ("doc.md", markdown.encode(), "text/markdown"))]
+    response = client.post("/convert", data={"source": "files"}, files=files)
+
+    _hwpx(response, tmp_path)
+    warnings = response.json()["warnings"]
+    assert len(warnings) == 300 and warnings[-1] == "doc.md:599: 이미지 파일이 없어 대체 이미지를 넣었습니다: 없는-그림-299.png"
+    assert all(len(value) < 200 for value in response.headers.values())
+
+
+def test_each_file_has_its_own_footnotes_and_link_definitions(tmp_path):
+    archive = _zip({
+        "1.md": "하나[^1]\n\n![][pic]\n\n[^1]: 첫 파일의 각주\n".encode(),
+        "2.md": "둘[^1]\n\n[^1]: 둘째 파일의 각주\n\n[pic]: ../secret.png\n".encode(),
+    })
+    response = client.post("/convert", data={"source": "zip"}, files={"archive": ("x.zip", archive)})
+
+    doc = _hwpx(response, tmp_path)
+    notes = [_text(note) for p in doc.paragraphs for note in p.element.iter(f"{HP}footNote")]
+    assert notes == ["1첫 파일의 각주", "2둘째 파일의 각주"]  # each with its number
+    # 2.md's definition names no image of 1.md: nothing outside the upload is read.
+    assert len(doc.media.picture_references()) == 0

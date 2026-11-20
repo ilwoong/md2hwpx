@@ -406,3 +406,38 @@ def test_cli_warns_about_marker_lines_going_away(tmp_path, monkeypatch, capsys):
     ]
     text = _text(HwpxDocument.open(tmp_path / "doc.hwpx").sections[-1].element)
     assert "[새 번호 쪽 표]" not in text and "이 면은 여백" in text
+
+
+def test_cli_reports_a_file_that_is_not_utf8(tmp_path, capsys):
+    md = tmp_path / "doc.md"
+    md.write_bytes("# 제목\n".encode("cp949"))
+
+    assert main([str(md), "-t", str(TEMPLATE), "-o", str(tmp_path / "doc.hwpx")]) == 1
+
+    assert capsys.readouterr().err == f"md2hwpx: {md}: UTF-8 로 저장한 파일이 아닙니다\n"
+    assert not (tmp_path / "doc.hwpx").exists()
+
+
+def test_cli_folder_input_reads_each_file_on_its_own(tmp_path, monkeypatch):
+    folder = tmp_path / "chapters"
+    folder.mkdir()
+    # An unclosed code block ends with its file, and a caption name is known in the next.
+    (folder / "1.md").write_text("# 하나\n\n[표 #첫표] 표\n\n| a |\n|---|\n| 1 |\n\n```\n코드\n", encoding="utf-8")
+    (folder / "2.md").write_text("# 둘\n\n[@첫표] 참고\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main([str(folder), "-t", str(TEMPLATE)]) == 0
+
+    texts = [p.text for p in HwpxDocument.open(tmp_path / "chapters.hwpx").paragraphs[1:] if p.text]
+    assert texts[0] == "하나" and texts[-2:] == ["둘", "표 1-1 참고"]
+
+
+@pytest.mark.parametrize("start, kept", [("---\n\n머리말\n\n---\n", "머리말"), ("---\n# 제목\n---\n", "제목")])
+def test_cli_document_that_opens_with_a_rule_keeps_its_text(tmp_path, start, kept):
+    # Not front matter: the line after the first "---" is no "key:" line.
+    md = tmp_path / "doc.md"
+    md.write_text(f"{start}\n본문\n", encoding="utf-8")
+
+    assert main([str(md), "-t", str(TEMPLATE), "-o", str(tmp_path / "doc.hwpx")]) == 0
+
+    assert [p.text for p in HwpxDocument.open(tmp_path / "doc.hwpx").paragraphs if p.text] == [kept, "본문"]

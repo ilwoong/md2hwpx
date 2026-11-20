@@ -175,6 +175,30 @@ def test_sessions_are_per_browser(client, monkeypatch):
     assert "GIT_CONFIG_VALUE_0" not in runs[0][1]
 
 
+def test_sign_ins_never_finished_do_not_add_up(client, monkeypatch):
+    _sign_in(client, monkeypatch)
+    signed_in = next(iter(oauth._sessions))
+    now = oauth.time.time()
+    for _ in range(3):
+        TestClient(web.app).get("/login/gitlab", follow_redirects=False)  # another browser, which never comes back
+    assert len(oauth._sessions) == 4
+
+    # Ten minutes on, a session that holds no token is gone at the next sign-in started; the user's stays.
+    monkeypatch.setattr(oauth.time, "time", lambda: now + oauth.LOGIN_TTL + 1)
+    TestClient(web.app).get("/login/gitlab", follow_redirects=False)
+    assert len(oauth._sessions) == 2 and signed_in in oauth._sessions
+
+
+def test_sessions_are_kept_up_to_a_number(client, monkeypatch):
+    monkeypatch.setattr(oauth, "MAX_SESSIONS", 3)
+    now = oauth.time.time()
+    for k in range(5):
+        monkeypatch.setattr(oauth.time, "time", lambda k=k: now + k)
+        TestClient(web.app).get("/login/gitlab", follow_redirects=False)
+    # The ones unused longest went.
+    assert sorted(session.used for session in oauth._sessions.values()) == [now + 2, now + 3, now + 4]
+
+
 @pytest.fixture
 def token_server():
     """A token endpoint on localhost: answers with the JSON put in .answer, and keeps the form it got."""

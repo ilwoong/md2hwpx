@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -40,10 +40,13 @@ PLAIN_STYLE = "바탕글"
 CAPTION_STYLE = "표그림 제목"
 CODE_STYLE = "코드블록"  # optional: without it, code blocks use CODE_FONT, CODE_SIZE and CODE_LINE_SPACING
 HEADER_STYLE = "표 헤더"  # optional: without it, a table's header row is in PLAIN_STYLE like the other rows
+# optional, .format(level) from 1: without "글머리표 1" (one with a bullet), bullet items are BODY_STYLE with
+# python-hwpx's bullets
+BULLET_STYLE = "글머리표 {}"
 HEADER_FILL = "#D9D9D9"
 TABLE_BORDER = {"border_color": "#000000", "border_width": "0.12 mm"}  # the template's table border
 TABLE_SIDES = ["LEFT", "RIGHT", "TOP", "BOTTOM"]
-LIST_MAX_LEVEL = 3  # deeper items are kept at this level
+LIST_MAX_LEVEL = 3  # deeper items are kept at this level (with 글머리표 styles: at the last of them)
 LIST_INDENT = 1000  # HWPUNIT added to the left margin per list level, as the template's 개요 styles step
 QUOTE_INDENT = 1000  # HWPUNIT added to the left margin per quote depth
 QUOTE_BAR = {"border_color": "#A6A6A6", "border_width": "0.7 mm"}  # left bar of a quote
@@ -163,7 +166,7 @@ def _paragraph_styles(doc: HwpxDocument) -> dict[str, Style]:
 class _Writer:
     """Writes the block tree of a Markdown document into an HWPX document."""
 
-    def __init__(self, doc: HwpxDocument, base_dir: Path, root: SyntaxTreeNode, by_chapter: bool, chapter_start: int = 1):
+    def __init__(self, doc: HwpxDocument, base_dir: Path, by_chapter: bool, chapter_start: int = 1):
         self.doc = doc
         self.base_dir = base_dir
         self.by_chapter = by_chapter  # captions are numbered within each chapter, else through the document
@@ -197,6 +200,15 @@ class _Writer:
         # A table's header row takes the template's 표 헤더 style if it has one, its rows that line height.
         self.header_style = self.paragraph_styles.get(HEADER_STYLE, self.plain_style)
         self.header_line_height = _line_metrics(doc, self.header_style)[1]
+        # Bullet items take the template's 글머리표 1, 글머리표 2, ... styles, as many as it has in a row from 1,
+        # each with the left margin its paragraph shape gives (none: 0). One whose shape has no bullet is some
+        # other style of that name: it and those after it are not used.
+        self.bullet_styles: list[tuple[Style, int]] = []
+        while style := self.paragraph_styles.get(BULLET_STYLE.format(len(self.bullet_styles) + 1)):
+            shape = doc.styles.paragraph_property(style.para_pr_id_ref)
+            if shape.heading.type != "BULLET":
+                break
+            self.bullet_styles.append((style, int(shape.margin.left or 0)))
         # The 표그림 제목 size and line height: a picture leaves room below it for its caption's lines.
         self.caption_size, self.caption_line_height = _line_metrics(doc, self.caption_style)
         # The page body a 본문 paragraph can fill.
@@ -212,10 +224,7 @@ class _Writer:
         self._list_headings: dict[tuple, dict] = {}  # (bullet level) / (numbering, level) -> hh:heading
         self._section = doc.sections[-1]  # where new paragraphs go
         self._paragraphs_before = len(doc.paragraphs) - len(self._section.element.findall(_HP_P))
-        # Footnote definitions by id, from the block the footnote plugin puts at the end.
-        self.notes = {
-            note.meta["id"]: note for block in root.children if block.type == "footnote_block" for note in block.children
-        }
+        self.notes: dict[int, SyntaxTreeNode] = {}  # footnote definitions by id, of the Markdown being written
         self.caption: _Caption | None = None  # for the next table, code block or picture
         # Caption numbers count within the chapter: "표 2-1" is the first table of the second level 1 heading.
         self.chapter = 0  # the level 1 heading being written, 0 before the first one
@@ -486,38 +495,39 @@ class _Writer:
         self.write_runs(heading, runs)
 
     def blocks(self, nodes: list[SyntaxTreeNode], quote: int = 0, indent: int = 0, level: int = 0,
-               numbering: str | None = None) -> None:
-        """Write *nodes*, inside *quote* quotes and *level* list items placed at *indent*.
+               numbering: str | None = None, lists_at: int | None = None) -> None:
+        """Write *nodes* at *indent*, inside *quote* quotes and *level* list items.
 
-        *numbering* is the numbering id of the numbered list item holding them, if any.
+        *numbering* is the numbering id of the numbered list item holding them, if any. A list among them
+        starts at *lists_at*: *indent*, but in an item as deep as lists go, where that item is.
         """
-        content = indent + min(level, LIST_MAX_LEVEL) * LIST_INDENT
+        lists_at = indent if lists_at is None else lists_at
         for k, node in enumerate(nodes):
             following = nodes[k + 1] if k + 1 < len(nodes) else None
             if node.type == "heading":
                 self.heading(node)
             elif node.type == "paragraph":
-                self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, content)
+                self.pieces(paragraph_pieces(node.children[0]), block_kind(following), quote, indent)
             elif node.type == "hwpx_marker":
                 # A comment marker does what the marker line it stands for does (see parser._read_marker).
-                self.pieces([Piece(node.meta["marker"], text=node.meta["words"])], None, quote, content)
+                self.pieces([Piece(node.meta["marker"], text=node.meta["words"])], None, quote, indent)
             elif node.type in ("fence", "code_block"):
                 lang = node.info.split()[0] if node.info.strip() else ""
-                self.code_block(node.content.split("\n")[:-1], lang, quote, content)
+                self.code_block(node.content.split("\n")[:-1], lang, quote, indent)
             elif node.type == "table":
-                self.table(node, quote, content)
+                self.table(node, quote, indent)
             elif node.type == "hr":
-                self.rule(quote, content)
+                self.rule(quote, indent)
             elif node.type in ("bullet_list", "ordered_list"):
-                self.list_items(node, quote, indent, level + 1, numbering)
+                self.list_items(node, quote, lists_at, level + 1, numbering)
             elif node.type == "blockquote":
-                self.blocks(node.children, quote + 1, indent, level)
+                self.blocks(node.children, quote + 1, indent, level, lists_at=lists_at)
             elif node.type == "container_div":
                 # Its text paragraphs take the style it names; one the template lacks leaves them 본문
                 # (the caller warns about it, see unknown_styles). Inside another div, this one's style wins.
                 outer = self.text_style
                 self.text_style = self.paragraph_styles.get(custom_style(node.info), self.body_style)
-                self.blocks(node.children, quote, indent, level, numbering)
+                self.blocks(node.children, quote, indent, level, numbering, lists_at)
                 self.text_style = outer
 
     def pieces(self, pieces: list[Piece], following: str | None, quote: int, indent: int) -> None:
@@ -717,12 +727,31 @@ class _Writer:
         self.place(paragraph, quote, indent, bar=False)
 
     def list_items(self, node: SyntaxTreeNode, quote: int, indent: int, level: int, numbering: str | None) -> None:
-        """Each item's first paragraph gets the bullet or number; its other blocks follow, indented.
+        """Each item's first paragraph gets the bullet or number, at *indent*: where the item holding the
+        list has its other blocks (0 outside a list). Its own other blocks follow, a step further in.
 
         A numbered list starts its own numbering, or numbers on within the *numbering* of the
         numbered item holding it (Hancom numbers sub-levels within one definition).
+
+        A bullet item is in the template's 글머리표 style of its level, if the template has them: the bullet
+        is that style's. A list in no other starts at the first style's margin, and a step is from one
+        style's margin to the next's, so bullets in bullets are each at their style's own margin. Levels
+        deeper than the styles go take the last one, and lists of any kind stay where that level is: without
+        the styles, LIST_MAX_LEVEL is as deep as they go.
         """
-        list_level = min(level, LIST_MAX_LEVEL)
+        styles = self.bullet_styles
+        deepest = len(styles) or LIST_MAX_LEVEL
+        list_level = min(level, LIST_MAX_LEVEL)  # of python-hwpx's bullets and of the numbers
+        position, step = indent, LIST_INDENT
+        style: Style | None = None
+        if node.type == "bullet_list" and styles:
+            at = min(level, len(styles)) - 1
+            style, left = styles[at]
+            if level == 1:
+                position = left - self.body_left
+            if at + 1 < len(styles):
+                step = styles[at + 1][1] - left
+        content = position + step
         start = int(node.attrs.get("start", 1))
         own: str | None = None  # this list's numbering id
         for k, item in enumerate(node.children):
@@ -733,16 +762,24 @@ class _Writer:
             if item_blocks and item_blocks[0].type == "paragraph":
                 rest = paragraph_pieces(item_blocks.pop(0).children[0])
             first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
-            paragraph = self.doc.add_paragraph(plain_text(first), style=self.body_style)
+            paragraph = self.doc.add_paragraph(plain_text(first), style=style or self.body_style)
             self.write_runs(paragraph, first)
-            if node.type == "bullet_list":
-                self.list_format(paragraph, "bullet", list_level)
+            if style is not None:
+                # At its style's own margin the paragraph keeps the style's shape as it is.
+                if quote or self.body_left + position != left:
+                    self.place(paragraph, quote, position)
             else:
-                own = self.list_format(paragraph, "number", list_level, own if k else numbering, start)
-            self.place(paragraph, quote, indent + (list_level - 1) * LIST_INDENT)
+                if node.type == "bullet_list":
+                    self.list_format(paragraph, "bullet", list_level)
+                else:
+                    own = self.list_format(paragraph, "number", list_level, own if k else numbering, start)
+                self.place(paragraph, quote, position)
             following = block_kind(item_blocks[0] if item_blocks else None)
-            self.pieces(rest, following, quote, indent + list_level * LIST_INDENT)
-            self.blocks(item_blocks, quote, indent, level, own if node.type == "ordered_list" else None)
+            self.pieces(rest, following, quote, content)
+            self.blocks(
+                item_blocks, quote, content, level, own if node.type == "ordered_list" else None,
+                lists_at=content if level < deepest else position,
+            )
 
     def list_format(self, paragraph, kind: str, level: int, numbering: str | None = None, start: int = 1) -> str:
         """Give *paragraph*, the last one, a bullet or a number at *level* and return the numbering id.
@@ -776,6 +813,14 @@ class _Writer:
         return id_ref
 
     # --- document ---------------------------------------------------------------------------
+
+    def markdown(self, root: SyntaxTreeNode) -> None:
+        """Write the blocks of one Markdown text, *root*. Its footnotes are its own: the definitions come from
+        the block the footnote plugin puts at its end."""
+        self.notes = {
+            note.meta["id"]: note for block in root.children if block.type == "footnote_block" for note in block.children
+        }
+        self.blocks(root.children)
 
     def number(self, name: str) -> str:
         """What a "[@name]" reference reads, now that all captions are numbered: the number of the caption
@@ -867,17 +912,21 @@ def convert(md_path: Path, template_path: Path, out_path: Path) -> None:
 
 
 def convert_markdown(
-    markdown: str, base_dir: Path, template_path: Path, out_path: Path, caption_numbering: str = "chapter",
-    chapter_start: int = 1,
+    markdown: str | Sequence[str], base_dir: Path, template_path: Path, out_path: Path,
+    caption_numbering: str = "chapter", chapter_start: int = 1,
 ) -> dict[str, str]:
     """Convert *markdown*, whose image paths are relative to *base_dir*, its captions numbered
     *caption_numbering* (see the function of that name), the first chapter as *chapter_start*. Return the
     "[@name]" references left as they are written, by name: "missing" (no caption is named so) or "duplicate"
-    (two are)."""
+    (two are).
+
+    Several texts (a folder's files) make one document, one after the other. Each is read on its own: its
+    footnotes and link definitions are its own, and no block of it runs on into the next. Chapters, caption
+    numbers and "[@name]" references go across them."""
     doc = HwpxDocument.open(template_path)
-    root = SyntaxTreeNode(PARSER.parse(markdown))
-    writer = _Writer(doc, base_dir, root, by_chapter=caption_numbering == "chapter", chapter_start=chapter_start)
-    writer.blocks(root.children)
+    writer = _Writer(doc, base_dir, by_chapter=caption_numbering == "chapter", chapter_start=chapter_start)
+    for text in [markdown] if isinstance(markdown, str) else markdown:
+        writer.markdown(SyntaxTreeNode(PARSER.parse(text)))
     writer.finish()
 
     report = doc.validate()

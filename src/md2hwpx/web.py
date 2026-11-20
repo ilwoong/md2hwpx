@@ -5,6 +5,7 @@ Run with: uvicorn md2hwpx.web:app
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
@@ -13,16 +14,15 @@ import tempfile
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse
 from hwpx.errors import HwpxError
 
 from md2hwpx import oauth
 from md2hwpx.cli import CONVERSION_ERRORS, NoInputFiles, chapter_number, convert_input, input_files
 from md2hwpx.convert import DEFAULT_TEMPLATE
-from md2hwpx.source import image_paths
+from md2hwpx.source import ConversionError, image_paths, read_text
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 REMOTE = INDEX.with_name("md2hwpx-remote.py")  # the script that sends Markdown here from a command line
@@ -41,7 +41,6 @@ _COMMIT = re.compile(r"[0-9a-fA-F]{40}")
 # as a tag or branch may be named like it ("20261031").
 _SHORT_COMMIT = re.compile(r"[0-9a-fA-F]{4,39}")
 HWPX_TYPE = "application/hwp+zip"
-WARNINGS_HEADER = "X-Md2hwpx-Warnings"  # what the HWPX was made despite, one per line
 FIELD_HEADER = "X-Md2hwpx-Field"  # the form field an error is about, for the page to show the error at it
 
 app = FastAPI(title="md2hwpx")
@@ -221,6 +220,7 @@ def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: l
     unless the patterns or the drafts left none."""
     try:
         files = input_files(input_path, include_draft, patterns)
+        texts = [(md, read_text(md)) for md in files]
     except NoInputFiles as error:
         what = {
             "folder": "변환할 .md 파일이 없습니다",
@@ -228,8 +228,10 @@ def _check_images(input_path: Path, root: Path, include_draft: bool, patterns: l
         }.get(error.reason, error.what)
         field = {"pattern": "include", "draft": "include_draft"}.get(error.reason, chosen)
         raise _error(f"{what}: {_relative(input_path, root) or '/'}", field) from None
-    for md in files:
-        for line, image in image_paths(md.read_text(encoding="utf-8"), md.parent):
+    except ConversionError as error:  # a file that is not UTF-8, named from the upload's root
+        raise HTTPException(400, str(error).replace(f"{root}/", "")) from None
+    for md, text in texts:
+        for line, image in image_paths(text, md.parent):
             if not _inside(image, root):
                 raise HTTPException(400, f"{_relative(md, root)}:{line}: 업로드한 폴더 밖의 이미지는 쓸 수 없습니다")
 
@@ -271,8 +273,10 @@ def convert(
     include_draft: bool = Form(default=False),
     include: str = Form(default=""),
     chapter_start: str = Form(default=""),
-) -> Response:
-    """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back.
+) -> dict:
+    """Convert the uploaded *source* ("files", "zip" or "git") and send the HWPX back: its "filename", the file
+    itself in base64 ("hwpx") and the "warnings", what it was made despite. In the body, not headers: there is
+    no knowing how many warnings a document gives, and a proxy takes only so much header.
 
     A zip or repository leaves out its drafts (see cli.input_files) unless *include_draft*, and converts only the
     files whose names match one of the comma-separated patterns *include*, if any; files uploaded one by one are
@@ -325,10 +329,4 @@ def convert(
             str(w._replace(file=_relative(w.file, root), path=w.path and _relative(w.path.resolve(), root)))
             for w in found
         ]
-    filename = f"{name}.hwpx"
-    disposition = f"attachment; filename=\"document.hwpx\"; filename*=UTF-8''{quote(filename)}"
-    headers = {"Content-Disposition": disposition}
-    if warnings:
-        # A header holds Latin-1 only: the page decodes it (decodeURIComponent).
-        headers[WARNINGS_HEADER] = quote("\n".join(warnings))
-    return Response(data, media_type=HWPX_TYPE, headers=headers)
+    return {"filename": f"{name}.hwpx", "warnings": warnings, "hwpx": base64.b64encode(data).decode("ascii")}

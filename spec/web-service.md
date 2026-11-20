@@ -23,7 +23,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `src/md2hwpx/web.py` | FastAPI 앱 (`md2hwpx.web:app`) |
 | `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
-| `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs |
+| `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs (1GB 까지) |
 | `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 (아래 "명령줄 클라이언트") |
 | `.env.example` | 업로드 크기 제한과 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
@@ -44,7 +44,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - 나머지 입력은 접어 둔 "선택 옵션" 에 있다: 브랜치·태그·커밋(git), 변환할 경로·파일 이름 패턴·draft 파일도 변환(zip·git),
   시작 장 번호, 템플릿 HWPX 바꾸기.
   템플릿 안내에는 필요한 스타일(개요 1~6, 본문, 바탕글, 표그림 제목)과, 있으면 쓰는 `코드블록` 스타일
-  (코드블록 서식, 문장 안 코드 글꼴, 없으면 D2Coding)을 적는다.
+  (코드블록 서식, 문장 안 코드 글꼴, 없으면 D2Coding), `글머리표 1`, `글머리표 2`, … 스타일(글머리표 목록의 단계별 모양)을 적는다.
 - 파일 탭은 고른 파일의 개수와 크기, md 이름(이어 붙이는 순서), 이미지 이름을 보여 준다. 제한을 넘으면 오류 색으로 알린다.
   파일을 다시 고르면 앞의 선택을 바꾼다 (더하지 않는다).
 - 변환하는 동안 지난 시간을 초로 보여 준다. 끝나면 응답 헤더의 파일 이름으로 내려받는다.
@@ -81,14 +81,15 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | `chapter_start` | 캡션의 첫 장 번호, 1 이상의 정수 (선택, 비우면 1). 명령줄 `--chapter-start`. 페이지의 "시작 장 번호" |
 | `include_draft` | `zip`·`git`: `true` 면 front matter 에 `draft: true` 가 있는 파일도 변환 (선택, 기본 `false`). 페이지의 "draft 파일도 변환" |
 
-- 성공: `200`, `Content-Type: application/hwp+zip`,
-  `Content-Disposition: attachment; filename="document.hwpx"; filename*=UTF-8''<이름>.hwpx`.
+- 성공: `200`, `Content-Type: application/json`,
+  `{"filename": "<이름>.hwpx", "warnings": ["<경고>", ...], "hwpx": "<HWPX 파일의 base64>"}`.
   - 넣을 수 없는 이미지(없는 파일, 읽을 수 없는 형식 등)는 대체 이미지로, 템플릿에 없는 스타일의 custom-style div 는 `본문` 으로
-    변환하고, `X-Md2hwpx-Warnings` 헤더에 경고를 한 줄씩 담는다
+    변환하고, `warnings` 에 경고를 하나씩 담는다
     (`docs/a.md:3: 이미지 파일이 없어 대체 이미지를 넣었습니다: img/b.png`,
     `docs/a.md:7: 템플릿에 '요약문' 문단 스타일이 없어 본문 스타일로 넣었습니다`).
-    헤더는 Latin-1 만 담으므로 퍼센트 인코딩하고, 페이지가 풀어서 내려받기 안내 아래에 경고 색으로 보여 준다.
-    경고가 없으면 헤더도 없다.
+    페이지가 내려받기 안내 아래에 경고 색으로 보여 준다. 경고가 없으면 빈 목록이다.
+  - 파일과 경고를 본문에 함께 담는다: 경고는 문서에 따라 수백 개가 될 수 있는데, 헤더는 프록시가 몇 KB 까지만 받는다.
+    페이지와 명령줄 클라이언트가 `hwpx` 를 풀어 `filename` 으로 저장한다.
 - 실패: `400` (업로드 크기 초과는 `413`), `{"detail": "<한국어 메시지>"}`.
   오류가 폼의 한 입력 때문이면 `X-Md2hwpx-Field` 헤더에 그 입력의 이름(`files`, `archive`, `repo`, `ref`, `path`,
   `include`, `include_draft`, `chapter_start`, `template`)을 담고, 페이지는 오류를 그 입력 아래에 보여 준다.
@@ -102,6 +103,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 요청마다 임시 폴더를 만들고, 그 안의 `input/` 을 맨 위 폴더(root)로 삼는다. 응답 후 지운다.
 `compose.yaml` 은 `/tmp` 를 tmpfs 로 마운트해 임시 폴더가 메모리에만 있게 한다: 변환 중 프로세스가 강제로 끝나
 지우지 못한 폴더도 컨테이너가 다시 시작되면 남지 않는다.
+tmpfs 는 1GB 까지다 (`size=1g`): 올린 파일과 받은 git 저장소가 그보다 크면 그 요청만 공간 부족으로 실패한다.
 
 - `files`: 올린 파일을 root 에 나란히 저장한다. 이미지는 파일 이름으로 찾으므로 `![](a.png)` 처럼 써야 한다.
 - `zip`: root 에 압축을 푼다.
@@ -184,7 +186,7 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
   로그인하지 않았으면 인증 없이 받고, 실패하면 오류 메시지에 그 서버에 로그인하라는 안내를 붙인다.
 - 토큰이 만료되면(GitLab 기본 2시간, Gitea 기본 1시간) 로그인하지 않은 것으로 보고 다시 로그인하게 한다. 토큰 갱신(refresh)은 하지 않는다.
 - 세션: 쿠키 `md2hwpx_session`(HttpOnly, SameSite=Lax, 주소가 https 면 Secure)에는 랜덤 세션 id 만 담고,
-  토큰은 서버 프로세스 메모리에 둔다. 12시간 쓰지 않은 세션은 지운다. 서버를 다시 시작하면 모두 다시 로그인한다.
+  토큰은 서버 프로세스 메모리에 둔다. 12시간 쓰지 않은 세션은 지운다. 토큰이 없는 세션(끝내지 않은 로그인)은 10분, 세션은 모두 10,000개까지이며 넘으면 가장 오래 쓰지 않은 것부터 지운다 (지워지면 다시 로그인한다). 프로세스 메모리에 두므로 uvicorn 워커는 하나로 실행한다. 서버를 다시 시작하면 모두 다시 로그인한다.
   메모리에 두므로 uvicorn 워커는 하나여야 한다 (지금 실행 방식).
 - 토큰 요청은 표준 라이브러리 `urllib` 로 보낸다 (의존성 추가 없음).
 
@@ -224,7 +226,7 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
 
 | 항목 | 방법 |
 |------|------|
-| 파일 입력 | md + 이미지 → 그림이 든 HWPX, 한글 파일 이름 헤더, 없는 이미지의 대체 이미지와 경고 헤더(올린 이름 기준), 없는 스타일의 경고 헤더, 경고 없으면 헤더 없음, md 없음 |
+| 파일 입력 | md + 이미지 → 그림이 든 HWPX, 한글 파일 이름, 없는 이미지의 대체 이미지와 경고(올린 이름 기준), 없는 스타일의 경고, 경고 없으면 빈 목록, 경고 300개도 모두 전달, UTF-8 이 아닌 md 거부, 파일마다 따로인 각주·링크 정의, md 없음 |
 | zip 입력 | 폴더 하나를 압축한 zip 의 이름 순 합치기와 하위 폴더 이미지, `.md` 로 끝나는 폴더 제외, `path` 로 파일 고르기, cp949 이름, zip 아님 |
 | git 입력 | clone 명령의 `--branch`, `--`, 프로토콜·심볼릭 링크 설정 (테스트는 `subprocess.run` 을 대신함), `.git` 제거, 커밋 해시의 init·fetch·checkout 명령, 짧은 해시 모양 ref 실패 시 전체 해시 안내 |
 | 보안 | root 밖 이미지 3가지, zip slip, root 밖 `path`, http(s) 아닌 주소 4가지, 옵션 모양의 `ref`, 심볼릭 링크 제거, 업로드 크기 제한 |
