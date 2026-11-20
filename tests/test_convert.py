@@ -531,17 +531,20 @@ def test_unknown_styles_line_numbers_count_comment_lines(tmp_path):
 
 
 def test_convert_refuses_invalid_document(tmp_path, monkeypatch):
-    from hwpx.tools.validator import ValidationIssue, ValidationReport
+    from md2hwpx.convert import ConversionError, _Writer
 
-    from md2hwpx.convert import ConversionError
+    finish = _Writer.finish
 
-    issue = ValidationIssue(part_name="Contents/section0.xml", message="broken", line=3)
-    monkeypatch.setattr(HwpxDocument, "validate", lambda self: ValidationReport(("Contents/section0.xml",), (issue,)))
+    def broken(writer):
+        finish(writer)
+        writer.doc.paragraphs[-1].element.set("pageBreak", "banana")  # no boolean: the schema refuses it
+
+    monkeypatch.setattr(_Writer, "finish", broken)
     md = tmp_path / "doc.md"
     md.write_text("본문\n", encoding="utf-8")
     out = tmp_path / "doc.hwpx"
 
-    with pytest.raises(ConversionError, match="Contents/section0.xml:3: broken"):
+    with pytest.raises(ConversionError, match="HWPX 검증에 실패해 저장하지 않았습니다:\n.*Contents/section0.xml: Invalid boolean"):
         convert(md, TEMPLATE, out)
     assert not out.exists()
 

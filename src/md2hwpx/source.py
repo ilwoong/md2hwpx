@@ -3,6 +3,7 @@ cannot go in, the styles the template lacks), which the command line and web ser
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Collection, Iterable
 from pathlib import Path
@@ -56,9 +57,18 @@ def _blank_front_matter(markdown: str) -> str:
     return _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
 
 
+@functools.lru_cache(maxsize=2)
+def _parsed(markdown: str) -> tuple[SyntaxTreeNode, dict]:
+    """*markdown* as the conversion parses it: its tree, and what the parser left in its env. The last ones
+    are remembered: each check of a file asks for the same text, and parsing it was most of their time.
+    Nothing changes a tree."""
+    env: dict = {}
+    return SyntaxTreeNode(PARSER.parse(markdown, env)), env
+
+
 def _nodes(markdown: str) -> Iterable[SyntaxTreeNode]:
     """Every node of *markdown* as the conversion parses it, its front matter as blank lines."""
-    return _walk(SyntaxTreeNode(PARSER.parse(_blank_front_matter(markdown))))
+    return _walk(_parsed(_blank_front_matter(markdown))[0])
 
 
 def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
@@ -200,8 +210,7 @@ def old_markers(markdown: str) -> list[tuple[int, str, str]]:
 def column_problems(markdown: str) -> list[tuple[int, str]]:
     """(line number, why) of each "[cols: ...]" comment that sets no column widths, the table after it
     (if any) taking them from its text; "why" is a Korean clause (see parser.COLUMN_PROBLEMS)."""
-    env: dict = {}
-    PARSER.parse(_blank_front_matter(markdown), env)
+    env = _parsed(_blank_front_matter(markdown))[1]
     return [
         (line + 1, COLUMN_PROBLEMS[problem].format(values=values, columns=columns))
         for line, problem, values, columns in env.get("column_problems", [])
@@ -211,8 +220,7 @@ def column_problems(markdown: str) -> list[tuple[int, str]]:
 def marker_problems(markdown: str) -> list[tuple[int, str, str]]:
     """(line number, marker, why) of each "<!-- @hwpx ... -->" comment marker left out, in line order: "marker"
     names it ("@hwpx 명령 인자"), "why" is a Korean clause (see parser._markers)."""
-    env: dict = {}
-    PARSER.parse(_blank_front_matter(markdown), env)
+    env = _parsed(_blank_front_matter(markdown))[1]
     return sorted((line + 1, marker, why) for line, marker, why in env.get("marker_problems", []))
 
 

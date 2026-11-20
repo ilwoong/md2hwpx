@@ -71,6 +71,13 @@ def _share(total: int, weights: list[float]) -> list[int]:
     return [*parts, total - sum(parts)]
 
 
+def table_cells(table) -> list[list]:
+    """The cells of *table* by row and column. Its grid is read once: table.cell(r, c) works the whole grid
+    out again at each call, which for every cell of a table took a time that grew with the square of its
+    size."""
+    return [[position.cell for position in row] for row in table.get_cell_map()]
+
+
 class TextStyles:
     """The Hancom layout settings of paragraph and character shapes (text_style_from_refs), and the sizes of
     character shapes, for one document: each worked out once.
@@ -184,8 +191,7 @@ def fit_rows(table, text_styles: TextStyles, line_height: int, header_line_heigh
     """
     grid = grid_widths_of(table.element)  # the cells' widths, which the rows' heights do not change
     total = 0
-    for r in range(table.row_count):
-        cells = [table.cell(r, c) for c in range(table.column_count)]
+    for r, cells in enumerate(table_cells(table)):
         row_line_height = header_line_height if r == 0 and header_line_height else line_height
         height = max(_cell_height(cell, grid, text_styles, row_line_height) for cell in cells)
         for cell in cells:
