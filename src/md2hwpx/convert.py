@@ -10,6 +10,7 @@ from urllib.parse import unquote
 
 from hwpx import HwpxDocument
 from hwpx.oxml import Style
+from hwpx.opc.package import HwpxPackageError
 from hwpx.oxml.hyperlink_form import hyperlink_char_pr
 from markdown_it.tree import SyntaxTreeNode
 from pygments.lexers import TextLexer, get_lexer_by_name
@@ -24,7 +25,7 @@ from md2hwpx.pieces import (
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import (
-    CELL_MARGIN_LR, CELL_MARGIN_TB, TextStyles, column_widths, fit_rows, line_count, percent_widths,
+    CELL_MARGIN_LR, CELL_MARGIN_TB, TextStyles, column_widths, fit_rows, line_count, percent_widths, table_cells,
 )
 from md2hwpx.toc import TocRequest, add_toc, toc_entries, toc_request
 
@@ -220,6 +221,7 @@ class _Writer:
         # python-hwpx compares each requested shape with every one in the document, and lists all
         # paragraphs to find one by index; with hundreds of pages that adds up, so remember results.
         self._formats: dict[tuple, str] = {}
+        self._link_shapes: dict[str | None, str] = {}  # a run's character shape -> the link's on top of it
         self.text_styles = TextStyles(doc)  # shapes' layout settings, for measuring lines
         self._list_headings: dict[tuple, dict] = {}  # (bullet level) / (numbering, level) -> hh:heading
         self._section = doc.sections[-1]  # where new paragraphs go
@@ -311,9 +313,12 @@ class _Writer:
             elif run.url is None:
                 paragraph.add_run(run.text, char_pr_id_ref=self.run_char_pr(base, run.marks))
             else:
-                # Hancom's link look (blue, underlined) on top of the run's own marks.
-                link_pr = hyperlink_char_pr(paragraph.section, None, self.run_char_pr(base, run.marks))
-                paragraph.add_hyperlink(run.url, run.text, char_pr_id_ref=link_pr)
+                # Hancom's link look (blue, underlined) on top of the run's own marks. Remembered:
+                # hyperlink_char_pr compares the shape with every one in the document.
+                shape = self.run_char_pr(base, run.marks)
+                if shape not in self._link_shapes:
+                    self._link_shapes[shape] = hyperlink_char_pr(paragraph.section, None, shape)
+                paragraph.add_hyperlink(run.url, run.text, char_pr_id_ref=self._link_shapes[shape])
 
     def run_char_pr(self, base: str | None, marks: frozenset[str]) -> str | None:
         """The character shape of a run with *marks* in a paragraph whose own is *base*."""
@@ -361,8 +366,13 @@ class _Writer:
         for run in paragraph.runs:
             run.char_pr_id_ref = paragraph.char_pr_id_ref
 
+    def add_paragraph(self, text: str, style: Style):
+        """A new paragraph of *text* in *style*. inherit_style=False: its shapes are the style's, and python-hwpx
+        would still list every paragraph of the section to read the last one's, at each paragraph added."""
+        return self.doc.add_paragraph(text, style=style, inherit_style=False)
+
     def text_paragraph(self, runs: list[Run], quote: int, indent: int):
-        paragraph = self.doc.add_paragraph(plain_text(runs), style=self.text_style)
+        paragraph = self.add_paragraph(plain_text(runs), self.text_style)
         self.write_runs(paragraph, runs)
         self.place(paragraph, quote, indent)
         return paragraph
@@ -665,9 +675,10 @@ class _Writer:
         percents = node.meta.get("column_percents")
         self.tables.append((table, self.width_at(quote, indent), texts, percents))  # sized in finish()
         self.set_caption(table, "TOP")
+        grid = table_cells(table)
         for r, row in enumerate(cells):
             for c, lines in enumerate(row):
-                cell = table.cell(r, c)
+                cell = grid[r][c]
                 cell.set_text(texts[r][c], split_paragraphs=len(lines) > 1)  # a paragraph a line
                 if r == 0:
                     cell.element.set("header", "1")
@@ -721,7 +732,7 @@ class _Writer:
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""
-        paragraph = self.doc.add_paragraph("", style=self.body_style)
+        paragraph = self.add_paragraph("", self.body_style)
         line = self.border_fill(active_borders=["BOTTOM"], **RULE_LINE)
         paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, border={"borderFillIDRef": line})
         self.place(paragraph, quote, indent, bar=False)
@@ -762,7 +773,7 @@ class _Writer:
             if item_blocks and item_blocks[0].type == "paragraph":
                 rest = paragraph_pieces(item_blocks.pop(0).children[0])
             first = rest.pop(0).runs if rest and rest[0].kind == "runs" else []
-            paragraph = self.doc.add_paragraph(plain_text(first), style=style or self.body_style)
+            paragraph = self.add_paragraph(plain_text(first), style or self.body_style)
             self.write_runs(paragraph, first)
             if style is not None:
                 # At its style's own margin the paragraph keeps the style's shape as it is.
@@ -929,10 +940,11 @@ def convert_markdown(
         writer.markdown(SyntaxTreeNode(PARSER.parse(text)))
     writer.finish()
 
-    report = doc.validate()
-    if not report.ok:
-        raise ConversionError(
-            "변환한 문서가 HWPX 검증에 실패해 저장하지 않았습니다:\n" + "\n".join(str(issue) for issue in report.errors)
-        )
-    doc.save_to_path(out_path)
+    # Saving validates what it is about to write, the header and section XML against the schemas as
+    # doc.validate() does, and writes nothing that fails. doc.validate() before it wrote the whole document
+    # out once more and checked it twice, a third of a long conversion's time.
+    try:
+        doc.save_to_path(out_path)
+    except HwpxPackageError as error:
+        raise ConversionError(f"변환한 문서가 HWPX 검증에 실패해 저장하지 않았습니다:\n{error}") from None
     return writer.unresolved

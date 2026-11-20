@@ -33,6 +33,9 @@ class DiagramBlock:
 def find_diagram_blocks(markdown: str) -> list[DiagramBlock]:
     """The closed mermaid / plantuml fenced code blocks, found as CommonMark reads them,
     so also inside list items and block quotes."""
+    lowered = markdown.lower()
+    if not any(lang in lowered for lang in LANGS):
+        return []  # not worth a parse: most files of a long document have no diagram
     lines = source_lines(markdown)
     blocks = []
     for token in PARSER.parse(markdown):

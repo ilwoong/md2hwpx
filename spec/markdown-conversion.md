@@ -647,12 +647,25 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 - 문단 수는 `doc.paragraphs`(모든 문단의 래퍼를 만듦) 대신 구역 XML 의 `hp:p` 자식 수로 센다.
 - 목록 서식(`apply_list_format`, 호출마다 모든 문단을 나열)은 새 번호 목록과, 처음 쓰는 글머리표 수준·번호 정의의 수준에만 부르고,
   나머지 항목은 처음 얻은 `hh:heading` 을 그대로 적용한다.
+- 표의 셀은 격자를 한 번만 읽어 쓴다 (`tables.table_cells`). `table.cell(r, c)` 는 부를 때마다 표의 격자 전체를 다시 만들어,
+  셀마다 부르면 표 크기의 제곱만큼 걸린다.
+- 스타일을 준 문단은 `inherit_style=False` 로 넣는다 (`_Writer.add_paragraph`). 모양은 스타일의 것이라 앞 문단에서 받을 것이
+  없는데, python-hwpx 는 문단을 넣을 때마다 마지막 문단을 찾으려 구역의 모든 문단을 나열한다.
+- 링크의 글자 모양(`hyperlink_char_pr`)은 바탕 글자 모양별로 기억한다. 부를 때마다 문서의 모든 글자 모양과 비교한다.
+- 저장은 한 번만 한다: `save_to_path` 가 쓸 내용을 스스로 검증하므로 그 앞에 `doc.validate()` 를 부르지 않는다
+  (문서 전체를 한 번 더 직렬화하고 같은 스키마 검사를 두 번 하게 된다).
+- 경고 검사(`source.py`)는 파일 하나를 한 번만 파싱한다 (`source._parsed`, 마지막 두 본문을 기억). 검사 8개가 각자
+  파싱하던 것이다. 다이어그램 이름(`mermaid`·`plantuml`)이 없는 본문은 다이어그램을 찾으려 파싱하지 않는다.
 
 측정 (문단 약 2,000개·표 240개, 100쪽 이상): 29.6초 → 15.4초. 약 300쪽(문단 3,900개): 112.5초 → 57.1초.
 두 경우 모두 변환 결과(문단별 글자·스타일·문단 모양·글자 모양, 표 너비, 그림 크기)는 최적화 전과 같다.
 
+그 뒤의 측정 (2026-11-21, 파일 10개·430KB: 문단 약 1,200개, 표 80개, 코드블록 80개, 각주·링크 480개씩, 그림 40개,
+Raspberry Pi): 68.0초 → 34.6초. 변환 결과는 실행마다 달라지는 id 를 빼고 같다.
+
 남은 시간의 대부분은 python-hwpx 내부이며, 문서 크기에 대해 제곱으로 늘어나는 것도 있다
-(차례의 헤딩 앵커 확인, 각주 번호 계산, `apply_list_format` 의 문단 나열, 저장·검증 직렬화).
+(차례의 헤딩 앵커 확인, 각주 번호 계산, `apply_list_format` 의 문단 나열, 저장할 때의 직렬화와 검증).
+남은 시간의 3분의 1이 저장(직렬화, 스키마·패키지 검사, 다시 열어 보기)이다.
 비공개 함수를 바꾸지 않고는 피할 수 없어 그대로 둔다.
 
 ## 공개 API
@@ -703,9 +716,10 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]
 - `old_markers` 는 없어질 표기 줄의 (줄, 그 줄, 대신 쓸 주석 마커) 목록을 (위 "없어질 표기"),
   `marker_typos` 는 글자로 남은 표기 오타의 (줄, 그 줄) 목록을 (위 "표기 오타"), `footnote_leftovers` 는 각주가 넣지 않은
   블록·각주 참조의 (줄, 조사를 붙인 이름) 목록을 줄 순서로 돌려준다 (위 "각주"). 줄 번호는 front matter 를 포함한다.
-- 저장하기 전에 python-hwpx `doc.validate()` (header·section XML 스키마 검증)를 실행한다.
-  오류(error)가 있으면 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 `파트:줄: 내용` 목록을 담는다.
-  경고(warning)는 저장을 막지 않는다.
+- 저장할 때 python-hwpx 가 쓸 내용을 검증한다 (`save_to_path`: `doc.validate()` 와 같은 header·section XML 스키마 검증과
+  패키지 구조 검사). 따로 `doc.validate()` 를 먼저 부르지 않는다: 문서 전체를 한 번 더 직렬화하고 같은 검사를 두 번 하게 된다.
+  검증에 실패하면 (`HwpxPackageError`) 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 python-hwpx 가 알린
+  내용(`파트: 내용`)을 담는다. 경고(warning)는 저장을 막지 않는다.
 - 템플릿에 필요한 스타일이 없으면 python-hwpx 의 `HwpxLookupError` 가 발생한다.
 - 넣을 수 없는 이미지는 대체 이미지를 넣는다 (위 "이미지").
 
