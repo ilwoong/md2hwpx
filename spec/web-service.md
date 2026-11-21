@@ -21,10 +21,10 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | 파일 | 역할 |
 |------|------|
 | `src/md2hwpx/web.py` | FastAPI 앱 (`md2hwpx.web:app`) |
-| `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
+| `src/md2hwpx/oauth.py` | [GitLab·Gitea 로그인](#gitlabgitea-로그인-oauth2) (OAuth2) |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
 | `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs (1GB 까지) |
-| `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 (아래 "명령줄 클라이언트") |
+| `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 ([명령줄 클라이언트](#명령줄-클라이언트-md2hwpx-remotepy)) |
 | `.env.example` | 업로드 크기 제한과 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
 의존성은 `pyproject.toml` 의 `web` 그룹(`fastapi`, `uvicorn`, `python-multipart`)이다.
@@ -32,7 +32,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 
 ## 변환 페이지
 
-`static/index.html`. `GET /` 가 내준다 (아래 "API").
+`static/index.html`. `GET /` 가 내준다 ([API](#api)).
 
 - 입력 방식(파일 / zip / git 저장소)을 탭으로 고른다. 네 번째 탭 "스크립트" 는 입력 방식이 아니라 명령줄 클라이언트를 내려받는 곳이다. 탭마다 꼭 필요한 입력은 하나(파일, zip 파일, 저장소 주소)이고,
   비어 있으면 브라우저가 제출을 막는다. 보이지 않는 탭의 입력은 검사하지 않는다.
@@ -44,7 +44,7 @@ docker run --rm -p 8000:8000 md2hwpx-web
 - 파일 탭은 고른 파일의 개수와 크기, md 이름(이어 붙이는 순서), 이미지 이름을 보여 준다. 제한을 넘으면 오류 색으로 알린다.
   파일을 다시 고르면 앞의 선택을 바꾼다 (더하지 않는다).
 - 변환하는 동안 지난 시간을 초로 보여 준다. 끝나면 응답 헤더의 파일 이름으로 내려받는다.
-- 실패하면 `detail` 메시지를 보여 준다: 한 입력 때문이면 그 입력 아래에, 아니면 버튼 아래에 (아래 "API" 의 `POST /convert` 실패).
+- 실패하면 `detail` 메시지를 보여 준다: 한 입력 때문이면 그 입력 아래에, 아니면 버튼 아래에 ([API](#api) 의 `POST /convert` 실패).
 - 로그인하러 떠날 때 저장소 주소·브랜치·경로·패턴을 브라우저의 `sessionStorage` 에 두었다가, 돌아오면 git 저장소 탭을 고르고
   그 값을 되살린다. 브랜치·경로·패턴 중 적은 것이 있으면 "선택 옵션" 을 펼친다.
 
@@ -57,11 +57,11 @@ docker run --rm -p 8000:8000 md2hwpx-web
 `static/build-date` 에 한국 시간 날짜를 적어 둔 것이다. 이미지 밖(로컬 실행)에는 그 파일이 없어 날짜를 보여 주지 않는다.
 코드가 바뀌지 않아 그 층이 빌드 캐시에서 오면 날짜도 그대로다 (그 내용의 이미지를 처음 빌드한 날).
 
-페이지의 동작은 위 "변환 페이지".
+페이지의 동작은 [변환 페이지](#변환-페이지).
 
 ### `GET /md2hwpx-remote.py`
 
-명령줄 클라이언트(아래 "명령줄 클라이언트")를 내려준다. `Content-Disposition: attachment; filename="md2hwpx-remote.py"`.
+[명령줄 클라이언트](#명령줄-클라이언트-md2hwpx-remotepy)를 내려준다. `Content-Disposition: attachment; filename="md2hwpx-remote.py"`.
 페이지의 "스크립트" 탭에 이 주소의 링크와 사용법이 있다. 사용법의 `--server` 에는 페이지가 열린 주소를 채워 보여 준다.
 이 탭에는 "선택 옵션" 과 변환 버튼이 없다.
 
@@ -124,14 +124,14 @@ tmpfs 는 1GB 까지다 (`size=1g`): 올린 파일과 받은 git 저장소가 �
   - 받기에 실패했고 `ref` 가 짧은 해시 모양(16진수 4~39자)이면 오류 끝에 `커밋은 전체 해시(40자)로 지정하세요.` 를 붙인다.
     그 모양을 미리 거부하지 않는 것은 `20261031` 처럼 숫자로 된 태그·브랜치도 있기 때문이다.
   - `GIT_TERMINAL_PROMPT=0` 이라 인증이 필요한 저장소는 기다리지 않고 실패한다.
-  - 로그인한 서버의 저장소면 사용자 토큰으로 받는다 (아래 "GitLab·Gitea 로그인").
+  - 로그인한 서버의 저장소면 사용자 토큰으로 받는다 ([GitLab·Gitea 로그인](#gitlabgitea-로그인-oauth2)).
 
 변환할 대상:
 
 - `path` 가 있으면 root 아래의 그 파일 또는 폴더.
 - 없으면, root 에 폴더 하나만 있을 때(폴더를 압축한 zip) 그 폴더로 들어간 뒤,
   `.md` 가 하나면 그 파일, 아니면 그 폴더 (명령줄의 폴더 입력처럼 바로 안의 `.md` 를 이름 순으로 이어 붙인다).
-- 초안: `zip`·`git` 은 명령줄처럼 `draft: true` 파일을 빼고 변환한다 ([markdown-conversion.md](markdown-conversion.md) 의 "초안").
+- 초안: `zip`·`git` 은 명령줄처럼 `draft: true` 파일을 빼고 변환한다 ([markdown-conversion.md](markdown-conversion.md#초안-draft) 의 "초안").
   `include_draft` 가 `true` 면 포함한다. 남는 파일이 없으면 `변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): <경로>`.
   `files` 는 올린 파일을 사용자가 고른 것이므로 초안도 늘 변환한다.
 - 파일 이름 패턴: `zip`·`git` 은 `include` 의 패턴에 맞는 파일만 남긴 뒤 초안을 뺀다. `files` 는 패턴을 쓰지 않는다.
@@ -175,7 +175,7 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
 
 - 서버마다 세 값과 `MD2HWPX_BASE_URL` 이 모두 있어야 그 서버의 로그인이 켜진다. 하나도 없으면 지금처럼 로그인 없이 동작한다.
 - 콜백 주소(애플리케이션의 Redirect URI): `<MD2HWPX_BASE_URL>/oauth/gitlab/callback`, `<MD2HWPX_BASE_URL>/oauth/gitea/callback`.
-- 주소 조건 (설정 절차와 증상별 원인은 아래 "설정 절차", "증상별 원인"):
+- 주소 조건 (설정 절차와 증상별 원인은 [설정 절차](#설정-절차), [증상별 원인](#증상별-원인)):
   - `MD2HWPX_BASE_URL` 은 사용자가 접속하는 주소와 글자 그대로 같아야 한다. 다르면 서버가 Redirect URI 를 거부하거나,
     세션 쿠키가 콜백으로 이어지지 않아 `state` 확인에 실패한다.
   - `MD2HWPX_GITLAB_URL`·`MD2HWPX_GITEA_URL` 은 브라우저(로그인 화면)와 컨테이너(토큰 요청, clone) 양쪽에서 접속되어야 한다.
