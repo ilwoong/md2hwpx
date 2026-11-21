@@ -8,7 +8,7 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 ## 범위
 
 - 포함: CommonMark 전체(헤딩, 문단, 강제 줄바꿈, 코드블록, 목록, 인용문, 수평선, 이미지, 링크, 강조, 이스케이프,
-  참조식 링크, 임의 깊이의 블록 중첩)와 GFM 표·취소선, 각주, 그리고 이 프로젝트의 표기
+  참조식 링크, 임의 깊이의 블록 중첩)와 GFM 표·취소선, 각주, 수식(`$...$`, `$$...$$`), 그리고 이 프로젝트의 표기
   (표·그림 캡션과 번호 참조, 그림 크기 속성, `[TOC]` 차례, `\newpage` 쪽 나누기, `[새 번호]` 번호 새로 시작, `[감추기]` 쪽 감추기, `[여백면]` 여백 면, `[빈 줄]` 빈 문단), pandoc 의 `custom-style` 펜스 div,
   이것들을 Markdown 뷰어에 보이지 않게 쓰는 주석 마커 `<!-- @hwpx 명령 -->`.
 - 제외: 원시 HTML (글자 그대로 들어간다). 단, HTML 주석 `<!-- -->` 은 내보내지 않고, 표 셀 안의 `<br>` 은 셀 안 줄바꿈이다.
@@ -23,7 +23,7 @@ Markdown 파일을 읽어 템플릿 HWPX 문서 뒤에 내용을 추가하고, �
 - 저장: `HwpxDocument.save_to_path`
 
 Markdown 파싱에는 [markdown-it-py](https://github.com/executablebooks/markdown-it-py) 와
-[mdit-py-plugins](https://github.com/executablebooks/mdit-py-plugins) (각주, 펜스 div) 를,
+[mdit-py-plugins](https://github.com/executablebooks/mdit-py-plugins) (각주, 펜스 div, 수식 `dollarmath`) 를,
 코드블록 구문 강조에는 [Pygments](https://pygments.org/) 를 사용한다.
 
 ## 템플릿 요구사항
@@ -495,7 +495,7 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
   넣어 그 번호를 1부터 다시 시작한다. 쪽을 나누지는 않는다. 새 쪽에서 시작하려면 앞에 `\newpage` 줄을 둔다.
   - 컨트롤은 문단 맨 앞에 둔다. 그 문단에 담긴 표·그림이 새 번호를 받는다.
   - 바로 뒤가 `[TOC]` 이면 차례 제목 문단에 넣는다. 뒤에 아무 문단도 없으면 무시한다.
-  - 변환기는 수식을 만들지 않는다. `수식` 은 한/글에서 넣는 수식의 번호에 쓰인다.
+  - `수식` 은 한/글에서 넣는 수식의 번호에 쓰인다. 변환기가 넣는 수식은 번호에서 빠진다 (아래 "수식").
 
 ### 쪽 감추기
 
@@ -540,6 +540,35 @@ Markdown 은 [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
 
 - 서식은 겹칠 수 있다 (`***a** b*` → `a` 는 굵게 + 기울임, ` b` 는 기울임).
 - 링크 텍스트 안의 서식도 적용하며, 서식이 다른 조각마다 같은 URL 의 하이퍼링크 필드를 만든다.
+
+### 수식
+
+- `$...$` 는 글 안의 수식, 줄을 따로 차지한 `$$...$$` 는 수식 블록이다 (`dollarmath_plugin`). 내용은 LaTeX 수식이다.
+- 한/글 수식 개체(`hp:equation`)로 넣는다: 한/글에서 더블클릭해 고칠 수 있다. LaTeX 를 한/글 수식 편집기의 스크립트
+  (`\frac{a}{b}` → `{a} over {b}`)로 바꾸는 일은 python-hwpx 의 `latex_to_eqedit` 가, 넣는 일은 `paragraph.add_equation` 이 한다.
+- 글 안의 수식: 헤딩, 문단, 목록 항목, 인용문, 표 셀, 캡션, 각주 본문에 쓸 수 있다. 글자처럼 취급되는 개체로 그 자리에 들어가며,
+  크기(`baseUnit`)는 감싼 문단의 글자 크기다 (크기가 없는 글자 모양이면 10pt). 굵은 글 안의 수식은 그 run 의 글자 모양에 담긴다.
+  글 안에 쓴 `$$...$$` 도 글 안의 수식이다.
+- 수식 블록: `바탕글` 스타일의 가운데 정렬 문단 하나에 수식만 넣는다 (`본문` 의 첫 줄 들여쓰기가 가운데를 밀지 않게, 그림처럼).
+  목록·인용문 안이면 그 자리만큼 들여 쓴다. 블록은 앞뒤에 빈 줄이 있어야 한다: 문단에 바로 이어 쓰면 그 문단의 글이다.
+  각주 안의 수식 블록은 넣지 않고 경고한다 (위 "각주").
+- 수식마다 `numberingType="NONE"` 으로 한/글의 수식 번호에서 뺀다 (캡션 없는 표·그림과 같다). 수식 번호와 참조는 만들지 않는다.
+- `$` 가 수식을 여닫지 않는 경우 (글자 그대로다):
+  - 안쪽에 공백이 붙은 `$` (`$ x $`, `가격은 $5 와 $10`), 바깥쪽에 숫자가 붙은 `$` (`3$x$4`).
+  - 이스케이프한 `\$`, 인라인 코드·코드블록 안.
+  - 주의: `$5$` 처럼 안쪽에 숫자만 있는 것은 수식이다. 이전 버전에서 글자였던 `$a$` 꼴의 글은 이제 수식이 된다.
+- 바꿀 수 없는 수식: `latex_to_eqedit` 는 한/글에서 확인한 명령만 받는다. 받지 않는 명령·환경이 든 수식은 쓴 그대로
+  (`$\mathbb{R}^n$`) 글자로 넣고 경고한다 (아래 "명령줄", `source.unsupported_math`).
+  - 되는 것: 분수, 첨자, 루트, 합·적분·극한, 그리스 문자, 연산자·화살표, `pmatrix`·`cases`, `\binom`, `\left( \right)`,
+    `\mathbf`·`\mathrm`·`\text`, `\hat`·`\vec`·`\tilde`·`\overline`.
+  - 안 되는 것 (python-hwpx 6 기준): `aligned` 환경, `\mathbb`·`\mathcal`·`\mathsf`, `\operatorname`, `\Pr`, `\lfloor`,
+    `\lVert`, `\underbrace`, `\not`, `\widehat`·`\limsup` (한/글에서 깨져 라이브러리가 막았다).
+- 알려진 한계:
+  - 수식의 상자 크기는 python-hwpx 가 스크립트에서 어림한 값이다. 한/글 화면에서 확인하지 못했다.
+  - 표 셀의 열 너비와 행 높이는 수식을 재지 않는다: 열 너비는 수식의 스크립트 글자 수로 어림하고, 행 높이는 글줄만 센다.
+    분수처럼 한 줄보다 높은 수식이 든 셀은 선언한 높이보다 커질 수 있다.
+  - 차례의 제목 항목에는 헤딩의 수식이 들어가지 않는다 (한/글이 차례를 다시 만들 때 채운다).
+  - GFM 표의 셀 안에서 수식의 `|` 는 열을 나눈다: `\|` 로 쓴다.
 
 ### 스타일 적용
 
@@ -692,6 +721,7 @@ def marker_problems(markdown: str) -> list[tuple[int, str, str]]
 def marker_typos(markdown: str) -> list[tuple[int, str]]
 def old_markers(markdown: str) -> list[tuple[int, str, str]]
 def footnote_leftovers(markdown: str) -> list[tuple[int, str]]
+def unsupported_math(markdown: str) -> list[tuple[int, str]]
 ```
 
 - `template_path` 를 `HwpxDocument.open` 으로 열고, Markdown 을 변환해 추가한 뒤
@@ -716,6 +746,7 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]
 - `old_markers` 는 없어질 표기 줄의 (줄, 그 줄, 대신 쓸 주석 마커) 목록을 (위 "없어질 표기"),
   `marker_typos` 는 글자로 남은 표기 오타의 (줄, 그 줄) 목록을 (위 "표기 오타"), `footnote_leftovers` 는 각주가 넣지 않은
   블록·각주 참조의 (줄, 조사를 붙인 이름) 목록을 줄 순서로 돌려준다 (위 "각주"). 줄 번호는 front matter 를 포함한다.
+- `unsupported_math` 는 수식으로 바꾸지 못해 글자로 남은 수식의 (줄, 쓴 그대로) 목록을 돌려준다 (위 "수식").
 - 저장할 때 python-hwpx 가 쓸 내용을 검증한다 (`save_to_path`: `doc.validate()` 와 같은 header·section XML 스키마 검증과
   패키지 구조 검사). 따로 `doc.validate()` 를 먼저 부르지 않는다: 문서 전체를 한 번 더 직렬화하고 같은 검사를 두 번 하게 된다.
   검증에 실패하면 (`HwpxPackageError`) 저장하지 않고 `ConversionError` 를 발생시키며, 메시지에 python-hwpx 가 알린
@@ -783,6 +814,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx] [--include-draft] [--incl
 - 입력 파일마다 `unusable_images` 로 이미지를, `unknown_styles` 로 custom-style div·`[TOC]` 의 스타일을,
   `column_problems` 로 무시한 열 너비 지정(`[cols: …]`, `열너비`)을, `marker_problems` 로 무시한 주석 마커를,
   `marker_typos` 로 글자로 남은 표기 오타를, `old_markers` 로 없어질 표기 줄을, `footnote_leftovers` 로 각주가 넣지 않은 블록·참조를,
+  `unsupported_math` 로 글자로 남은 수식을,
   `references` 와 `convert_markdown` 의 결과로 글자 그대로 둔 번호 참조를 확인한다.
   넣을 수 없는 이미지는 대체 이미지로, 없는 스타일의 div 는 `본문` 으로 변환하고, 저장한 뒤 모두 stderr 에 쓴다.
   종료 코드는 0 이다. 입력 파일 순서, 파일 안에서는 줄 순서다. 줄 번호는 front matter 를 포함한 원본 파일 기준이다.
@@ -846,6 +878,7 @@ python -m md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx] [--include-draft] [--incl
 | 수평선 | `---`·`***`·`- - -`·`___`, 목록 뒤 `---`, 아래쪽 테두리만 있음 |
 | 인용문 | 문단 나눔, 중첩 깊이별 왼쪽 여백, 왼쪽 테두리와 연결, 인라인 서식, 인용문 뒤 문단은 일반 여백 |
 | 강제 줄바꿈 | 공백 두 칸·`\`, 서식이 줄바꿈을 넘는 경우, 목록 항목·인용문 안 |
+| 수식 | 글 안의 수식이 글 사이의 `hp:equation` (글자처럼 취급, 문단 글자 크기, 번호 제외, 굵은 run 의 글자 모양), 수식 블록의 `바탕글` 가운데 정렬 문단, 헤딩(그 크기)·표 셀·인용문·목록·각주·글 안의 `$$`, 수식이 아닌 `$` 네 가지, 코드 안, 바꿀 수 없는 수식의 글자 유지와 `unsupported_math` 의 줄, 각주 안 수식 블록, 명령줄 경고 |
 | 각주 | 참조 위치, 들여쓴 이어지는 줄, 각주 본문의 굵게·링크·여러 문단, 정의 없는 참조는 글자 유지, 표 셀, 코드블록 안 정의 유지, 넣지 않은 목록·코드블록·각주 참조의 명령줄 경고(front matter 포함 줄 번호) |
 | 없어질 표기 | `[TOC …]`·`[감추기]`·`[새 번호 …]`·`[빈 줄 …]`(목록·인용문 안 포함)·`[여백면]`·문구 있는 `[여백면]`(공백이면 따옴표)의 명령줄 경고와 대신 쓸 주석 마커, 동작 유지, `\newpage`·주석 마커·이스케이프·서식 섞인 줄·코드·표 칸·각주는 경고 없음 |
 | 마커 오타 | 줄에 따로 있는 `@HWPX`·`@hwpx:`·`@hwp`·`@ hwpx`·`@hwpx쪽나눔`(여러 줄 포함) 주석의 경고와 버림, `@todo`·`@hwpdoc`·`@` 없는 주석·코드는 경고 없음, 띄어 쓴 명령(`쪽 나눔` 등)의 맞는 이름 |

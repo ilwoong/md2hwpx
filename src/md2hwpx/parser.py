@@ -10,6 +10,7 @@ from markdown_it.rules_core import StateCore
 from markdown_it.rules_inline import StateInline
 from markdown_it.token import Token
 from mdit_py_plugins.container import container_plugin
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 
 from md2hwpx.pieces import ESCAPES, match_marker
@@ -405,11 +406,15 @@ def custom_style(info: str) -> str | None:
 # CommonMark with GFM tables and strikethrough, footnotes, image attributes and custom-style divs
 # ("container_div" nodes; any other ":::" block stays text). HTML comments are dropped, a "[cols: ...]" one
 # setting the next table's column widths (its "column_percents" meta); other raw HTML stays text.
+# Math is "$...$" in text and "$$...$$" on lines of its own ("math_inline", "math_inline_double" and "math_block"
+# nodes, their content LaTeX). A "$" next to a space on its inside or to a digit on its outside opens or closes
+# none, so "$5 와 $10" is text.
 PARSER = (
     MarkdownIt("commonmark", {"html": False})
     .enable(["table", "strikethrough"])
     .use(footnote_plugin)
     .use(container_plugin, "div", validate=lambda params, *_: custom_style(params) is not None)
+    .use(dollarmath_plugin, allow_labels=False, allow_space=False, allow_digits=False, double_inline=True)
 )
 PARSER.inline.ruler.push("image_attributes", _image_attributes)
 PARSER.block.ruler.before("html_block", "comment_block", _comment_block, {"alt": ["paragraph", "reference", "blockquote"]})

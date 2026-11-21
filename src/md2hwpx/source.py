@@ -13,7 +13,7 @@ from markdown_it.tree import SyntaxTreeNode
 
 from md2hwpx.images import ImageError, picture_data
 from md2hwpx.parser import COLUMN_PROBLEMS, PARSER, custom_style, source_lines
-from md2hwpx.pieces import REFERENCE, marker_lines, marker_typo_lines
+from md2hwpx.pieces import MATH_NODES, REFERENCE, equation_script, marker_lines, marker_typo_lines, math_source
 from md2hwpx.toc import toc_request
 
 # YAML front matter: a "---" first line (after an optional BOM) up to a "---" or "..." line. The line after the
@@ -150,7 +150,7 @@ def unknown_styles(markdown: str, styles: Collection[str]) -> list[tuple[int, st
 _FOOTNOTE_LEAVES_OUT = {
     "bullet_list": "목록은", "ordered_list": "목록은", "fence": "코드블록은", "code_block": "코드블록은", "table": "표는",
     "blockquote": "인용문은", "heading": "헤딩은", "hr": "수평선은", "container_div": "스타일 지정 블록은",
-    "hwpx_marker": "주석 마커는", "footnote_ref": "각주 참조는",
+    "hwpx_marker": "주석 마커는", "footnote_ref": "각주 참조는", "math_block": "수식 블록은",
 }
 
 
@@ -172,6 +172,21 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]:
                     line = next((i + 1 for i in range(start, end) if label in lines[i]), start + 1)
                     found.append((line, _FOOTNOTE_LEAVES_OUT["footnote_ref"]))
     return sorted(found)
+
+
+def unsupported_math(markdown: str) -> list[tuple[int, str]]:
+    """(line number, the math as written) of each "$...$" or "$$...$$" that cannot be an equation and stays
+    text (see pieces.equation_script)."""
+    markdown = _blank_front_matter(markdown)
+    lines = source_lines(markdown)
+    found = []
+    for node in (n for n in _nodes(markdown) if n.type in MATH_NODES and equation_script(n.content) is None):
+        # Inline math has no lines of its own: its block's are the nearest. The line that holds its first line.
+        start, end = next(n.map for n in (node, *_ancestors(node)) if n.map is not None)
+        first = node.content.strip().split("\n")[0]
+        line = next((i + 1 for i in range(start, end) if first in lines[i]), start + 1)
+        found.append((line, math_source(node)))
+    return found
 
 
 def marker_typos(markdown: str) -> list[tuple[int, str]]:

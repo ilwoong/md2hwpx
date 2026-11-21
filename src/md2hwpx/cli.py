@@ -19,7 +19,7 @@ from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown, paragraph_styles
 from md2hwpx.diagram import DiagramError, render_diagrams
 from md2hwpx.source import (
     ConversionError, caption_numbering, column_problems, footnote_leftovers, is_draft, marker_problems, marker_typos,
-    old_markers, read_markdown, references, unknown_styles, unusable_images,
+    old_markers, read_markdown, references, unknown_styles, unsupported_math, unusable_images,
 )
 
 # Why a "[@name]" reference was left as written (see convert_markdown), as a Korean clause.
@@ -83,8 +83,8 @@ def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[Co
     unusable_images), styles the template lacks that custom-style divs or [TOC] name (see unknown_styles),
     "[cols: ...]" comments that set no widths (see column_problems), comment markers left out (see marker_problems),
     lines that look like marker lines but stay text (see marker_typos), marker lines going away (see old_markers),
-    what footnotes leave out (see footnote_leftovers) and the references left as written, *unresolved* (see
-    convert_markdown)."""
+    what footnotes leave out (see footnote_leftovers), math left as text (see unsupported_math) and the
+    references left as written, *unresolved* (see convert_markdown)."""
     markdown = md.read_text(encoding="utf-8")
     found = [
         ConversionWarning(md, line, f"{why} 대체 이미지를 넣었습니다", image)
@@ -111,6 +111,10 @@ def _warnings(md: Path, styles: set[str], unresolved: dict[str, str]) -> list[Co
         for line, text, marker in old_markers(markdown)
     ]
     found += [ConversionWarning(md, line, f"각주 안의 {what} 넣지 않았습니다") for line, what in footnote_leftovers(markdown)]
+    found += [
+        ConversionWarning(md, line, f"수식({text})은 한/글 수식으로 바꿀 수 없어 글자로 넣었습니다")
+        for line, text in unsupported_math(markdown)
+    ]
     found += [
         ConversionWarning(
             md, line, f"'#{name}' 이름의 표·그림이 {_UNRESOLVED[unresolved[name]]} [@{name}] 를 그대로 두었습니다"
