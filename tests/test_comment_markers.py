@@ -124,6 +124,21 @@ def test_marker_problems_say_where_and_why():
     ]
 
 
+def test_picture_size_before_a_diagram_is_no_problem():
+    # The diagram becomes a picture before the conversion (see render_diagrams), and the size is set on it.
+    text = (
+        "<!-- @hwpx 그림크기 너비=50% -->\n\n```mermaid\ngraph TD\n```\n\n"
+        "[그림] 제목\n<!-- @hwpx 그림크기 너비=50% -->\n\n```plantuml\n@startuml\n@enduml\n```\n\n"
+        # Other code, and a diagram that is not closed (it stays code): no picture.
+        "<!-- @hwpx 그림크기 너비=50% -->\n\n```python\npass\n```\n\n"
+        "<!-- @hwpx 그림크기 너비=50% -->\n\n```mermaid\ngraph TD\n"
+    )
+    assert marker_problems(text) == [
+        (15, "@hwpx 그림크기 너비=50%", "바로 뒤에 그림이 없어"),
+        (21, "@hwpx 그림크기 너비=50%", "바로 뒤에 그림이 없어"),
+    ]
+
+
 def test_unknown_command_with_spaces_names_the_command_meant():
     text = (
         "<!-- @hwpx 쪽 나눔 -->\n\n<!-- @hwpx 새 번호 쪽 표 -->\n\n<!-- @hwpx 빈 줄 3 -->\n\n"

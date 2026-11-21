@@ -58,6 +58,23 @@ def source_lines(markdown: str, keepends: bool = False) -> list[str]:
     return lines if keepends else [line.rstrip("\r\n") for line in lines]
 
 
+DIAGRAM_LANGS = ("mermaid", "plantuml")
+
+
+def diagram_lang(token: Token, lines: list[str]) -> str | None:
+    """The language of *token* if it is a closed mermaid / plantuml fenced code block, as CommonMark reads it, in
+    the text of *lines* (see source_lines): what diagram.render_diagrams makes a picture."""
+    info = token.info.split() if token.type == "fence" else []
+    if not info or info[0].lower() not in DIAGRAM_LANGS:
+        return None
+    end = token.map[1] - 1
+    # markdown-it runs an unclosed fence to the end of its container; those stay code.
+    closing = rf"[ \t>]*{re.escape(token.markup[0])}{{{len(token.markup)},}}\s*"
+    if end == token.map[0] or not re.fullmatch(closing, lines[end]):
+        return None
+    return info[0].lower()
+
+
 def _image_attributes(state: StateInline, silent: bool) -> bool:
     """Take a "{...}" block right after an image: its width / height go on the image, the rest is dropped."""
     if state.src[state.pos] != "{" or state.pending or not state.tokens or state.tokens[-1].type != "image":
@@ -269,7 +286,11 @@ def _markers(state: StateCore) -> None:
         elif command == "그림크기":
             image = _next_image(state.tokens, k)
             if image is None:
-                problems.append((token.map[0], token.meta["label"], "바로 뒤에 그림이 없어"))
+                # A diagram is made a picture before the conversion (see diagram.render_diagrams): in the text
+                # as written, which the warnings read, it is still a code block.
+                after = state.tokens[k + 1] if k + 1 < len(state.tokens) else None
+                if after is None or not diagram_lang(after, source_lines(state.src)):
+                    problems.append((token.map[0], token.meta["label"], "바로 뒤에 그림이 없어"))
                 continue
             for key, value in token.meta["size"].items():
                 if image.attrGet(key) is None:
