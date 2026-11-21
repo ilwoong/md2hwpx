@@ -10,7 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from md2hwpx.parser import DIAGRAM_LANGS as LANGS, PARSER, diagram_lang, source_lines
+from md2hwpx.parser import DIAGRAM_LANGS, PARSER, diagram_lang, source_lines
 
 DIAGRAM_TIMEOUT = 60  # seconds for one diagram
 
@@ -32,7 +32,7 @@ def find_diagram_blocks(markdown: str) -> list[DiagramBlock]:
     """The closed mermaid / plantuml fenced code blocks, found as CommonMark reads them,
     so also inside list items and block quotes."""
     lowered = markdown.lower()
-    if not any(lang in lowered for lang in LANGS):
+    if not any(lang in lowered for lang in DIAGRAM_LANGS):
         return []  # not worth a parse: most files of a long document have no diagram
     lines = source_lines(markdown)
     blocks = []
