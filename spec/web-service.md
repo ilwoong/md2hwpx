@@ -169,7 +169,7 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
 
 - 서버마다 세 값과 `MD2HWPX_BASE_URL` 이 모두 있어야 그 서버의 로그인이 켜진다. 하나도 없으면 지금처럼 로그인 없이 동작한다.
 - 콜백 주소(애플리케이션의 Redirect URI): `<MD2HWPX_BASE_URL>/oauth/gitlab/callback`, `<MD2HWPX_BASE_URL>/oauth/gitea/callback`.
-- 주소 조건 (설정 절차와 증상별 원인은 README "GitLab·Gitea 로그인 설정"):
+- 주소 조건 (설정 절차와 증상별 원인은 아래 "설정 절차", "증상별 원인"):
   - `MD2HWPX_BASE_URL` 은 사용자가 접속하는 주소와 글자 그대로 같아야 한다. 다르면 서버가 Redirect URI 를 거부하거나,
     세션 쿠키가 콜백으로 이어지지 않아 `state` 확인에 실패한다.
   - `MD2HWPX_GITLAB_URL`·`MD2HWPX_GITEA_URL` 은 브라우저(로그인 화면)와 컨테이너(토큰 요청, clone) 양쪽에서 접속되어야 한다.
@@ -190,6 +190,74 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
   토큰은 서버 프로세스 메모리에 둔다. 12시간 쓰지 않은 세션은 지운다. 토큰이 없는 세션(끝내지 않은 로그인)은 10분, 세션은 모두 10,000개까지이며 넘으면 가장 오래 쓰지 않은 것부터 지운다 (지워지면 다시 로그인한다). 프로세스 메모리에 두므로 uvicorn 워커는 하나로 실행한다. 서버를 다시 시작하면 모두 다시 로그인한다.
   메모리에 두므로 uvicorn 워커는 하나여야 한다 (지금 실행 방식).
 - 토큰 요청은 표준 라이브러리 `urllib` 로 보낸다 (의존성 추가 없음).
+
+### 설정 절차
+
+로그인을 쓰지 않으면 이 설정은 필요 없다. 공개 저장소는 로그인 없이 받는다.
+아래 예는 웹 서비스를 `http://localhost:8000`, Gitea 를 `http://192.168.1.2:3000` 에서 쓰는 경우다.
+
+**1. 주소 정하기**
+
+- 웹 서비스 주소(`MD2HWPX_BASE_URL`): 사용자가 **브라우저 주소창에 입력하는 주소** 그대로. 뒤의 `/` 는 뺀다.
+  `localhost` 와 `127.0.0.1` 도 서로 다른 주소로 취급되므로, 앞으로 접속할 쪽 하나로 정한다.
+- GitLab·Gitea 주소: **브라우저와 md2hwpx 컨테이너 양쪽에서 접속되는 주소**.
+  브라우저는 이 주소의 로그인 화면으로 이동하고, 컨테이너는 이 주소에서 토큰을 받고 저장소를 clone 한다.
+  컨테이너 안의 `localhost` 는 md2hwpx 자신이므로 `http://localhost:3000` 은 쓸 수 없다. 호스트 IP 나 도메인을 쓴다.
+  확인: `docker compose exec web wget -q -O- http://192.168.1.2:3000/api/v1/version` (Gitea) 이 버전을 보여 주면 된다.
+
+**2. OAuth 애플리케이션 등록**
+
+| | GitLab | Gitea |
+|---|---|---|
+| 메뉴 | 사용자 설정 > Applications. 관리자는 관리자 영역 > Applications (모든 사용자용) | 사용자 설정 > 애플리케이션 > OAuth2 애플리케이션 관리. 관리자는 사이트 관리 > 통합 > 애플리케이션 |
+| Redirect URI | `<웹 서비스 주소>/oauth/gitlab/callback` | `<웹 서비스 주소>/oauth/gitea/callback` |
+| 기밀(Confidential) | 켬 | 켬 (Confidential client) |
+| Scope | `read_repository` 만 | 등록 화면에 없음 (로그인할 때 `read:repository` 를 요청) |
+| 그 밖 | 관리자 영역에서 만들고 Trusted 를 켜면 승인 화면을 건너뜀 | |
+
+Redirect URI 는 웹 서비스 주소와 **글자 그대로** 같아야 한다 (예: `http://localhost:8000/oauth/gitea/callback`).
+등록하면 나오는 Client ID(GitLab: Application ID) 와 Client Secret 을 다음 단계에 쓴다. Secret 은 다시 볼 수 없으니 바로 옮겨 둔다.
+
+**3. `.env` 작성**
+
+```sh
+cp .env.example .env
+```
+
+```sh
+MD2HWPX_BASE_URL=http://localhost:8000
+MD2HWPX_GITEA_URL=http://192.168.1.2:3000
+MD2HWPX_GITEA_CLIENT_ID=<Client ID>
+MD2HWPX_GITEA_CLIENT_SECRET=<Client Secret>
+```
+
+쓰지 않는 서버의 값은 비워 둔다.
+`.env` 는 비밀 값이 들어 있어 커밋하지 않는다 (`.gitignore` 에 있음).
+
+**4. 다시 실행**
+
+```sh
+docker compose up -d    # .env 를 바꾼 뒤에도 다시 실행해야 컨테이너에 반영된다
+```
+
+**5. 확인**
+
+1. 웹 서비스 주소로 접속해 "git 저장소" 탭을 고르면 저장소 주소 아래에 `Gitea (http://192.168.1.2:3000): 로그인` 이 보인다.
+   보이지 않으면 `.env` 의 값이 빠졌거나 다시 실행하지 않은 것이다.
+2. "로그인" → Gitea 로그인·승인 → 페이지로 돌아와 `로그인됨 · 로그아웃` 으로 바뀐다.
+3. 비공개 저장소 주소를 넣고 변환한다.
+
+### 증상별 원인
+
+| 증상 | 원인 |
+|---|---|
+| 로그인을 누르면 Gitea 의 `/oauth/authorize?...` 로 가서 404 | Gitea 값을 `MD2HWPX_GITLAB_*` 에 넣음. `MD2HWPX_GITEA_*` 로 옮기고, Gitea 앱의 Redirect URI 도 `/oauth/gitea/callback` 으로 고친 뒤 다시 실행 |
+| 로그인을 누르면 GitLab 의 `/login/oauth/authorize?...` 로 가서 404 | 반대로 GitLab 값을 `MD2HWPX_GITEA_*` 에 넣음. `MD2HWPX_GITLAB_*` 로 옮김 |
+| 로그인을 누르면 서버가 "redirect_uri 가 맞지 않는다" 는 오류를 보여 줌 | Redirect URI 와 `MD2HWPX_BASE_URL` 이 다름 (`localhost` / `127.0.0.1`, 포트, 끝의 `/` 등) |
+| 로그인 후 "로그인 요청이 올바르지 않거나 오래되었습니다" | 로그인을 시작한 주소와 `MD2HWPX_BASE_URL` 이 달라 쿠키가 이어지지 않음. `MD2HWPX_BASE_URL` 로 접속해서 로그인 |
+| 로그인 후 "토큰을 받지 못했습니다" | 컨테이너에서 서버 주소로 접속되지 않거나 Client Secret 이 틀림 |
+| 변환 시 "비공개 저장소라면 … 로그인하세요" | 로그인하지 않았거나 토큰이 만료됨 (GitLab 2시간, Gitea 1시간). 다시 로그인 |
+| 로그인했는데 이 안내 없이 변환이 실패함 | 그 사용자에게 저장소 읽기 권한이 없거나, 저장소 주소가 `.env` 의 서버 주소로 시작하지 않음 (예: 서버는 IP 로, 저장소는 도메인으로 적음) |
 
 ## 보안
 

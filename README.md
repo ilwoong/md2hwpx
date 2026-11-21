@@ -2,291 +2,221 @@
 
 Markdown 파일을 한/글 문서 형식인 HWPX 파일로 변환하는 Python 프로젝트입니다.
 
-## 현재 기능
+- 템플릿 HWPX 의 스타일(`개요 1`, `본문` 등)로 헤딩·문단·목록·표·코드블록·이미지·수식·각주를 넣습니다.
+- ` ```mermaid `, ` ```plantuml ` 코드블록은 그림으로 바꿔 넣습니다.
+- 표·그림 캡션에 번호를 매기고, 글 안에서 그 번호를 참조할 수 있습니다.
+- 차례·쪽 나누기 같은 한/글 기능은 Markdown 뷰어에 보이지 않는 주석 마커로 지정합니다.
+- 명령줄, 웹 서비스, Python 에서 쓸 수 있습니다.
+- 변환하지 못한 것(없는 이미지, 틀린 표기 등)은 `파일:줄` 위치와 함께 경고합니다.
 
-- Markdown 안의 ` ```mermaid ` 코드블록을 PNG 이미지로 변환
-- Markdown 안의 ` ```plantuml ` 코드블록을 PNG 이미지로 변환
-- 변환한 코드블록을 이미지 링크 `![](파일.png)` 로 치환
-- 템플릿 HWPX 를 열어 Markdown 내용을 추가하고 새 HWPX 로 저장
-  - Markdown 은 markdown-it-py 로 파싱 (CommonMark + GFM 표·취소선 + 각주 + 수식). 목록·인용문 안에 어떤 블록이든 중첩 가능
-  - 헤딩(ATX `#`~`######`, Setext `===`/`---`) → `개요 1`~`개요 6` 스타일, 일반 문단 → `본문` 스타일
-  - 이미지(문장 안·참조식 포함, 크기 지정 가능), 표(머리 행은 템플릿의 `표 헤더` 스타일·회색 배경, 열 정렬, 열 너비 비율 지정, 셀 안 `<br>` 로 줄바꿈), 코드블록(1×1 표, 템플릿의 `코드블록` 스타일 또는 D2Coding 9pt·줄간격 140%, Pygments 구문 강조)
-  - 글머리표·번호 목록 (3단계까지 들여 쓰며, 더 깊은 항목은 3단계로 넣음). 글머리표 모양은 템플릿의 `글머리표 1`~`글머리표 3` 스타일이 정함 (내장 템플릿: □, ○, -)
-  - 수식(`$...$`, `$$...$$`) → 한/글 수식 개체. LaTeX 가운데 바꿀 수 있는 것만 넣고, 나머지는 글자로 두며 `파일:줄` 위치와 함께 경고
-  - 각주(`[^1]` / `[^1]: 내용`). 각주에는 문단만 들어가며, 각주 안의 목록·코드블록 등은 `파일:줄` 위치와 함께 경고
-  - 이미지는 PNG·JPEG·GIF 는 그대로, 그 밖의 형식(BMP·TIFF·WebP 등)은 Pillow 로, SVG 는 `rsvg-convert` 로 PNG 로 바꿔 넣음
-  - 저장 전 HWPX 스키마 검증, 넣을 수 없는 이미지(없는 파일, 읽을 수 없는 형식)는 대체 이미지("이미지 파일이 없습니다")를 넣고 `파일:줄` 위치와 함께 경고
-  - 차례·쪽 나누기 같은 한/글 기능은 **주석 마커** `<!-- @hwpx 명령 인자 -->` 로 지정. Markdown 뷰어(GitHub·VS Code 등)에는 보이지 않음.
-    줄에 마커 하나만 두며, 읽지 못한 마커는 `파일:줄` 위치와 함께 경고 ([스펙](spec/markdown-conversion.md) 의 "주석 마커")
+## 빠른 시작
 
-    | 주석 마커 | 하는 일 |
-    |-----------|---------|
-    | `<!-- @hwpx 차례 -->` | 한/글 차례. `차례 그림 표 제목` 처럼 넣을 차례와 순서 지정, `링크없음` 으로 하이퍼링크 끄기, `차례 스타일="요약문-본문"`·`차례 개요 스타일="..."` 처럼 제목 차례를 스타일로 모으기 |
-    | `<!-- @hwpx 쪽나눔 -->` | 쪽 나누기 |
-    | `<!-- @hwpx 새번호 쪽 표 그림 수식 -->` | 적은 번호를 새로 시작 |
-    | `<!-- @hwpx 감추기 -->` | 그 쪽의 쪽 번호·머리말·꼬리말 숨김 |
-    | `<!-- @hwpx 여백면 "이 면은 여백" -->` | 여백 면 한 장 (문구는 없어도 됨) |
-    | `<!-- @hwpx 빈줄 3 -->` | 빈 문단 세 개 (`빈줄` 은 한 개, 10 개까지) |
-    | `<!-- @hwpx 열너비 30% 70% -->` | 바로 다음 표의 열 너비 비율 |
-    | `<!-- @hwpx 그림크기 너비=50% 높이=30mm -->` | 다음 블록의 첫 그림 크기 (`%` 또는 `mm`, 하나만 쓰면 비율 유지) |
-    | `<!-- @hwpx 스타일 "요약문-본문" -->` ... `<!-- @hwpx 스타일끝 -->` | 사이 문단에 템플릿의 그 문단 스타일 적용. 템플릿에 없는 스타일이면 `본문` 으로 넣고 경고 |
-
-  - 호환용 기존 표기: pandoc 원고와 이전 원고를 위해 아래 표기도 그대로 받음. 뷰어에 글자로 보이며(열 너비 주석 `<!-- [cols: ...] -->` 은 제외), 새 기능은 주석 마커에만 더함.
-    형식이 틀린 기존 표기 줄(`[빈 줄 11]`, `\newpage 뒤` 등)은 글자로 남기고 `파일:줄` 위치와 함께 경고.
-    `[TOC]`·`[새 번호]`·`[감추기]`·`[여백면]`·`[빈 줄]` 은 **없어질 표기**라, 동작은 하되 대신 쓸 주석 마커를 담아 `파일:줄` 위치와 함께 경고
-
-    | 주석 마커 | 기존 표기 |
-    |-----------|-----------|
-    | `<!-- @hwpx 차례 그림 표 링크없음 -->` | `[TOC 그림 표 링크없음]` |
-    | `<!-- @hwpx 쪽나눔 -->` | `\newpage`, `\pagebreak` |
-    | `<!-- @hwpx 새번호 쪽 표 -->` | `[새 번호 쪽 표]` |
-    | `<!-- @hwpx 감추기 -->` | `[감추기]` |
-    | `<!-- @hwpx 여백면 "이 면은 여백" -->` | `[여백면] 이 면은 여백` |
-    | `<!-- @hwpx 빈줄 3 -->` | `[빈 줄 3]` |
-    | `<!-- @hwpx 열너비 30% 70% -->` (다음 표) | `<!-- [cols: 30%, 70%] -->` |
-    | `<!-- @hwpx 그림크기 너비=50% 높이=30mm -->` (다음 블록의 그림) | `![](a.png){width=50% height=30mm}` |
-    | `<!-- @hwpx 스타일 "요약문-본문" -->` ... `<!-- @hwpx 스타일끝 -->` | pandoc 의 `::: {custom-style="요약문-본문"}` ... `:::` |
-
-  - 이 프로젝트의 표기(`[감추기]`, `[표] 제목`, `[@결과]`, `\newpage` 등)를 글자 그대로 쓰려면 맨 앞에 `\` 를 붙임 (`\[감추기]`, `\[@결과]`, `\\newpage`)
-  - 파일 맨 앞의 YAML front matter(`---` ... `---`)는 변환하지 않음. `caption-numbering`, `draft` 키만 읽음
-  - front matter 에 `draft: true` 가 있는 파일은 변환에서 뺌. 명령줄 `--include-draft`, 웹 서비스의 "draft 파일도 변환" 으로 포함
-  - 폴더 입력에서 이름이 패턴에 맞는 파일만 변환(`--include 'ch_2*.md'`), 캡션의 장 번호 시작값 지정(`--chapter-start 2` → `[표 2-1]`)
-  - `[표] 제목` / `[그림] 제목` 줄 → `[표 N-M] 제목` / `[그림 N-M] 제목` 캡션 (`표그림 제목` 스타일). `N` 은 장(수준 1 헤딩) 번호, `M` 은 그 장에서의 순번(한/글 자동 번호). `[그림]` 줄이 없으면 이미지의 대체 텍스트가 제목
-  - 캡션 줄을 `[표 #결과] 제목` 처럼 쓰면 글 안의 `[@결과]` 가 그 번호 `표 N-M` 이 됨 (`[[@결과]]` → `[표 N-M]`). 변환할 때 정한 글자이며, 없거나 두 번 쓴 이름은 `파일:줄` 위치와 함께 경고
-  - front matter 에 `caption-numbering: document` 를 쓰면 장 번호 없이 문서 전체에서 센 `[표 7] 제목` 캡션. 기본은 `chapter`.
-    폴더 입력에서 파일마다 값이 다르면 변환하지 않음
-
-HWPX 생성에는 [python-hwpx](https://github.com/airmang/python-hwpx) 를 사용합니다.
-템플릿에는 `개요 1`~`개요 6`, `본문`, `바탕글`, `표그림 제목` 스타일이 있어야 합니다.
-`글머리표 1`, `글머리표 2`, … 스타일이 있으면 글머리표 목록의 단계마다 그 스타일(글머리표 문자·여백·글자 모양)을 쓰고,
-없으면 `본문` 스타일에 `-`, `○`, `□` 를 붙입니다. 한/글의 스타일 편집에서 모양을 바꾸거나 단계를 더할 수 있습니다.
-`차례 1`~`차례 3` 스타일이 있으면 제목 차례의 항목을 헤딩 수준마다 그 스타일(여백·글자 모양)로 넣습니다 (내장 템플릿은 수준마다 10pt 씩 들여 씀). `차례 제목` 스타일이 있으면 차례의 제목(`차례`, `<표 차례>` 등)을 그 스타일로 넣습니다 (내장 템플릿은 가운데 정렬).
-헤딩이 새 쪽에서 시작할지는 템플릿의 `개요` 스타일 문단 모양("문단 앞에서 항상 쪽 나눔")이 정합니다.
-내장 템플릿은 `개요 1`(장)만 새 쪽에서 시작합니다.
-인라인 서식은 코드(템플릿의 `코드블록` 스타일 글꼴, 없으면 D2Coding), 굵게, 기울임, 취소선, 링크(한/글 하이퍼링크, 참조식 포함)를 지원합니다.
-인용문(왼쪽 선), 수평선, 강제 줄바꿈(줄 끝 공백 두 칸 또는 `\`)도 지원합니다. 원시 HTML 은 글자 그대로 들어갑니다 (표 셀 안의 `<br>` 만 줄바꿈). HTML 주석(`<!-- ... -->`)은 넣지 않습니다.
-
-## 실행 환경
-
-다이어그램 렌더링에 mermaid-cli, Chromium, Java, PlantUML 이, SVG 이미지 변환에 rsvg-convert 가 필요합니다.
-이 도구들을 모두 담은 Docker 이미지를 제공하며, 코드는 컨테이너에 마운트해서 실행합니다.
+Docker 만 있으면 됩니다. 다이어그램 도구(mermaid-cli, Chromium, Java, PlantUML)와 rsvg-convert 는 이미지에 들어 있습니다.
 
 ```sh
 docker build -t md2hwpx .
 
-# 테스트 실행
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx pytest -q -p no:cacheprovider
+./md2hwpx.sh docs/guide.md            # 파일 하나 → ./guide.hwpx
+./md2hwpx.sh sample-report/ -o out/   # 폴더의 .md 를 이름 순으로 합쳐 → out/sample-report.hwpx
 ```
 
-`--user` 를 주면 마운트한 폴더에 root 소유 파일이 생기지 않습니다.
-Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 빌드합니다.
+[sample-report](sample-report/README.md) 폴더는 표지·차례·본문·참고문헌을 갖춘 보고서 예제입니다.
+통째로 복사해 내용을 바꿔 쓰면 됩니다.
 
-## 사용 예
-
-### 명령줄
-
-```sh
-# Docker (다이어그램 렌더링 도구 포함). 어느 폴더에서나 실행할 수 있다.
-/path/to/md2hwpx/md2hwpx.sh docs/guide.md -o docs/
-/path/to/md2hwpx/md2hwpx.sh ~/notes/guide.md -o ~/결과/   # 현재 폴더 밖의 입력·출력
-
-# 저장소 없이 이 파일 하나만 복사해 쓰기 (웹 서비스 이미지 md2hwpx-web 의 코드로 변환)
-~/bin/md2hwpx-standalone.sh docs/ --include 'ch_2*.md' --chapter-start 2
-
-# 스크립트 없이 실행 (저장소 루트에서, 현재 폴더 안의 경로만)
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx \
-    python -m md2hwpx docs/guide.md -o docs/
-
-# 로컬 (uv sync 후)
-uv run md2hwpx docs/guide.md          # ./guide.hwpx
-uv run md2hwpx docs/chapters/         # 폴더 안의 .md 를 이름 순으로 합쳐 ./chapters.hwpx
-```
-
-- `md2hwpx.sh` 는 현재 폴더와 입력·출력·템플릿이 있는 폴더를 컨테이너의 같은 경로에 마운트하므로, 경로는 현재 폴더 밖이어도 된다.
-  입력 문서의 이미지는 입력 폴더(파일이면 그 파일이 있는 폴더) 또는 현재 폴더 안에 있어야 한다.
-- `md2hwpx-standalone.sh` 는 어디에 복사해도 혼자 동작한다. 코드·다이어그램 도구·내장 템플릿을 모두 `md2hwpx-web:latest` 이미지에서
-  가져오므로(`MD2HWPX_IMAGE` 로 다른 이미지), 그 이미지를 `build-images.sh` 로 빌드해 두어야 한다.
-  템플릿은 스크립트 옆의 `template.hwpx`, 없으면 이미지의 내장 템플릿을 쓴다. 마운트 방식은 `md2hwpx.sh` 와 같다.
-  `--platform linux/amd64` 로 실행하므로 amd64 이미지여야 한다 (arm64 호스트에서 빌드한 이미지로는 실행되지 않는다).
-- `--include` 의 패턴은 셸이 펼치지 않게 `'ch_2*.md'` 처럼 따옴표로 감싼다.
-- 인자 없이 실행하면 도움말을 보여 준다.
-- 입력: Markdown 파일, 또는 `.md` 파일들이 있는 폴더.
-  폴더면 그 폴더 바로 안의 `.md` 파일을 이름 순(숫자는 크기 순: `2.md` → `10.md`)으로 이어 붙여 하나의 HWPX 로 만든다.
-  하위 폴더는 읽지 않는다.
-- `-o`, `--output`: 저장할 HWPX 파일 또는 폴더.
-  - 폴더면 그 폴더에 `입력 이름.hwpx` 로 저장한다. `/` 로 끝나면 폴더로 보고, 없으면 상위 폴더까지 만든다.
-  - 생략하면 현재 작업 폴더에 `입력 이름.hwpx` 로 저장한다.
-  - 같은 이름의 파일이 있으면 덮어쓰지 않고 `이름-1.hwpx`, `이름-2.hwpx` ... 로 저장한다.
-- `--include-draft`: front matter 에 `draft: true` 가 있는 파일도 변환한다. 없으면 그 파일을 빼고 변환하며,
-  변환할 파일이 모두 draft 면 오류로 끝난다.
-- `--include PATTERN`: 이름이 패턴(`*`·`?`·`[...]`, 대소문자 구분)에 맞는 `.md` 파일만 변환한다. 여러 번 주면 어느 하나에 맞는 파일.
-  셸이 펼치지 않게 `'ch_2*.md'` 처럼 따옴표로 감싼다. 맞는 파일이 없으면 오류로 끝난다.
-- `--chapter-start N`: 캡션의 장 번호를 `N` 부터 센다 (기본 1). `ch_2*.md` 만 변환해도 `[표 2-1]` 로 번호를 맞출 때 쓴다.
-- `-t`, `--template`: 템플릿 HWPX 파일. 생략하면 현재 폴더의 `template.hwpx`, 그것도 없으면 내장 템플릿
-  (`src/md2hwpx/template.hwpx`)을 쓴다.
-
-다이어그램은 임시 폴더에 렌더링해 HWPX 에 넣고 지우므로, 입력 폴더에 이미지 파일이 남지 않습니다.
-성공하면 저장한 파일 경로를 출력하고(경고가 있어도 종료 코드 0), 변환에 실패하면 오류를 stderr 에 출력하고 종료 코드 1 로 끝납니다.
-옵션이 틀리면(모르는 옵션, 1 미만의 `--chapter-start` 등) 사용법과 오류를 출력하고 종료 코드 2 로 끝납니다.
-
-### Python
-
-```python
-from pathlib import Path
-from md2hwpx.convert import DEFAULT_TEMPLATE, convert_markdown
-from md2hwpx.diagram import render_diagrams
-from md2hwpx.source import caption_numbering, read_markdown
-
-doc = Path("docs/guide.md")
-markdown = render_diagrams(read_markdown(doc), out_dir=doc.parent / "images", link_base=doc.parent)
-convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"), caption_numbering([doc]))
-```
-
-다이어그램은 `docs/images/mermaid-<해시>.png` 같은 이름으로 저장되고,
-반환된 Markdown 에서 코드블록은 `![](images/mermaid-<해시>.png)` 로 바뀝니다.
-이미지 경로는 `convert_markdown` 의 두 번째 인자(기준 폴더)를 기준으로 찾습니다.
-`convert_markdown` 은 글자 그대로 둔 `[@이름]` 참조를 `{이름: 이유}` 로 돌려줍니다.
-파일 여러 개를 문서 하나로 만들 때는 문자열 목록을 넘깁니다: 각주와 링크 정의는 파일마다 따로 읽습니다.
-`read_markdown` 은 front matter 를 지우므로 캡션 번호 방식은 `caption_numbering` 으로 따로 읽어 넘깁니다 (생략하면 `chapter`).
-`DEFAULT_TEMPLATE` 은 내장 템플릿입니다. 다른 템플릿은 그 경로를 넘깁니다.
-파일을 바로 변환할 때는 `convert(md_path, template_path, out_path)` 를 씁니다.
-
-### 웹 서비스
-
-브라우저에서 Markdown 을 올려 HWPX 를 내려받습니다. 다이어그램 도구를 담은 Docker 이미지로 실행합니다.
+브라우저에서 쓰려면 웹 서비스를 띄웁니다.
 
 ```sh
 docker compose up -d --build    # http://localhost:8000
 ```
 
-이미지를 날짜 태그와 함께 빌드하려면 `build-images.sh` 를 씁니다. 개발용 `md2hwpx` 와 웹 서비스용 `md2hwpx-web` 을
-모두 빌드해 각각 `latest` 와 오늘 날짜 태그(`md2hwpx-web:261030` 처럼 YYMMDD)를 붙이므로, 나중에 다시 빌드해도
-그날의 이미지로 되돌릴 수 있습니다. 같은 날 다시 빌드하면 그날 태그도 새 이미지로 옮겨 갑니다.
-빌드만 하므로 실행 중인 웹 서비스는 `docker compose up -d` 로 바꿉니다.
+## 원고 쓰는 법
 
-```sh
-./build-images.sh && docker compose up -d
+자세한 규칙은 [Markdown → HWPX 변환 스펙](spec/markdown-conversion.md) 에 있습니다.
+
+### 지원하는 Markdown
+
+CommonMark 에 GFM 표·취소선, 각주, 수식을 더한 문법을 받습니다. 목록·인용문 안에는 어떤 블록이든 넣을 수 있습니다.
+
+| Markdown | 한/글 문서 |
+|----------|-----------|
+| 헤딩 `#` ~ `######` | `개요 1` ~ `개요 6` 스타일 |
+| 문단 | `본문` 스타일 |
+| 글머리표·번호 목록 | 3단계까지 들여 씀 (더 깊은 항목은 3단계로) |
+| 표 | 머리 행은 `표 헤더` 스타일. 열 정렬, 셀 안 `<br>` 줄바꿈 |
+| 코드블록 | `코드블록` 스타일의 1×1 표, 구문 강조 |
+| 이미지 | PNG·JPEG·GIF 는 그대로, 그 밖의 형식과 SVG 는 PNG 로 바꿔 넣음 |
+| ` ```mermaid `, ` ```plantuml ` | 그림 |
+| 수식 `$...$`, `$$...$$` | 한/글 수식 개체 (바꿀 수 없는 LaTeX 는 글자로 둠) |
+| 각주 `[^1]` | 한/글 각주 (문단만) |
+| 굵게, 기울임, 취소선, 코드, 링크 | 글자 모양, 하이퍼링크 |
+| 인용문, 수평선, 강제 줄바꿈 | 왼쪽 선, 선, 줄바꿈 |
+
+원시 HTML 은 글자 그대로 들어가고, HTML 주석은 넣지 않습니다.
+
+### 캡션과 번호 참조
+
+```markdown
+[표 #결과] 측정 결과
+
+| 항목 | 값 |
+|------|----|
+| A    | 1  |
+
+자세한 값은 [[@결과]] 에 있다.
 ```
 
-- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `http://`·`https://` git 저장소 주소(브랜치·태그·커밋 선택, 폐쇄망 http 저장소 포함).
-  zip·git 은 변환할 md 파일이나 폴더의 경로와 파일 이름 패턴(쉼표로 여러 개)을 지정할 수 있고, `draft: true` 파일은 "draft 파일도 변환" 을 켜야 변환합니다.
-- 경로·패턴·draft 와 아래 두 가지는 페이지의 "선택 옵션" 을 펼치면 나옵니다.
-  - "시작 장 번호" 칸으로 캡션의 장 번호 시작값을 정합니다.
-  - "템플릿 HWPX 바꾸기" 에 템플릿을 올리면 그 템플릿으로 변환합니다.
-- 한 번에 올릴 수 있는 크기는 50 MB 입니다 (올린 파일, zip 과 그것을 푼 파일, 템플릿의 합계).
-  `.env` 의 `MD2HWPX_MAX_UPLOAD_MB` 로 바꿉니다 (`.env.example` 참고, 바꾼 뒤 `docker compose up -d`).
+- `[표] 제목`, `[그림] 제목` 줄은 `[표 N-M] 제목` 캡션이 됩니다. `N` 은 장(수준 1 헤딩) 번호, `M` 은 그 장에서의 순번입니다.
+- `[그림]` 줄이 없으면 이미지의 대체 텍스트가 그림 제목입니다.
+- 캡션에 `#이름` 을 붙이면 글 안의 `[@이름]` 이 `표 N-M` 으로 바뀝니다 (`[[@이름]]` → `[표 N-M]`).
+
+### 주석 마커
+
+한/글 기능은 `<!-- @hwpx 명령 인자 -->` 로 지정합니다. 한 줄에 마커 하나만 둡니다.
+
+| 주석 마커 | 하는 일 |
+|-----------|---------|
+| `<!-- @hwpx 차례 -->` | 차례. `차례 그림 표 제목` 처럼 넣을 차례와 순서를 지정 |
+| `<!-- @hwpx 쪽나눔 -->` | 쪽 나누기 |
+| `<!-- @hwpx 새번호 쪽 표 그림 수식 -->` | 적은 번호를 새로 시작 |
+| `<!-- @hwpx 감추기 -->` | 그 쪽의 쪽 번호·머리말·꼬리말 숨김 |
+| `<!-- @hwpx 여백면 "이 면은 여백" -->` | 여백 면 한 장 (문구는 없어도 됨) |
+| `<!-- @hwpx 빈줄 3 -->` | 빈 문단 세 개 (10 개까지) |
+| `<!-- @hwpx 열너비 30% 70% -->` | 바로 다음 표의 열 너비 비율 |
+| `<!-- @hwpx 그림크기 너비=50% 높이=30mm -->` | 다음 블록의 첫 그림 크기 (`%` 또는 `mm`, 하나만 쓰면 비율 유지) |
+| `<!-- @hwpx 스타일 "요약문-본문" -->` ... `<!-- @hwpx 스타일끝 -->` | 사이 문단에 템플릿의 그 문단 스타일 적용 |
+
+- pandoc 원고와 이전 원고의 표기(`\newpage`, `{width=50%}`, `::: {custom-style="..."}`, `[TOC]`, `[감추기]` 등)도 받습니다.
+  이 가운데 `[TOC]`·`[새 번호]`·`[감추기]`·`[여백면]`·`[빈 줄]` 은 없어질 표기라 경고합니다.
+  대응표는 스펙의 ["주석 마커"](spec/markdown-conversion.md#주석-마커) 에 있습니다.
+- 이 프로젝트의 표기를 글자 그대로 쓰려면 맨 앞에 `\` 를 붙입니다 (`\[감추기]`, `\[@결과]`, `\\newpage`).
+
+### front matter
+
+파일 맨 앞의 YAML front matter(`---` ... `---`)는 문서에 넣지 않으며, 다음 두 키만 읽습니다.
+
+| 키 | 뜻 |
+|----|----|
+| `draft: true` | 이 파일을 변환에서 뺌 (`--include-draft` 로 포함) |
+| `caption-numbering: document` | 장 번호 없이 문서 전체에서 센 `[표 7] 제목` 캡션. 기본은 `chapter` |
+
+## 템플릿
+
+`-t` 로 템플릿 HWPX 를 주지 않으면 현재 폴더의 `template.hwpx`, 그것도 없으면 내장 템플릿(`src/md2hwpx/template.hwpx`)을 씁니다.
+직접 만든 템플릿에는 다음 문단 스타일이 있어야 합니다.
+
+| 스타일 | 필수 | 쓰이는 곳 |
+|--------|------|-----------|
+| `개요 1` ~ `개요 6` | 필수 | 헤딩. 새 쪽에서 시작할지는 이 스타일의 문단 모양이 정함 (내장 템플릿은 `개요 1` 만) |
+| `본문` | 필수 | 문단 |
+| `바탕글` | 필수 | 표 셀, 그림을 담는 문단 |
+| `표그림 제목` | 필수 | 캡션 |
+| `코드블록` | 선택 | 코드블록과 문장 안 코드 (없으면 D2Coding 9pt) |
+| `표 헤더` | 선택 | 표 머리 행 |
+| `글머리표 1`, `글머리표 2`, … | 선택 | 글머리표 목록의 단계별 모양 (없으면 `-`, `○`, `□`) |
+| `차례 제목`, `차례 1` ~ `차례 3` | 선택 | 차례의 제목과 수준별 항목 |
+
+자세한 내용은 스펙의 ["템플릿 요구사항"](spec/markdown-conversion.md#템플릿-요구사항) 에 있습니다.
+
+## 사용법
+
+### 명령줄
+
+실행 방법은 네 가지이며, 옵션은 모두 같습니다.
+
+| 실행 방법 | 필요한 것 | 예 |
+|-----------|-----------|----|
+| `md2hwpx.sh` | 이 저장소, `md2hwpx` 이미지 | `/path/to/md2hwpx/md2hwpx.sh docs/guide.md -o docs/` |
+| `md2hwpx-standalone.sh` | 이 파일 하나, `md2hwpx-web` 이미지 (amd64) | `~/bin/md2hwpx-standalone.sh docs/` |
+| `md2hwpx-remote.py` | Python 3.9 이상, 실행 중인 웹 서비스 | `python3 md2hwpx-remote.py docs/guide.md --server http://md2hwpx.internal:8000` |
+| `uv run md2hwpx` | `uv sync`, PATH 의 다이어그램 도구 | `uv run md2hwpx docs/guide.md` |
+
+- 두 `.sh` 스크립트는 어느 폴더에서나 실행할 수 있고, 경로는 현재 폴더 밖이어도 됩니다.
+  다만 입력 문서의 이미지는 입력 폴더나 현재 폴더 안에 있어야 합니다. 자세한 내용은 [Docker 스펙](spec/docker.md).
+- `md2hwpx-remote.py` 는 웹 페이지의 "스크립트" 탭에서 내려받습니다 (저장소에서는 `src/md2hwpx/static/md2hwpx-remote.py`).
+  md 와 그 문서가 쓰는 이미지를 묶어 웹 서비스에 보내고 HWPX 를 받아 저장합니다.
+  서비스 주소는 `--server`, 환경 변수 `MD2HWPX_SERVER`, `http://localhost:8000` 순으로 정합니다.
+
+```
+md2hwpx INPUT [-o OUTPUT] [-t TEMPLATE.hwpx] [--include-draft] [--include PATTERN ...] [--chapter-start N]
+```
+
+| 인자 | 뜻 | 생략하면 |
+|------|----|----------|
+| `INPUT` | Markdown 파일, 또는 `.md` 파일이 든 폴더. 폴더면 바로 안의 `.md` 를 이름 순(`2.md` → `10.md`)으로 합쳐 문서 하나로 만듦 | 도움말 |
+| `-o`, `--output` | 저장할 HWPX 파일 또는 폴더 (`/` 로 끝나면 폴더로 보고 없으면 만듦) | 현재 폴더의 `입력 이름.hwpx` |
+| `-t`, `--template` | 템플릿 HWPX | 현재 폴더의 `template.hwpx`, 없으면 내장 템플릿 |
+| `--include PATTERN` | 이름이 패턴에 맞는 `.md` 만 변환. 여러 번 줄 수 있음 | 모든 `.md` |
+| `--include-draft` | `draft: true` 파일도 변환 | draft 파일은 뺌 |
+| `--chapter-start N` | 캡션의 장 번호를 `N` 부터 셈 (`ch_2*.md` 만 변환해도 `[표 2-1]`) | 1 |
+
+- `--include` 의 패턴은 셸이 펼치지 않게 `'ch_2*.md'` 처럼 따옴표로 감쌉니다.
+- 같은 이름의 파일이 있으면 덮어쓰지 않고 `이름-1.hwpx`, `이름-2.hwpx` ... 로 저장합니다.
+- 성공하면 저장한 파일 경로를 출력합니다 (경고가 있어도 종료 코드 0). 변환에 실패하면 종료 코드 1, 옵션이 틀리면 2 입니다.
+
+자세한 내용은 스펙의 ["명령줄"](spec/markdown-conversion.md#명령줄-md2hwpxcli) 에 있습니다.
+
+### 웹 서비스
+
+브라우저에서 Markdown 을 올려 HWPX 를 내려받습니다.
+
+```sh
+docker compose up -d --build              # http://localhost:8000
+./build-images.sh && docker compose up -d  # 날짜 태그(md2hwpx-web:261030)도 함께 남기며 빌드
+```
+
+- 입력: md 와 이미지 파일 여러 개, md·이미지가 든 폴더의 zip, 또는 `http://`·`https://` git 저장소 주소.
+- 변환할 경로, 파일 이름 패턴, draft 포함, 시작 장 번호, 템플릿은 페이지의 "선택 옵션" 에서 정합니다.
+- 한 번에 올릴 수 있는 크기는 50 MB 이며, `.env` 의 `MD2HWPX_MAX_UPLOAD_MB` 로 바꿉니다 (`.env.example` 참고).
 - 폐쇄망 GitLab·Gitea 의 비공개 저장소는 페이지에서 그 서버에 로그인(OAuth2)해 받습니다.
-  설정은 아래 "GitLab·Gitea 로그인 설정" 을 따릅니다.
-- 웹 서비스 자체의 접근 인증은 없으니 외부에 공개할 때는 앞단에서 접근을 제한하세요. 자세한 내용은 [웹 서비스 스펙](spec/web-service.md).
+  설정은 스펙의 ["GitLab·Gitea 로그인"](spec/web-service.md#gitlabgitea-로그인-oauth2) 을 따릅니다.
+- 웹 서비스 자체의 접근 인증은 없으니 외부에 공개할 때는 앞단에서 접근을 제한하세요.
 
-#### 명령줄에서 웹 서비스로 변환
+API 와 보안은 [웹 서비스 스펙](spec/web-service.md) 에 있습니다.
 
-Docker 나 md2hwpx 를 설치하지 않은 PC 에서도 `md2hwpx-remote.py` 하나로 웹 서비스에 변환을 맡길 수 있습니다.
-페이지의 "스크립트" 탭에서 내려받습니다 (사용법도 거기 있습니다). 저장소에서는 `src/md2hwpx/static/md2hwpx-remote.py` 입니다.
-md 파일과 그 문서가 쓰는 이미지 파일을 찾아 zip 으로 묶어 보내고, HWPX 를 받아 저장합니다. Python 3.9 이상만 있으면 됩니다.
+### Python
 
-```sh
-python3 md2hwpx-remote.py docs/guide.md --server http://md2hwpx.internal:8000   # → guide.hwpx
-python3 md2hwpx-remote.py docs/chapters/ -o out/                                  # 폴더의 .md 를 이름 순으로
+```python
+from pathlib import Path
+from md2hwpx.convert import DEFAULT_TEMPLATE, convert
+
+doc = Path("docs/guide.md")
+convert(doc, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"))
 ```
 
-- 서비스 주소는 `--server`, 없으면 환경 변수 `MD2HWPX_SERVER`, 그것도 없으면 `http://localhost:8000` 입니다.
-- 옵션(`-o`, `-t`, `--include-draft`, `--include`, `--chapter-start`)과 출력 이름 규칙은 `md2hwpx` 명령과 같습니다.
-  템플릿을 주지 않으면 서비스의 내장 템플릿을 씁니다.
-- 이미지는 디스크에 놓인 폴더 구조대로 보내므로 `images/a.png`, `../shared/a.png` 같은 경로를 그대로 쓸 수 있습니다.
-  문서가 쓰지 않는 파일은 보내지 않습니다. 없는 이미지는 서비스가 대체 이미지로 넣고 경고합니다.
-- 스크립트 없이 직접 보내려면 `curl -s -F source=files -F files=@guide.md -F files=@pic.png http://localhost:8000/convert | jq -r .hwpx | base64 -d > guide.hwpx`
-  처럼 `POST /convert` 를 씁니다 (필드는 [웹 서비스 스펙](spec/web-service.md) 의 "API").
+`convert` 는 다이어그램 코드블록을 그림으로 바꾸지 않습니다. 다이어그램이 있으면 먼저 `render_diagrams` 로 바꿉니다.
 
-#### GitLab·Gitea 로그인 설정
+```python
+from md2hwpx.convert import convert_markdown
+from md2hwpx.diagram import render_diagrams
+from md2hwpx.source import caption_numbering, read_markdown
 
-로그인을 쓰지 않으면 이 설정은 필요 없습니다. 공개 저장소는 로그인 없이 받습니다.
-아래 예는 웹 서비스를 `http://localhost:8000`, Gitea 를 `http://192.168.1.2:3000` 에서 쓰는 경우입니다.
-
-**1. 주소 정하기**
-
-- 웹 서비스 주소(`MD2HWPX_BASE_URL`): 사용자가 **브라우저 주소창에 입력하는 주소** 그대로. 뒤의 `/` 는 뺍니다.
-  `localhost` 와 `127.0.0.1` 도 서로 다른 주소로 취급되므로, 앞으로 접속할 쪽 하나로 정합니다.
-- GitLab·Gitea 주소: **브라우저와 md2hwpx 컨테이너 양쪽에서 접속되는 주소**.
-  브라우저는 이 주소의 로그인 화면으로 이동하고, 컨테이너는 이 주소에서 토큰을 받고 저장소를 clone 합니다.
-  컨테이너 안의 `localhost` 는 md2hwpx 자신이므로 `http://localhost:3000` 은 쓸 수 없습니다. 호스트 IP 나 도메인을 씁니다.
-  확인: `docker compose exec web wget -q -O- http://192.168.1.2:3000/api/v1/version` (Gitea) 이 버전을 보여 주면 됩니다.
-
-**2. OAuth 애플리케이션 등록**
-
-| | GitLab | Gitea |
-|---|---|---|
-| 메뉴 | 사용자 설정 > Applications. 관리자는 관리자 영역 > Applications (모든 사용자용) | 사용자 설정 > 애플리케이션 > OAuth2 애플리케이션 관리. 관리자는 사이트 관리 > 통합 > 애플리케이션 |
-| Redirect URI | `<웹 서비스 주소>/oauth/gitlab/callback` | `<웹 서비스 주소>/oauth/gitea/callback` |
-| 기밀(Confidential) | 켬 | 켬 (Confidential client) |
-| Scope | `read_repository` 만 | 등록 화면에 없음 (로그인할 때 `read:repository` 를 요청) |
-| 그 밖 | 관리자 영역에서 만들고 Trusted 를 켜면 승인 화면을 건너뜀 | |
-
-Redirect URI 는 웹 서비스 주소와 **글자 그대로** 같아야 합니다 (예: `http://localhost:8000/oauth/gitea/callback`).
-등록하면 나오는 Client ID(GitLab: Application ID) 와 Client Secret 을 다음 단계에 씁니다. Secret 은 다시 볼 수 없으니 바로 옮겨 둡니다.
-
-**3. `.env` 작성**
-
-```sh
-cp .env.example .env
+markdown = render_diagrams(read_markdown(doc), out_dir=doc.parent / "images", link_base=doc.parent)
+convert_markdown(markdown, doc.parent, DEFAULT_TEMPLATE, doc.with_suffix(".hwpx"), caption_numbering([doc]))
 ```
 
-```sh
-MD2HWPX_BASE_URL=http://localhost:8000
-MD2HWPX_GITEA_URL=http://192.168.1.2:3000
-MD2HWPX_GITEA_CLIENT_ID=<Client ID>
-MD2HWPX_GITEA_CLIENT_SECRET=<Client Secret>
-```
+함수별 설명은 스펙의 ["공개 API"](spec/markdown-conversion.md#공개-api) 와 [다이어그램 스펙](spec/diagram-rendering.md) 에 있습니다.
 
-쓰지 않는 서버의 값은 비워 둡니다. 한 서버의 세 값과 `MD2HWPX_BASE_URL` 이 모두 있어야 그 서버의 로그인이 켜집니다.
-`.env` 는 비밀 값이 들어 있어 커밋하지 않습니다 (`.gitignore` 에 있음).
-
-**4. 다시 실행**
+## 개발
 
 ```sh
-docker compose up -d    # .env 를 바꾼 뒤에도 다시 실행해야 컨테이너에 반영된다
-```
+# Docker (다이어그램 도구 포함)
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/work md2hwpx pytest -q -p no:cacheprovider
 
-**5. 확인**
-
-1. 웹 서비스 주소로 접속해 "git 저장소" 탭을 고르면 저장소 주소 아래에 `Gitea (http://192.168.1.2:3000): 로그인` 이 보입니다.
-   보이지 않으면 `.env` 의 값이 빠졌거나 다시 실행하지 않은 것입니다.
-2. "로그인" → Gitea 로그인·승인 → 페이지로 돌아와 `로그인됨 · 로그아웃` 으로 바뀝니다.
-3. 비공개 저장소 주소를 넣고 변환합니다.
-
-| 증상 | 원인 |
-|---|---|
-| 로그인을 누르면 Gitea 의 `/oauth/authorize?...` 로 가서 404 | Gitea 값을 `MD2HWPX_GITLAB_*` 에 넣음. `MD2HWPX_GITEA_*` 로 옮기고, Gitea 앱의 Redirect URI 도 `/oauth/gitea/callback` 으로 고친 뒤 다시 실행 |
-| 로그인을 누르면 GitLab 의 `/login/oauth/authorize?...` 로 가서 404 | 반대로 GitLab 값을 `MD2HWPX_GITEA_*` 에 넣음. `MD2HWPX_GITLAB_*` 로 옮김 |
-| 로그인을 누르면 서버가 "redirect_uri 가 맞지 않는다" 는 오류를 보여 줌 | Redirect URI 와 `MD2HWPX_BASE_URL` 이 다름 (`localhost` / `127.0.0.1`, 포트, 끝의 `/` 등) |
-| 로그인 후 "로그인 요청이 올바르지 않거나 오래되었습니다" | 로그인을 시작한 주소와 `MD2HWPX_BASE_URL` 이 달라 쿠키가 이어지지 않음. `MD2HWPX_BASE_URL` 로 접속해서 로그인 |
-| 로그인 후 "토큰을 받지 못했습니다" | 컨테이너에서 서버 주소로 접속되지 않거나 Client Secret 이 틀림 |
-| 변환 시 "비공개 저장소라면 … 로그인하세요" | 로그인하지 않았거나 토큰이 만료됨 (GitLab 2시간, Gitea 1시간). 다시 로그인 |
-| 로그인했는데 이 안내 없이 변환이 실패함 | 그 사용자에게 저장소 읽기 권한이 없거나, 저장소 주소가 `.env` 의 서버 주소로 시작하지 않음 (예: 서버는 IP 로, 저장소는 도메인으로 적음) |
-
-서버를 다시 시작하면 로그인이 풀립니다 (토큰을 메모리에만 둠).
-
-## 로컬 개발
-
-컨테이너 없이 개발할 때는 [uv](https://docs.astral.sh/uv/) 를 사용합니다.
-
-```sh
+# 로컬 (uv 0.4.27 이상)
 uv sync
 uv run pytest -q
 ```
 
-`mmdc`, `plantuml`, `rsvg-convert` 가 PATH 에 없으면 해당 렌더링 테스트는 skip 됩니다.
-
-uv 0.4.27 이상이 필요합니다 (pytest 가 든 `dev` 의존성 그룹). `Failed to spawn: pytest` 가 나면 `uv --version` 과
-`UV_NO_DEV` 같은 환경 변수가 설정되어 있지 않은지 확인하세요.
-
-## 프로젝트 구조
+- Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 Docker 이미지를 다시 빌드합니다.
+- 로컬에서 `mmdc`, `plantuml`, `rsvg-convert` 가 PATH 에 없으면 해당 렌더링 테스트는 skip 됩니다.
+- `Failed to spawn: pytest` 가 나면 `uv --version` 과 `UV_NO_DEV` 같은 환경 변수가 설정되어 있지 않은지 확인하세요.
 
 ```
 src/md2hwpx/    소스 코드와 내장 템플릿(template.hwpx)
 tests/          pytest 테스트
 spec/           구현 스펙 문서
 samples/        변환 테스트용 샘플 Markdown (결과 HWPX 는 커밋하지 않음)
+sample-report/  여러 파일로 쓴 보고서 예제
 docker/         Docker 이미지용 실행 스크립트와 설정
 Dockerfile      실행용 Alpine 이미지 (dev: 코드 마운트, web: 웹 서비스)
 compose.yaml    웹 서비스 실행
@@ -299,9 +229,9 @@ build-images.sh 개발용·웹 서비스 이미지를 latest·날짜 태그로 �
 
 구현 내용은 [spec](spec/README.md) 폴더에 정리되어 있습니다.
 
+- [Markdown → HWPX 변환](spec/markdown-conversion.md)
 - [다이어그램 코드블록 → PNG 변환](spec/diagram-rendering.md)
 - [실행용 Docker 이미지](spec/docker.md)
-- [Markdown → HWPX 변환](spec/markdown-conversion.md)
 - [웹 서비스](spec/web-service.md)
 
 ## 라이선스
