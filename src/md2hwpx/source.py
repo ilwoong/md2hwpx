@@ -52,6 +52,19 @@ def _in_footnote(node: SyntaxTreeNode) -> bool:
     return any(a.type == "footnote" for a in _ancestors(node))
 
 
+def _block_lines(node: SyntaxTreeNode) -> tuple[int, int]:
+    """The source lines of *node*, from the first up to (not including) the last, or those of the nearest block
+    around it: inline content has none of its own, nor has a table cell (its row's are the nearest)."""
+    return next(n.map for n in (node, *_ancestors(node)) if n.map is not None)
+
+
+def _line_of(text: str, node: SyntaxTreeNode, lines: list[str]) -> int:
+    """The number of the first of *node*'s source *lines* (see _block_lines) that holds *text*, or of its first
+    line if none does."""
+    start, end = _block_lines(node)
+    return next((i + 1 for i in range(start, end) if text in lines[i]), start + 1)
+
+
 def _blank_front_matter(markdown: str) -> str:
     """*markdown* with its front matter as blank lines, so line numbers still count it."""
     return _FRONT_MATTER.sub(lambda m: "\n" * m.group(0).count("\n"), markdown, count=1)
@@ -83,11 +96,10 @@ def image_paths(markdown: str, base_dir: Path) -> list[tuple[int, Path]]:
             continue
         for image in (n for n in node.children[0].children if n.type == "image"):
             src = image.attrs["src"]
-            # The line of the paragraph that names the image.
+            # The line of the paragraph that names the image, as written or with its escapes read.
             start, end = node.map
-            raw = next((s for s in (src, unquote(src)) if any(s in line for line in lines[start:end])), None)
-            number = next((i + 1 for i in range(start, end) if raw and raw in lines[i]), start + 1)
-            images.append((number, base_dir / unquote(src)))
+            raw = next((s for s in (src, unquote(src)) if any(s in line for line in lines[start:end])), src)
+            images.append((_line_of(raw, node, lines), base_dir / unquote(src)))
     return images
 
 
@@ -99,8 +111,7 @@ def references(markdown: str) -> list[tuple[int, str]]:
     for node in _nodes(markdown):
         if node.type != "inline":
             continue
-        # A table cell's inline content has no lines of its own: its row's are the nearest.
-        start, end = next(n.map for n in (node, *_ancestors(node)) if n.map is not None)
+        start, end = _block_lines(node)
         texts = [n.content for n in _walk(node) if n.type == "text"]
         line_names = [(i + 1, m[1]) for i in range(start, end) for m in REFERENCE.finditer(lines[i])]
         for name in (m[1] for text in texts for m in REFERENCE.finditer(text)):
@@ -165,11 +176,9 @@ def footnote_leftovers(markdown: str) -> list[tuple[int, str]]:
             if block.type in _FOOTNOTE_LEAVES_OUT:
                 found.append((block.map[0] + 1, _FOOTNOTE_LEAVES_OUT[block.type]))
             elif block.type == "paragraph":
-                start, end = block.map
                 for ref in (n for n in _walk(block) if n.type == "footnote_ref"):
                     # The line of the paragraph naming it.
-                    label = f"[^{ref.meta['label']}]"
-                    line = next((i + 1 for i in range(start, end) if label in lines[i]), start + 1)
+                    line = _line_of(f"[^{ref.meta['label']}]", block, lines)
                     found.append((line, _FOOTNOTE_LEAVES_OUT["footnote_ref"]))
     return sorted(found)
 
@@ -181,11 +190,9 @@ def unsupported_math(markdown: str) -> list[tuple[int, str]]:
     lines = source_lines(markdown)
     found = []
     for node in (n for n in _nodes(markdown) if n.type in MATH_NODES and equation_script(n.content) is None):
-        # Inline math has no lines of its own: its block's are the nearest. The line that holds its first line.
-        start, end = next(n.map for n in (node, *_ancestors(node)) if n.map is not None)
+        # The line that holds the math's first line.
         first = node.content.strip().split("\n")[0]
-        line = next((i + 1 for i in range(start, end) if first in lines[i]), start + 1)
-        found.append((line, math_source(node)))
+        found.append((_line_of(first, node, lines), math_source(node)))
     return found
 
 
