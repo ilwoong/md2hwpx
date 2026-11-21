@@ -9,11 +9,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from md2hwpx.diagram import LANGS
-from md2hwpx.parser import image_length
+from md2hwpx.parser import DIAGRAM_LANGS, image_length
 
 # File names render_diagrams gives the PNGs it renders.
-_DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(LANGS)})-[0-9a-f]{{12}}\.png$")
+_DIAGRAM_IMAGE = re.compile(rf"^({'|'.join(DIAGRAM_LANGS)})-[0-9a-f]{{12}}\.png$")
 # Shown in place of an image whose file is not there, or that cannot be read.
 MISSING_IMAGE = Path(__file__).resolve().parent / "static" / "missing-image.png"
 SVG_TIMEOUT = 60  # seconds for rsvg-convert

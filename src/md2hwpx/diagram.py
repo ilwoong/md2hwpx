@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import shutil
 import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from md2hwpx.parser import PARSER, source_lines
+from md2hwpx.parser import DIAGRAM_LANGS, PARSER, diagram_lang, source_lines
 
-LANGS = ("mermaid", "plantuml")
 DIAGRAM_TIMEOUT = 60  # seconds for one diagram
 
 
@@ -34,21 +32,17 @@ def find_diagram_blocks(markdown: str) -> list[DiagramBlock]:
     """The closed mermaid / plantuml fenced code blocks, found as CommonMark reads them,
     so also inside list items and block quotes."""
     lowered = markdown.lower()
-    if not any(lang in lowered for lang in LANGS):
+    if not any(lang in lowered for lang in DIAGRAM_LANGS):
         return []  # not worth a parse: most files of a long document have no diagram
     lines = source_lines(markdown)
     blocks = []
     for token in PARSER.parse(markdown):
-        info = token.info.split() if token.type == "fence" else []
-        if not info or info[0].lower() not in LANGS:
+        lang = diagram_lang(token, lines)
+        if lang is None:
             continue
         start, end = token.map[0], token.map[1] - 1
-        # markdown-it runs an unclosed fence to the end of its container; leave those as they are.
-        closing = rf"[ \t>]*{re.escape(token.markup[0])}{{{len(token.markup)},}}\s*"
-        if end == start or not re.fullmatch(closing, lines[end]):
-            continue
         prefix = lines[start][: lines[start].index(token.markup)]
-        blocks.append(DiagramBlock(info[0].lower(), token.content, start, end, prefix))
+        blocks.append(DiagramBlock(lang, token.content, start, end, prefix))
     return blocks
 
 
