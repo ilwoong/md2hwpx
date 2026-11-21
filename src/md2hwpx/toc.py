@@ -81,15 +81,20 @@ def toc_entries(doc: HwpxDocument, request: TocRequest, styles: dict[str, Style]
     return [p for p in doc.paragraphs if p.text.strip() and p.element.get("styleIDRef") in outline | styled]
 
 
+def _set_style(paragraph, style: Style, para_pr_id_ref) -> None:
+    """Put *paragraph* in *style*, its paragraph shape *para_pr_id_ref* and its runs in the style's character
+    shape."""
+    paragraph.element.set("styleIDRef", str(style.id))
+    paragraph.element.set("paraPrIDRef", str(para_pr_id_ref))
+    for run in paragraph.element.iter(f"{_HP}run"):
+        run.set("charPrIDRef", str(style.char_pr_id_ref))
+
+
 def _style_title(title, styles: dict[str, Style]) -> None:
     """Put *title*, a TOC's title paragraph, in the 차례 제목 style of *styles* if there is one."""
     style = styles.get(TOC_TITLE_STYLE)
-    if style is None:
-        return
-    title.element.set("styleIDRef", str(style.id))
-    title.element.set("paraPrIDRef", str(style.para_pr_id_ref))
-    for run in title.element.iter(f"{_HP}run"):
-        run.set("charPrIDRef", str(style.char_pr_id_ref))
+    if style is not None:
+        _set_style(title, style, style.para_pr_id_ref)
 
 
 def _style_entries(doc: HwpxDocument, entries: list, headings: list, styles: dict[str, Style]) -> None:
@@ -119,10 +124,7 @@ def _style_entries(doc: HwpxDocument, entries: list, headings: list, styles: dic
                 tab_stops=[{"pos": width, "type": "RIGHT", "leader": TOC_LEADER}], auto_tab_left=True
             )
             shapes[level] = header.ensure_paragraph_format(base_para_pr_id=style.para_pr_id_ref, tab_pr_id_ref=tab)
-        entry.element.set("styleIDRef", str(style.id))
-        entry.element.set("paraPrIDRef", shapes[level])
-        for run in entry.element.iter(f"{_HP}run"):
-            run.set("charPrIDRef", str(style.char_pr_id_ref))
+        _set_style(entry, style, shapes[level])
 
 
 def add_toc(
