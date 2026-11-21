@@ -20,8 +20,8 @@ from pygments.util import ClassNotFound
 from md2hwpx.images import MISSING_IMAGE, ImageError, length, picture_data, picture_size
 from md2hwpx.parser import PARSER, custom_style
 from md2hwpx.pieces import (
-    Piece, Run, block_kind, caption_line, cell_lines, inline_runs, paragraph_pieces, plain_text, resolve_references,
-    strip_runs, unescape,
+    MATH, Piece, Run, block_kind, caption_line, cell_lines, equation_script, inline_runs, math_source,
+    paragraph_pieces, plain_text, resolve_references, strip_runs, unescape,
 )
 from md2hwpx.source import ConversionError, caption_numbering, read_markdown
 from md2hwpx.tables import (
@@ -69,6 +69,7 @@ FONT_LANGS = ("HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER")
 CODE_HIGHLIGHT_STYLE = "default"  # Pygments style
 # A blank page's wording: 11pt, in the body font, one line at 160% spacing.
 BLANK_PAGE_FONT_SIZE = 11  # pt
+EQUATION_SIZE = 10  # pt: an equation's size in text whose character shape has none
 BLANK_PAGE_LINE_SPACING = 160  # %
 BLANK_PAGE_MARGIN = {"left": 5660, "right": 5660, "top": 1415, "bottom": 1415}  # 20 mm sides, 5 mm above and below
 
@@ -291,7 +292,7 @@ class _Writer:
 
     def write_runs(self, paragraph, runs: list[Run], footnotes: bool = True) -> None:
         """Rewrite *paragraph* (holding the plain text of *runs* in one run) with *runs*:
-        a run per change of marks, links as hyperlinks, footnotes (dropped if not *footnotes*)."""
+        a run per change of marks, links as hyperlinks, equations, footnotes (dropped if not *footnotes*)."""
         merged: list[Run] = []
         for run in runs:
             if run.note is None and not run.text:
@@ -299,7 +300,8 @@ class _Writer:
             if run.note is not None and not footnotes:
                 continue
             last = merged[-1] if merged else None
-            if last and last.note is None and run.note is None and (last.marks, last.url) == (run.marks, run.url):
+            apart = run.note is not None or MATH in run.marks  # on its own, not text that joins the run before
+            if last and last.note is None and not apart and (last.marks, last.url) == (run.marks, run.url):
                 merged[-1] = last._replace(text=last.text + run.text)
             else:
                 merged.append(run)
@@ -310,6 +312,15 @@ class _Writer:
         for run in merged:
             if run.note is not None:
                 self.add_footnote(paragraph, run.note)
+            elif MATH in run.marks:
+                # An equation Hancom's editor opens, laid out as a character, at the size of the text around it.
+                size = self.text_styles.font_pt(base) if base is not None else None
+                equation = paragraph.add_equation(
+                    run.text, base_unit=round((size or EQUATION_SIZE) * 100),
+                    char_pr_id_ref=self.run_char_pr(base, run.marks),
+                )
+                # Out of Hancom's count of equations, as a table or picture without a caption is.
+                equation.element.set("numberingType", "NONE")
             elif run.url is None:
                 paragraph.add_run(run.text, char_pr_id_ref=self.run_char_pr(base, run.marks))
             else:
@@ -322,7 +333,7 @@ class _Writer:
 
     def run_char_pr(self, base: str | None, marks: frozenset[str]) -> str | None:
         """The character shape of a run with *marks* in a paragraph whose own is *base*."""
-        if not marks:
+        if not marks - {MATH}:
             return base
         # None keeps the base's bold / italic / strike, so a bold header cell stays bold.
         return self.char_format(
@@ -526,6 +537,8 @@ class _Writer:
                 self.code_block(node.content.split("\n")[:-1], lang, quote, indent)
             elif node.type == "table":
                 self.table(node, quote, indent)
+            elif node.type == "math_block":
+                self.equation(node, quote, indent)
             elif node.type == "hr":
                 self.rule(quote, indent)
             elif node.type in ("bullet_list", "ordered_list"):
@@ -729,6 +742,19 @@ class _Writer:
             paragraph.para_pr_id_ref = para_pr
         # Every line of code, and any too wide for the cell that wraps, at the code's own line height.
         fit_rows(table, self.text_styles, self.code_line_height)
+
+    def equation(self, node: SyntaxTreeNode, quote: int, indent: int) -> None:
+        """A "$$...$$" block: its equation in a paragraph of its own, in the middle of the line. On 바탕글, as a
+        picture is: the 본문 style's first-line indent would push it off the middle. One that cannot be an
+        equation is a text paragraph of what is written (see pieces.equation_script)."""
+        script = equation_script(node.content)
+        if script is None:
+            self.text_paragraph([Run(math_source(node))], quote, indent)
+            return
+        paragraph = self.add_paragraph("", self.plain_style)
+        self.write_runs(paragraph, [Run(script, frozenset({MATH}))])
+        self.place(paragraph, quote, indent)
+        paragraph.para_pr_id_ref = self.para_format(paragraph.para_pr_id_ref, alignment="CENTER")
 
     def rule(self, quote: int, indent: int) -> None:
         """A thematic break: an empty 본문 paragraph with a bottom border."""

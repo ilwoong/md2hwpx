@@ -3,10 +3,12 @@ into pieces at its images and at the lines that are this project's markers ([TOC
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
+from hwpx.equation import EquationConversionError, latex_to_eqedit
 from markdown_it.tree import SyntaxTreeNode
 
 # "[표] ..." / "[그림] ..." right before a table or code block / image is its caption,
@@ -45,13 +47,31 @@ _LIKE_MARKER = re.compile(
 # The converter writes it as the character again (see unescape).
 ESCAPES = {"[": "\ue002", "\\": "\ue003"}
 _MARKS = {"strong": "bold", "em": "italic", "s": "strike"}
+MATH = "math"  # the mark of a run that is an equation: its text is the equation's script (see equation_script)
+MATH_NODES = ("math_inline", "math_inline_double", "math_block")
+
+
+@functools.lru_cache(maxsize=1024)
+def equation_script(latex: str) -> str | None:
+    """The LaTeX math *latex* as the script Hancom's equation editor keeps ("{a} over {b}"), or None if
+    python-hwpx cannot write it so: it takes the commands it has checked in Hancom and refuses the others."""
+    try:
+        return latex_to_eqedit(latex)
+    except EquationConversionError:
+        return None
+
+
+def math_source(node: SyntaxTreeNode) -> str:
+    """The math *node* (one of MATH_NODES) as it is written, which is how it goes in as text when it cannot be
+    an equation."""
+    return f"{node.markup}{node.content.strip()}{node.markup}"
 
 
 class Run(NamedTuple):
     """Inline text with one look, or a footnote reference (*note*, with no text)."""
 
     text: str
-    marks: frozenset[str] = frozenset()  # bold, italic, strike, code
+    marks: frozenset[str] = frozenset()  # bold, italic, strike, code, math
     url: str | None = None  # link target
     note: int | None = None  # footnote id
 
@@ -80,6 +100,10 @@ def inline_runs(
             runs.append(Run("\n", marks, url))
         elif node.type == "code_inline":
             runs.append(Run(node.content, marks | {"code"}, url))
+        elif node.type in MATH_NODES:
+            script = equation_script(node.content)
+            # Math python-hwpx cannot write stays text, as written (the caller warns: source.unsupported_math).
+            runs.append(Run(script, marks | {MATH}, url) if script else Run(math_source(node), marks, url))
         elif node.type in _MARKS:
             runs += inline_runs(node.children, marks | {_MARKS[node.type]}, url)
         elif node.type == "link":
@@ -130,10 +154,10 @@ _CELL_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 def cell_lines(runs: list[Run]) -> list[list[Run]]:
     """A table cell's *runs* cut into its lines at each "<br>", each line without the white space around
-    it. Inline code keeps a "<br>" as text."""
+    it. Inline code keeps a "<br>" as text, and an equation is not text."""
     lines: list[list[Run]] = [[]]
     for run in runs:
-        if "code" in run.marks or run.note is not None:
+        if "code" in run.marks or MATH in run.marks or run.note is not None:
             lines[-1].append(run)
             continue
         for index, part in enumerate(_CELL_BREAK.split(run.text)):
