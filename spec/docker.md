@@ -5,18 +5,6 @@
 다이어그램 렌더링에 필요한 외부 도구(mermaid-cli, Chromium, Java, PlantUML, Graphviz)를
 호스트에 설치하지 않고, 한 이미지 안에서 실행한다.
 
-Dockerfile 은 네 단계다.
-
-| 단계 | 내용 | 빌드 |
-|------|------|------|
-| `jre` | PlantUML 에 필요한 모듈만 담은 Java 런타임(`/opt/jre`)을 만든다. `tools` 가 이것만 복사한다 | (빌드용) |
-| `tools` | 아래 "이미지 내용" 의 도구와 Python 의존성 | (다른 단계의 바탕) |
-| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함), 빌드한 날짜(`static/build-date`, 페이지 제목 옆에 보인다). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
-| `dev` (기본) | `tools` 그대로. 코드는 실행 시 `/work` 에 마운트한다 | `docker build -t md2hwpx .` |
-
-아래 "실행 환경 변수", "사용법", "실행 스크립트" 는 `dev` 이미지 이야기다.
-`web` 이미지는 `PYTHONPATH=/app/src`, `PLANTUML_SECURITY_PROFILE=SANDBOX` 로 바꾼다.
-
 ## 구성
 
 | 파일 | 역할 |
@@ -27,9 +15,23 @@ Dockerfile 은 네 단계다.
 | `docker/plantuml` | `java -jar plantuml.jar` 실행 스크립트 |
 | `.dockerignore` | 빌드 컨텍스트를 `pyproject.toml`, `uv.lock`, `docker/`, `src/`(`__pycache__` 제외, 내장 템플릿 포함) 로 제한 |
 | `compose.yaml` | `web` 단계를 빌드해 8000 번 포트로 실행 |
-| `md2hwpx.sh` | 저장소 코드를 마운트해 `dev` 이미지로 변환하는 실행 스크립트 (아래 "실행 스크립트") |
-| `md2hwpx-standalone.sh` | 복사해 혼자 쓰는, `web` 이미지의 코드로 변환하는 실행 스크립트 (아래 "단독 실행 스크립트") |
-| `build-images.sh` | `dev`·`web` 이미지를 빌드해 `latest` 와 날짜 태그로 남긴다 (아래 "빌드 스크립트") |
+| `md2hwpx.sh` | 저장소 코드를 마운트해 `dev` 이미지로 변환하는 실행 스크립트 ([실행 스크립트](#실행-스크립트-md2hwpxsh)) |
+| `md2hwpx-standalone.sh` | 복사해 혼자 쓰는, `web` 이미지의 코드로 변환하는 실행 스크립트 ([단독 실행 스크립트](#단독-실행-스크립트-md2hwpx-standalonesh)) |
+| `build-images.sh` | `dev`·`web` 이미지를 빌드해 `latest` 와 날짜 태그로 남긴다 ([빌드 스크립트](#빌드-스크립트-build-imagessh)) |
+
+### Dockerfile 단계
+
+Dockerfile 은 네 단계다.
+
+| 단계 | 내용 | 빌드 |
+|------|------|------|
+| `jre` | PlantUML 에 필요한 모듈만 담은 Java 런타임(`/opt/jre`)을 만든다. `tools` 가 이것만 복사한다 | (빌드용) |
+| `tools` | [이미지 내용](#이미지-내용) 의 도구와 Python 의존성 | (다른 단계의 바탕) |
+| `web` | `tools` + `git`, 코드(`/app/src`, 내장 템플릿 포함), 빌드한 날짜(`static/build-date`, 페이지 제목 옆에 보인다). `nobody` 로 uvicorn 실행 ([web-service.md](web-service.md)) | `docker build --target web -t md2hwpx-web .` 또는 `docker compose build` |
+| `dev` (기본) | `tools` 그대로. 코드는 실행 시 `/work` 에 마운트한다 | `docker build -t md2hwpx .` |
+
+[실행 환경 변수](#실행-환경-변수), "사용법", "실행 스크립트" 는 `dev` 이미지 이야기다.
+`web` 이미지는 `PYTHONPATH=/app/src`, `PLANTUML_SECURITY_PROFILE=SANDBOX` 로 바꾼다.
 
 ## 이미지 내용
 
@@ -99,7 +101,7 @@ Python 의존성(`pyproject.toml`, `uv.lock`)이 바뀌면 이미지를 다시 �
 
 ## 단독 실행 스크립트 (`md2hwpx-standalone.sh`)
 
-저장소 없이 이 파일 하나만 복사해 어느 폴더에서나 변환하는 POSIX sh 스크립트. 마운트 방식은 위 "실행 스크립트" 와 같고,
+저장소 없이 이 파일 하나만 복사해 어느 폴더에서나 변환하는 POSIX sh 스크립트. 마운트 방식은 [실행 스크립트](#실행-스크립트-md2hwpxsh) 와 같고,
 다른 점은 아래와 같다.
 
 ```sh

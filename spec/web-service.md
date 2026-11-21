@@ -21,23 +21,18 @@ docker run --rm -p 8000:8000 md2hwpx-web
 | 파일 | 역할 |
 |------|------|
 | `src/md2hwpx/web.py` | FastAPI 앱 (`md2hwpx.web:app`) |
-| `src/md2hwpx/oauth.py` | GitLab·Gitea 로그인 (OAuth2), 아래 "GitLab·Gitea 로그인" |
+| `src/md2hwpx/oauth.py` | [GitLab·Gitea 로그인](#gitlabgitea-로그인-oauth2) (OAuth2) |
 | `src/md2hwpx/static/index.html` | 변환 페이지. 외부 리소스 없이 한 파일 |
 | `compose.yaml` | `web` 이미지를 빌드해 8000 번 포트로 실행. `.env` 가 있으면 환경 변수로 읽는다. `/tmp` 는 tmpfs (1GB 까지) |
-| `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 (아래 "명령줄 클라이언트") |
+| `src/md2hwpx/static/md2hwpx-remote.py` | 명령줄에서 웹 서비스로 변환하는 스크립트. 페이지에서 내려받는다 ([명령줄 클라이언트](#명령줄-클라이언트-md2hwpx-remotepy)) |
 | `.env.example` | 업로드 크기 제한과 로그인 설정의 견본. `.env` 로 복사해 채운다 (`.env` 는 커밋하지 않는다) |
 
 의존성은 `pyproject.toml` 의 `web` 그룹(`fastapi`, `uvicorn`, `python-multipart`)이다.
 `[tool.uv] default-groups` 에 넣어 `uv sync` 와 Docker 이미지에 함께 설치한다.
 
-## API
+## 변환 페이지
 
-### `GET /`
-
-변환 페이지 (`static/index.html`). 페이지의 `{{MAX_UPLOAD_MB}}` 자리에 업로드 크기 제한(MB)을 채워 보낸다.
-`{{BUILD}}` 자리(제목 옆)에는 `web` 이미지를 빌드한 날짜를 `2026-11-17 빌드` 처럼 채운다. Dockerfile 이 빌드할 때
-`static/build-date` 에 한국 시간 날짜를 적어 둔 것이다. 이미지 밖(로컬 실행)에는 그 파일이 없어 날짜를 보여 주지 않는다.
-코드가 바뀌지 않아 그 층이 빌드 캐시에서 오면 날짜도 그대로다 (그 내용의 이미지를 처음 빌드한 날).
+`static/index.html`. `GET /` 가 내준다 ([API](#api)).
 
 - 입력 방식(파일 / zip / git 저장소)을 탭으로 고른다. 네 번째 탭 "스크립트" 는 입력 방식이 아니라 명령줄 클라이언트를 내려받는 곳이다. 탭마다 꼭 필요한 입력은 하나(파일, zip 파일, 저장소 주소)이고,
   비어 있으면 브라우저가 제출을 막는다. 보이지 않는 탭의 입력은 검사하지 않는다.
@@ -48,14 +43,25 @@ docker run --rm -p 8000:8000 md2hwpx-web
   `차례 1`~`차례 3`·`차례 제목` 스타일(차례 항목의 수준별 모양과 제목)을 적는다.
 - 파일 탭은 고른 파일의 개수와 크기, md 이름(이어 붙이는 순서), 이미지 이름을 보여 준다. 제한을 넘으면 오류 색으로 알린다.
   파일을 다시 고르면 앞의 선택을 바꾼다 (더하지 않는다).
-- 변환하는 동안 지난 시간을 초로 보여 준다. 끝나면 응답 헤더의 파일 이름으로 내려받는다.
-- 실패하면 `detail` 메시지를 보여 준다: 한 입력 때문이면 그 입력 아래에, 아니면 버튼 아래에 (아래 `POST /convert` 의 실패).
+- 변환하는 동안 지난 시간을 초로 보여 준다. 끝나면 응답의 `filename` 이름으로 내려받는다.
+- 실패하면 `detail` 메시지를 보여 준다: 한 입력 때문이면 그 입력 아래에, 아니면 버튼 아래에 ([API](#api) 의 `POST /convert` 실패).
 - 로그인하러 떠날 때 저장소 주소·브랜치·경로·패턴을 브라우저의 `sessionStorage` 에 두었다가, 돌아오면 git 저장소 탭을 고르고
   그 값을 되살린다. 브랜치·경로·패턴 중 적은 것이 있으면 "선택 옵션" 을 펼친다.
 
+## API
+
+### `GET /`
+
+변환 페이지 (`static/index.html`). 페이지의 `{{MAX_UPLOAD_MB}}` 자리에 업로드 크기 제한(MB)을 채워 보낸다.
+`{{BUILD}}` 자리(제목 옆)에는 `web` 이미지를 빌드한 날짜를 `2026-11-17 빌드` 처럼 채운다. Dockerfile 이 빌드할 때
+`static/build-date` 에 한국 시간 날짜를 적어 둔 것이다. 이미지 밖(로컬 실행)에는 그 파일이 없어 날짜를 보여 주지 않는다.
+코드가 바뀌지 않아 그 층이 빌드 캐시에서 오면 날짜도 그대로다 (그 내용의 이미지를 처음 빌드한 날).
+
+페이지의 동작은 [변환 페이지](#변환-페이지).
+
 ### `GET /md2hwpx-remote.py`
 
-명령줄 클라이언트(아래 "명령줄 클라이언트")를 내려준다. `Content-Disposition: attachment; filename="md2hwpx-remote.py"`.
+[명령줄 클라이언트](#명령줄-클라이언트-md2hwpx-remotepy)를 내려준다. `Content-Disposition: attachment; filename="md2hwpx-remote.py"`.
 페이지의 "스크립트" 탭에 이 주소의 링크와 사용법이 있다. 사용법의 `--server` 에는 페이지가 열린 주소를 채워 보여 준다.
 이 탭에는 "선택 옵션" 과 변환 버튼이 없다.
 
@@ -117,15 +123,15 @@ tmpfs 는 1GB 까지다 (`size=1g`): 올린 파일과 받은 git 저장소가 �
     → `git checkout FETCH_HEAD` 로 그 커밋 하나만 받는다. 서버는 짧은 해시로 받기를 허용하지 않으므로 커밋은 전체 해시로 지정한다.
   - 받기에 실패했고 `ref` 가 짧은 해시 모양(16진수 4~39자)이면 오류 끝에 `커밋은 전체 해시(40자)로 지정하세요.` 를 붙인다.
     그 모양을 미리 거부하지 않는 것은 `20261031` 처럼 숫자로 된 태그·브랜치도 있기 때문이다.
-  `GIT_TERMINAL_PROMPT=0` 이라 인증이 필요한 저장소는 기다리지 않고 실패한다.
-  로그인한 서버의 저장소면 사용자 토큰으로 받는다 (아래 "GitLab·Gitea 로그인").
+  - `GIT_TERMINAL_PROMPT=0` 이라 인증이 필요한 저장소는 기다리지 않고 실패한다.
+  - 로그인한 서버의 저장소면 사용자 토큰으로 받는다 ([GitLab·Gitea 로그인](#gitlabgitea-로그인-oauth2)).
 
 변환할 대상:
 
 - `path` 가 있으면 root 아래의 그 파일 또는 폴더.
 - 없으면, root 에 폴더 하나만 있을 때(폴더를 압축한 zip) 그 폴더로 들어간 뒤,
   `.md` 가 하나면 그 파일, 아니면 그 폴더 (명령줄의 폴더 입력처럼 바로 안의 `.md` 를 이름 순으로 이어 붙인다).
-- 초안: `zip`·`git` 은 명령줄처럼 `draft: true` 파일을 빼고 변환한다 ([markdown-conversion.md](markdown-conversion.md) 의 "초안").
+- 초안: `zip`·`git` 은 명령줄처럼 `draft: true` 파일을 빼고 변환한다 ([markdown-conversion.md](markdown-conversion.md#초안-draft) 의 "초안").
   `include_draft` 가 `true` 면 포함한다. 남는 파일이 없으면 `변환할 .md 파일이 모두 draft 입니다 ('draft 파일도 변환' 을 켜세요): <경로>`.
   `files` 는 올린 파일을 사용자가 고른 것이므로 초안도 늘 변환한다.
 - 파일 이름 패턴: `zip`·`git` 은 `include` 의 패턴에 맞는 파일만 남긴 뒤 초안을 뺀다. `files` 는 패턴을 쓰지 않는다.
@@ -169,7 +175,7 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
 
 - 서버마다 세 값과 `MD2HWPX_BASE_URL` 이 모두 있어야 그 서버의 로그인이 켜진다. 하나도 없으면 지금처럼 로그인 없이 동작한다.
 - 콜백 주소(애플리케이션의 Redirect URI): `<MD2HWPX_BASE_URL>/oauth/gitlab/callback`, `<MD2HWPX_BASE_URL>/oauth/gitea/callback`.
-- 주소 조건 (설정 절차와 증상별 원인은 README "GitLab·Gitea 로그인 설정"):
+- 주소 조건 (설정 절차와 증상별 원인은 [설정 절차](#설정-절차), [증상별 원인](#증상별-원인)):
   - `MD2HWPX_BASE_URL` 은 사용자가 접속하는 주소와 글자 그대로 같아야 한다. 다르면 서버가 Redirect URI 를 거부하거나,
     세션 쿠키가 콜백으로 이어지지 않아 `state` 확인에 실패한다.
   - `MD2HWPX_GITLAB_URL`·`MD2HWPX_GITEA_URL` 은 브라우저(로그인 화면)와 컨테이너(토큰 요청, clone) 양쪽에서 접속되어야 한다.
@@ -186,10 +192,81 @@ md2hwpx-remote.py INPUT [-o OUTPUT] [-t TEMPLATE] [--include-draft] [--include P
   `Authorization: Basic base64("oauth2:<토큰>")` 을 붙인다. GitLab·Gitea 모두 OAuth2 토큰을 HTTP Basic 의 비밀번호로 받는다.
   로그인하지 않았으면 인증 없이 받고, 실패하면 오류 메시지에 그 서버에 로그인하라는 안내를 붙인다.
 - 토큰이 만료되면(GitLab 기본 2시간, Gitea 기본 1시간) 로그인하지 않은 것으로 보고 다시 로그인하게 한다. 토큰 갱신(refresh)은 하지 않는다.
-- 세션: 쿠키 `md2hwpx_session`(HttpOnly, SameSite=Lax, 주소가 https 면 Secure)에는 랜덤 세션 id 만 담고,
-  토큰은 서버 프로세스 메모리에 둔다. 12시간 쓰지 않은 세션은 지운다. 토큰이 없는 세션(끝내지 않은 로그인)은 10분, 세션은 모두 10,000개까지이며 넘으면 가장 오래 쓰지 않은 것부터 지운다 (지워지면 다시 로그인한다). 프로세스 메모리에 두므로 uvicorn 워커는 하나로 실행한다. 서버를 다시 시작하면 모두 다시 로그인한다.
-  메모리에 두므로 uvicorn 워커는 하나여야 한다 (지금 실행 방식).
+- 세션:
+  - 쿠키 `md2hwpx_session`(HttpOnly, SameSite=Lax, 주소가 https 면 Secure)에는 랜덤 세션 id 만 담고,
+    토큰은 서버 프로세스 메모리에 둔다.
+  - 12시간 쓰지 않은 세션은 지운다. 토큰이 없는 세션(끝내지 않은 로그인)은 10분이다.
+  - 세션은 모두 10,000개까지이며 넘으면 가장 오래 쓰지 않은 것부터 지운다 (지워지면 다시 로그인한다).
+  - 메모리에 두므로 uvicorn 워커는 하나여야 한다 (지금 실행 방식). 서버를 다시 시작하면 모두 다시 로그인한다.
 - 토큰 요청은 표준 라이브러리 `urllib` 로 보낸다 (의존성 추가 없음).
+
+### 설정 절차
+
+로그인을 쓰지 않으면 이 설정은 필요 없다. 공개 저장소는 로그인 없이 받는다.
+아래 예는 웹 서비스를 `http://localhost:8000`, Gitea 를 `http://192.168.1.2:3000` 에서 쓰는 경우다.
+
+**1. 주소 정하기**
+
+- 웹 서비스 주소(`MD2HWPX_BASE_URL`): 사용자가 **브라우저 주소창에 입력하는 주소** 그대로. 뒤의 `/` 는 뺀다.
+  `localhost` 와 `127.0.0.1` 도 서로 다른 주소로 취급되므로, 앞으로 접속할 쪽 하나로 정한다.
+- GitLab·Gitea 주소: **브라우저와 md2hwpx 컨테이너 양쪽에서 접속되는 주소**.
+  브라우저는 이 주소의 로그인 화면으로 이동하고, 컨테이너는 이 주소에서 토큰을 받고 저장소를 clone 한다.
+  컨테이너 안의 `localhost` 는 md2hwpx 자신이므로 `http://localhost:3000` 은 쓸 수 없다. 호스트 IP 나 도메인을 쓴다.
+  확인: `docker compose exec web wget -q -O- http://192.168.1.2:3000/api/v1/version` (Gitea) 이 버전을 보여 주면 된다.
+
+**2. OAuth 애플리케이션 등록**
+
+| | GitLab | Gitea |
+|---|---|---|
+| 메뉴 | 사용자 설정 > Applications. 관리자는 관리자 영역 > Applications (모든 사용자용) | 사용자 설정 > 애플리케이션 > OAuth2 애플리케이션 관리. 관리자는 사이트 관리 > 통합 > 애플리케이션 |
+| Redirect URI | `<웹 서비스 주소>/oauth/gitlab/callback` | `<웹 서비스 주소>/oauth/gitea/callback` |
+| 기밀(Confidential) | 켬 | 켬 (Confidential client) |
+| Scope | `read_repository` 만 | 등록 화면에 없음 (로그인할 때 `read:repository` 를 요청) |
+| 그 밖 | 관리자 영역에서 만들고 Trusted 를 켜면 승인 화면을 건너뜀 | |
+
+Redirect URI 는 웹 서비스 주소와 **글자 그대로** 같아야 한다 (예: `http://localhost:8000/oauth/gitea/callback`).
+등록하면 나오는 Client ID(GitLab: Application ID) 와 Client Secret 을 다음 단계에 쓴다. Secret 은 다시 볼 수 없으니 바로 옮겨 둔다.
+
+**3. `.env` 작성**
+
+```sh
+cp .env.example .env
+```
+
+```sh
+MD2HWPX_BASE_URL=http://localhost:8000
+MD2HWPX_GITEA_URL=http://192.168.1.2:3000
+MD2HWPX_GITEA_CLIENT_ID=<Client ID>
+MD2HWPX_GITEA_CLIENT_SECRET=<Client Secret>
+```
+
+쓰지 않는 서버의 값은 비워 둔다.
+`.env` 는 비밀 값이 들어 있어 커밋하지 않는다 (`.gitignore` 에 있음).
+
+**4. 다시 실행**
+
+```sh
+docker compose up -d    # .env 를 바꾼 뒤에도 다시 실행해야 컨테이너에 반영된다
+```
+
+**5. 확인**
+
+1. 웹 서비스 주소로 접속해 "git 저장소" 탭을 고르면 저장소 주소 아래에 `Gitea (http://192.168.1.2:3000): 로그인` 이 보인다.
+   보이지 않으면 `.env` 의 값이 빠졌거나 다시 실행하지 않은 것이다.
+2. "로그인" → Gitea 로그인·승인 → 페이지로 돌아와 `로그인됨 · 로그아웃` 으로 바뀐다.
+3. 비공개 저장소 주소를 넣고 변환한다.
+
+### 증상별 원인
+
+| 증상 | 원인 |
+|---|---|
+| 로그인을 누르면 Gitea 의 `/oauth/authorize?...` 로 가서 404 | Gitea 값을 `MD2HWPX_GITLAB_*` 에 넣음. `MD2HWPX_GITEA_*` 로 옮기고, Gitea 앱의 Redirect URI 도 `/oauth/gitea/callback` 으로 고친 뒤 다시 실행 |
+| 로그인을 누르면 GitLab 의 `/login/oauth/authorize?...` 로 가서 404 | 반대로 GitLab 값을 `MD2HWPX_GITEA_*` 에 넣음. `MD2HWPX_GITLAB_*` 로 옮김 |
+| 로그인을 누르면 서버가 "redirect_uri 가 맞지 않는다" 는 오류를 보여 줌 | Redirect URI 와 `MD2HWPX_BASE_URL` 이 다름 (`localhost` / `127.0.0.1`, 포트, 끝의 `/` 등) |
+| 로그인 후 "로그인 요청이 올바르지 않거나 오래되었습니다" | 로그인을 시작한 주소와 `MD2HWPX_BASE_URL` 이 달라 쿠키가 이어지지 않음. `MD2HWPX_BASE_URL` 로 접속해서 로그인 |
+| 로그인 후 "토큰을 받지 못했습니다" | 컨테이너에서 서버 주소로 접속되지 않거나 Client Secret 이 틀림 |
+| 변환 시 "비공개 저장소라면 … 로그인하세요" | 로그인하지 않았거나 토큰이 만료됨 (GitLab 2시간, Gitea 1시간). 다시 로그인 |
+| 로그인했는데 이 안내 없이 변환이 실패함 | 그 사용자에게 저장소 읽기 권한이 없거나, 저장소 주소가 `.env` 의 서버 주소로 시작하지 않음 (예: 서버는 IP 로, 저장소는 도메인으로 적음) |
 
 ## 보안
 
