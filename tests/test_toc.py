@@ -3,7 +3,7 @@
 import pytest
 from hwpx import HwpxDocument
 
-from helpers import HP
+from helpers import HP, _template_renaming
 from md2hwpx.convert import DEFAULT_TEMPLATE as TEMPLATE
 from md2hwpx.convert import convert
 from md2hwpx.source import unknown_styles
@@ -200,3 +200,80 @@ def test_convert_toc_with_unknown_list_stays_text(tmp_path):
     convert(md, TEMPLATE, out)
 
     assert [p.text for p in HwpxDocument.open(out).paragraphs[1:]] == ["장", "[TOC 목록]"]
+
+
+def _entries(doc) -> list[tuple[str, str, int]]:
+    """(text, style name, left margin) of each paragraph of *doc* in a 차례 style or holding a tab (a TOC entry)."""
+    names = {style.id: style.name for style in doc.styles.values()}
+    return [
+        (p.text, names[int(p.style_id_ref)], int(doc.styles.paragraph_property(p.para_pr_id_ref).margin.left or 0))
+        for p in doc.paragraphs if "\t" in p.text
+    ]
+
+
+def test_toc_entries_are_in_the_style_of_their_level(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text("[TOC]\n\n# 장\n\n## 절\n\n### 소절\n\n# 둘째 장\n\n[TOC 제목 표]\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    doc = HwpxDocument.open(out)
+    listed = [("1. 장\t1", "차례 1", 0), ("2. 절\t1", "차례 2", 1000), ("3. 소절\t1", "차례 3", 2000),
+              ("4. 둘째 장\t1", "차례 1", 0)]
+    # Both the plain TOC and the 제목 list of the second marker.
+    assert _entries(doc) == listed * 2
+    body = doc.sections[0].properties
+    width = body.page_size.drawn_width - body.page_margins.left - body.page_margins.right - body.page_margins.gutter
+    styles = {style.id: style for style in doc.styles.values()}
+    for entry in (p for p in doc.paragraphs if "\t" in p.text):
+        style = styles[int(entry.style_id_ref)]
+        shape = doc.styles.paragraph_property(entry.para_pr_id_ref)
+        # The style's own shape but for the page number's tab stop, which ends where the body does.
+        assert int(entry.para_pr_id_ref) != style.para_pr_id_ref
+        tab = next(
+            t for t in doc.oxml.headers[0].element.iter()
+            if t.tag.endswith("}tabPr") and t.get("id") == str(shape.tab_pr_id_ref)
+        )
+        stop = next(item for item in tab.iter() if item.tag.endswith("}tabItem"))
+        assert (int(stop.get("pos")), stop.get("type")) == (width - int(shape.margin.left or 0), "RIGHT")
+        assert {run.get("charPrIDRef") for run in entry.element.iter(f"{HP}run")} == {str(style.char_pr_id_ref)}
+    # Each TOC's title is in 차례 제목, a list without entries of its own too.
+    titles = {p.text: p for p in doc.paragraphs if p.text in ("차례", "<제목 차례>", "<표 차례>")}
+    assert len(titles) == 3
+    for title in titles.values():
+        style = styles[int(title.style_id_ref)]
+        assert style.name == "차례 제목"
+        assert doc.styles.paragraph_property(style.para_pr_id_ref).align.horizontal == "CENTER"  # the template's
+        assert int(title.para_pr_id_ref) == style.para_pr_id_ref
+        assert {run.get("charPrIDRef") for run in title.element.iter(f"{HP}run")} == {str(style.char_pr_id_ref)}
+
+
+def test_toc_entries_collected_by_style_are_level_one(tmp_path):
+    md = tmp_path / "toc.md"
+    md.write_text(
+        '[TOC 개요 스타일="표준"]\n\n# 장\n\n## 절\n\n::: {custom-style="표준"}\n모은 문단\n:::\n', encoding="utf-8"
+    )
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, TEMPLATE, out)
+
+    assert _entries(HwpxDocument.open(out)) == [
+        ("1. 장\t1", "차례 1", 0), ("2. 절\t1", "차례 2", 1000), ("3. 모은 문단\t1", "차례 1", 0),
+    ]
+
+
+def test_toc_entries_without_their_style_stay_plain(tmp_path):
+    # A template with 차례 1 only: the entries of the other levels are as before, in 바탕글.
+    template = _template_renaming(tmp_path, {"차례 2": "다른 2", "차례 3": "다른 3", "차례 제목": "다른 제목"})
+    md = tmp_path / "toc.md"
+    md.write_text("[TOC]\n\n# 장\n\n## 절\n\n### 소절\n", encoding="utf-8")
+    out = tmp_path / "toc.hwpx"
+
+    convert(md, template, out)
+
+    doc = HwpxDocument.open(out)
+    assert _entries(doc) == [("1. 장\t1", "차례 1", 0), ("2. 절\t1", "바탕글", 0), ("3. 소절\t1", "바탕글", 0)]
+    title = next(p for p in doc.paragraphs if p.text == "차례")
+    assert int(title.style_id_ref) == doc.styles.resolve("바탕글").id
+

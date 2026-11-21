@@ -900,7 +900,7 @@ class _Writer:
                 for at, request, start in self.tocs]
         for at, request, start, headings in reversed(tocs):
             if headings:
-                add_toc(self.doc, at, request, headings)
+                add_toc(self.doc, at, request, headings, self.paragraph_styles)
                 start.apply(self.doc.paragraphs[at])
 
 

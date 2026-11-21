@@ -18,8 +18,18 @@ TOC_OUTLINE = "개요"  # in the [TOC] marker: the 제목 list collects 개요 p
 _TOC_STYLES = re.compile(r'스타일="([^"]*)"')  # in the [TOC] marker: the styles the 제목 list collects
 _TOC_WORD = re.compile(r'스타일="[^"]*"|\S+')
 # The TOC fields.
-TOC_HEADING = "차례"  # the title of a TOC of all lists in one field (a plain [TOC])
-TOC_LEVEL = 3  # heading levels listed, as the template's 차례 1-3 styles
+# The title of a TOC of all lists in one field (a plain [TOC]), until Hancom opens the document: it makes the
+# TOC again then, with titles of its own ("<제목 차례>", "<표 차례>", ...), whatever is written here.
+TOC_HEADING = "차례"
+TOC_LEVEL = 3  # heading levels listed
+# Optional styles: an entry of the 제목 list is in the one of its heading's level, 차례 1 to 차례 3. Without the
+# style of a level, its entries are as python-hwpx writes them, in 바탕글.
+TOC_ENTRY_STYLE = "차례 {}"  # .format(level)
+# Optional: a TOC's title is in it; without it, in 바탕글. Hancom sets the titles it makes in the style of this name.
+TOC_TITLE_STYLE = "차례 제목"
+OUTLINE_STYLE = "개요 {}"  # .format(level): what gives an entry its level
+# The dotted line up to an entry's page number, as python-hwpx's own entries have it (its leader 3).
+TOC_LEADER = "DASH"
 # The TOC field's ContentsMake bits for the 표, 그림 and 수식 lists, as Hancom writes them with only that list
 # chosen. A plain [TOC] keeps python-hwpx's 31, all of them in one field.
 TOC_KINDS = {"표": 2, "그림": 4, "수식": 8}
@@ -71,15 +81,67 @@ def toc_entries(doc: HwpxDocument, request: TocRequest, styles: dict[str, Style]
     return [p for p in doc.paragraphs if p.text.strip() and p.element.get("styleIDRef") in outline | styled]
 
 
-def add_toc(doc: HwpxDocument, at_index: int, request: TocRequest, headings: list) -> None:
+def _set_style(paragraph, style: Style, para_pr_id_ref) -> None:
+    """Put *paragraph* in *style*, its paragraph shape *para_pr_id_ref* and its runs in the style's character
+    shape."""
+    paragraph.element.set("styleIDRef", str(style.id))
+    paragraph.element.set("paraPrIDRef", str(para_pr_id_ref))
+    for run in paragraph.element.iter(f"{_HP}run"):
+        run.set("charPrIDRef", str(style.char_pr_id_ref))
+
+
+def _style_title(title, styles: dict[str, Style]) -> None:
+    """Put *title*, a TOC's title paragraph, in the 차례 제목 style of *styles* if there is one."""
+    style = styles.get(TOC_TITLE_STYLE)
+    if style is not None:
+        _set_style(title, style, style.para_pr_id_ref)
+
+
+def _style_entries(doc: HwpxDocument, entries: list, headings: list, styles: dict[str, Style]) -> None:
+    """Put each of *entries*, the TOC entry of the one of *headings* at its place, in the 차례 style of that
+    heading's level (see TOC_ENTRY_STYLE), looked up by name in *styles*: the level of its 개요 style, or 1
+    for a paragraph collected by its style."""
+    levels = {
+        str(styles[name].id): level
+        for level in range(1, TOC_LEVEL + 1) if (name := OUTLINE_STYLE.format(level)) in styles
+    }
+    properties = doc.oxml.sections[0].properties
+    size, margins = properties.page_size, properties.page_margins
+    body_width = size.drawn_width - margins.left - margins.right - margins.gutter
+    header = doc.oxml.headers[0]
+    shapes: dict[int, str] = {}  # level -> the style's paragraph shape with the page number's tab stop
+    for entry, heading in zip(entries, headings):
+        level = levels.get(heading.element.get("styleIDRef"), 1)
+        style = styles.get(TOC_ENTRY_STYLE.format(level))
+        if style is None:
+            continue
+        if level not in shapes:
+            # The page number's tab stop, at the right edge of the text as python-hwpx sets it: counted from
+            # the paragraph's left margin, so the style's margins come off the body's width.
+            margin = doc.styles.paragraph_property(style.para_pr_id_ref).margin
+            width = body_width - int(margin.left or 0) - int(margin.right or 0)
+            tab = header.ensure_tab_definition(
+                tab_stops=[{"pos": width, "type": "RIGHT", "leader": TOC_LEADER}], auto_tab_left=True
+            )
+            shapes[level] = header.ensure_paragraph_format(base_para_pr_id=style.para_pr_id_ref, tab_pr_id_ref=tab)
+        _set_style(entry, style, shapes[level])
+
+
+def add_toc(
+    doc: HwpxDocument, at_index: int, request: TocRequest, headings: list, styles: dict[str, Style]
+) -> None:
     """Put the TOC *request* asks for in *doc* at paragraph *at_index*, its 제목 list listing *headings*
-    (see toc_entries)."""
+    (see toc_entries). Its title and each entry are in their 차례 styles of *styles* if there are such (see
+    _style_title and _style_entries)."""
     # dirty: Hancom rebuilds the TOC, with real page numbers, when it opens the document.
     if not request.kinds:
-        add_native_toc(
+        made = add_native_toc(
             doc, at_index=at_index, title=TOC_HEADING, level=TOC_LEVEL, hyperlink=request.links,
             headings=headings, dirty=True,
         )
+        paragraphs = doc.paragraphs[at_index : at_index + 1 + made["entryCount"]]
+        _style_title(paragraphs[0], styles)
+        _style_entries(doc, paragraphs[1:], headings, styles)
     # A field per list: Hancom orders the lists within one field itself. Each goes in at the
     # same place, so they are added last first.
     for kind in reversed(request.kinds):
@@ -88,10 +150,12 @@ def add_toc(doc: HwpxDocument, at_index: int, request: TocRequest, headings: lis
             hyperlink=request.links, headings=headings, dirty=True,
         )
         paragraphs = doc.paragraphs[at_index : at_index + 1 + made["entryCount"]]
+        _style_title(paragraphs[0], styles)
         if kind == "제목":
             make = TOC_TITLE_LIST | (TOC_BY_OUTLINE if request.outline else 0)
             make |= TOC_BY_STYLE if request.styles else 0
             _set_toc_command(paragraphs[0], made["tocFieldId"], make, request.styles)
+            _style_entries(doc, paragraphs[1:], headings, styles)
         else:
             _set_toc_command(paragraphs[0], made["tocFieldId"], TOC_KINDS[kind])
             # Its entries are the headings: drop them, Hancom lists the captions when it rebuilds.
